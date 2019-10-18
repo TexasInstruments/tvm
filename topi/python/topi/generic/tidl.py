@@ -14,28 +14,25 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
-# pylint: disable=wildcard-import
-"""Generic declaration and schedules.
-
-This is a recommended way of using TOPI API.
-To use the generic schedule function, user must set
-the current target scope using with block. See also :any:`tvm.target`
-
-Example
--------
-.. code-block:: python
-
-  # create schedule that dispatches to topi.cuda.schedule_injective
-  with tvm.target.create("cuda"):
-    s = tvm.generic.schedule_injective(outs)
-"""
+# pylint: disable=invalid-name, no-member
+"""Generic vision operators"""
 from __future__ import absolute_import as _abs
+import tvm
+from .vision import _default_schedule
 
-from .nn import *
-from .injective import *
-from .extern import *
-from .vision import *
-from .sort import *
-from .search import *
-from .tidl import *
+@tvm.target.generic_func
+def schedule_tidlsort(outs):
+    """Schedule for tidl sort operator.
+
+    Parameters
+    ----------
+    outs: Array of Tensor
+      The indices that would sort an input array along
+      the given axis.
+
+    Returns
+    -------
+    s: Schedule
+      The computation schedule for the op.
+    """
+    return _default_schedule(outs, False)

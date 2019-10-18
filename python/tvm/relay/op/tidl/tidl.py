@@ -14,28 +14,33 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
-# pylint: disable=wildcard-import
-"""Generic declaration and schedules.
-
-This is a recommended way of using TOPI API.
-To use the generic schedule function, user must set
-the current target scope using with block. See also :any:`tvm.target`
-
-Example
--------
-.. code-block:: python
-
-  # create schedule that dispatches to topi.cuda.schedule_injective
-  with tvm.target.create("cuda"):
-    s = tvm.generic.schedule_injective(outs)
-"""
+"""Classic algorithm operation"""
 from __future__ import absolute_import as _abs
+from . import _make
+from ..expr import TupleWrapper
 
-from .nn import *
-from .injective import *
-from .extern import *
-from .vision import *
-from .sort import *
-from .search import *
-from .tidl import *
+def add(lhs, rhs):
+    """Addition with numpy-style broadcasting.
+
+    Parameters
+    ----------
+    lhs : relay.Expr
+        The left hand side input data
+    rhs : relay.Expr
+        The right hand side input data
+
+    Returns
+    -------
+    result : relay.Expr
+        The computed result.
+
+    Examples
+    --------
+    .. code:: python
+
+      x = relay.Var("a") # shape is [2, 3]
+      y = relay.Var("b") # shape is [2, 1]
+      z = relay.add(x, y)  # result shape is [2, 3]
+    """
+    return _make.my_matadd(lhs, rhs)
+

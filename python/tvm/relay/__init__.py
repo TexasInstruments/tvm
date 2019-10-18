@@ -46,6 +46,7 @@ from .op.reduce import *
 from .op.tensor import *
 from .op.transform import *
 from .op.algorithm import *
+from .op.tidl import *
 from . import nn
 from . import annotation
 from . import vision

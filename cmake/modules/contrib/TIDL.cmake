@@ -15,27 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# pylint: disable=wildcard-import
-"""Generic declaration and schedules.
+# Plugin rules for cblas
+if(USE_TIDL)
+  message(STATUS "Build with contrib.tidl")
+  file(GLOB TIDL_CONTRIB_SRC src/contrib/tidl/*.cc)
+  list(APPEND RUNTIME_SRCS ${TIDL_CONTRIB_SRC})
+endif(USE_TIDL)
 
-This is a recommended way of using TOPI API.
-To use the generic schedule function, user must set
-the current target scope using with block. See also :any:`tvm.target`
-
-Example
--------
-.. code-block:: python
-
-  # create schedule that dispatches to topi.cuda.schedule_injective
-  with tvm.target.create("cuda"):
-    s = tvm.generic.schedule_injective(outs)
-"""
-from __future__ import absolute_import as _abs
-
-from .nn import *
-from .injective import *
-from .extern import *
-from .vision import *
-from .sort import *
-from .search import *
-from .tidl import *

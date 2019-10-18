@@ -117,6 +117,11 @@ class ArgsortAttrs(Attrs):
 
 
 @register_relay_attr_node
+class TidlAttrs(Attrs):
+    """Attributes for algorithm.tidl"""
+
+
+@register_relay_attr_node
 class OnDeviceAttrs(Attrs):
     """Attributes for annotation.on_device"""
 
