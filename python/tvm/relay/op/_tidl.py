@@ -32,12 +32,34 @@ def schedule_TidlSort(_, outs, target):
 @register_compute("TidlSort")
 def compute_TidlSort(attrs, inputs, _, target):
     """Compute definition of tidlsort"""
+    #print("DJDBG_TidlSort_Attrs:" + str(dir(attrs)))
     axis = get_const_int(attrs.axis)
     is_ascend = bool(get_const_int(attrs.is_ascend))
     dtype = attrs.dtype
-    print("DJDBG-TidlSort(_algorithm)")
-    return [topi.TidlSort(inputs[0], axis=axis, is_ascend=is_ascend, dtype=dtype)]
+    test_new_attr = attrs.test_new_attr
+    return [topi.TidlSort(inputs[0], axis=axis, is_ascend=is_ascend, dtype=dtype, test_new_attr=test_new_attr)]
 
 
 register_pattern("TidlSort", OpPattern.OPAQUE)
+
+@register_compute("TidlMatAdd")
+def compute_TidlMatAdd(attrs, inputs, out_type, target):
+    """Compute definition of tidlmatadd"""
+    #print("DJDBG_TidlMatAdd_Attrs:" + str(dir(attrs)))
+    kernel_attr = attrs.kernel_attr
+    with target:
+        #print("DJDBG_compute: TidlMatAdd")
+        return [topi.TidlMatAdd(inputs[0], inputs[1], kernel_attr=kernel_attr)]
+
+
+@register_schedule("TidlMatAdd")
+def schedule_TidlMatAdd(attrs, outputs, target):
+    """Schedule definition of batch_matmul"""
+    with target:
+        #print("DJDBG_schedule: TidlMatAdd")
+        return topi.generic.schedule_tidlmatadd(outputs)
+
+register_pattern("TidlMatAdd", OpPattern.OPAQUE)
+
+
 

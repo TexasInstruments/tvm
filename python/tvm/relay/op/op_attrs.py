@@ -117,9 +117,12 @@ class ArgsortAttrs(Attrs):
 
 
 @register_relay_attr_node
-class TidlAttrs(Attrs):
-    """Attributes for algorithm.tidl"""
+class TidlSortAttrs(Attrs):
+    """Attributes for tidl.my_sort"""
 
+@register_relay_attr_node
+class TidlMatAddAttrs(Attrs):
+    """Attributes for tidl.my_matadd"""
 
 @register_relay_attr_node
 class OnDeviceAttrs(Attrs):

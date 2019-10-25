@@ -24,6 +24,7 @@
 #include <dmlc/logging.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/runtime/util.h>
+#include <dlpack/dlpack.h>
 #include <algorithm>
 #include <vector>
 
@@ -104,6 +105,7 @@ void AddFP32(TVMArgs args, TVMRetValue *ret) {
   DLTensor *A = args[0];
   DLTensor *B = args[1];
   DLTensor *C = args[2];
+  std::string kernel_attr = args[3];
   int bit_depth = sizeof(float) * 8;
   CHECK_EQ(A->ndim, 2);
   CHECK_EQ(B->ndim, 2);
@@ -119,7 +121,7 @@ void AddFP32(TVMArgs args, TVMRetValue *ret) {
   float *ptr_b = reinterpret_cast<float *>(static_cast<char *>(B->data) + B->byte_offset);
   float *ptr_c = reinterpret_cast<float *>(static_cast<char *>(C->data) + C->byte_offset);
 
-  std::cout << "DJDBG...actually INVOKED, FLOAT!!!" << std::endl;
+  //std::cout << "DJDBG my_matadd...actually INVOKED, FLOAT!!! kernel_attr:" << kernel_attr << std::endl;
 
   for(int64_t i = 0; i < C->shape[0]; i ++) {
     for(int64_t j = 0; j < C->shape[1]; j ++) {
@@ -133,6 +135,7 @@ void AddFP64(TVMArgs args, TVMRetValue *ret) {
   DLTensor *A = args[0];
   DLTensor *B = args[1];
   DLTensor *C = args[2];
+  std::string kernel_attr = args[3];
   int bit_depth = sizeof(double) * 8;
   CHECK_EQ(A->ndim, 2);
   CHECK_EQ(B->ndim, 2);
@@ -147,7 +150,7 @@ void AddFP64(TVMArgs args, TVMRetValue *ret) {
   double *ptr_b = reinterpret_cast<double *>(static_cast<char *>(B->data) + B->byte_offset);
   double *ptr_c = reinterpret_cast<double *>(static_cast<char *>(C->data) + C->byte_offset);
 
-  std::cout << "DJDBG...actually INVOKED, DOUBLE!!!" << std::endl;
+  //std::cout << "DJDBG my_matadd ...actually INVOKED, DOUBLE!!! kernel_attr:" << kernel_attr << std::endl;
   for(int64_t i = 0; i < C->shape[0]; i ++) {
     for(int64_t j = 0; j < C->shape[1]; j ++) {
       *ptr_c++ = *ptr_a++ + *ptr_b++; 
@@ -184,10 +187,12 @@ bool CompareDescend(const std::pair<int64_t, DType>& lhs,
 }
 
 template<typename DataType, typename OutType>
-void my_argsort(DLTensor* input, DLTensor* output, int32_t axis, bool is_ascend) {
+void my_argsort(DLTensor* input, DLTensor* output, int32_t axis, bool is_ascend, std::string test_new_attr) {
   auto data_ptr = static_cast<DataType *>(input->data);
   auto out_ptr = static_cast<OutType *>(output->data);
   std::vector<std::pair<int64_t, DataType> > sorter;
+
+  //std::cout << "DJDBG_from_my_argsort:" << test_new_attr << std::endl;
 
   int axis_mul_before = 1;
   int axis_mul_after = 1;
@@ -198,8 +203,6 @@ void my_argsort(DLTensor* input, DLTensor* output, int32_t axis, bool is_ascend)
       axis_mul_after *= input->shape[i];
     }
   }
-
-  std::cout << "DJDBG...my_sort actually INVOKED!!!" << std::endl;
 
   for (int i = 0 ; i < axis_mul_before; ++i) {
     for (int j = 0 ; j < axis_mul_after; ++j) {
@@ -228,6 +231,8 @@ TVM_REGISTER_GLOBAL("tvm.contrib.tidl.my_sort")
 
   int32_t axis = args[2];
   bool is_ascend = args[3];
+  std::string test_new_attr = args[4];
+
   if (axis < 0) {
     axis = input->ndim + axis;
   }
@@ -239,9 +244,9 @@ TVM_REGISTER_GLOBAL("tvm.contrib.tidl.my_sort")
 
   if ((data_dtype == "float32") && (out_dtype == "int32"))
   {
-    my_argsort<int32_t, int32_t>(input, output, axis, is_ascend);
+    my_argsort<float, int32_t>(input, output, axis, is_ascend, test_new_attr);
   } else {
-    LOG(FATAL) << "Unsupported output dtype: " << out_dtype;
+    LOG(FATAL) << "Unsupported type combination: data dtype:" << data_dtype << " output dtype: " << out_dtype;
   }
 });
 

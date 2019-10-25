@@ -23,19 +23,32 @@
  * \brief Tidl operators
  */
 #include <tvm/relay/op.h>
-#include "tidlattrs.h"
+#include <tvm/relay/expr.h>
+#include <tvm/relay/op.h>
+#include <topi/broadcast.h>
+//#include "../type_relations.h"
+#include <tvm/relay/attrs/nn.h>
+#include <topi/nn.h>
+#include <topi/nn/bias_add.h>
+#include "../op_common.h"
+#include <tvm/relay/attrs/tidl.h>
 
 namespace tvm {
 namespace relay {
 
-TVM_REGISTER_NODE_TYPE(TidlAttrs);
+/*!
+ * \brief Define new custom operator for TIDL backend
+ *
+ */
+
+TVM_REGISTER_NODE_TYPE(TidlSortAttrs);
 
 bool TidlSortRel(const Array<Type>& types,
                 int num_inputs,
                 const Attrs& attrs,
                 const TypeReporter& reporter) {
   // `types` contains: [data, result]
-  const TidlAttrs* param = attrs.as<TidlAttrs>();
+  const TidlSortAttrs* param = attrs.as<TidlSortAttrs>();
   CHECK_EQ(types.size(), 2);
   const auto* data = types[0].as<TensorTypeNode>();
   if (data == nullptr) {
@@ -51,11 +64,14 @@ bool TidlSortRel(const Array<Type>& types,
 Expr MakeTidlSort(Expr data,
                  int axis,
                  bool is_ascend,
-                 DataType dtype) {
-  auto attrs = make_node<TidlAttrs>();
+                 DataType dtype,
+                 std::string test_new_attr) {
+  auto attrs = make_node<TidlSortAttrs>();
   attrs->axis = axis;
   attrs->is_ascend = is_ascend;
   attrs->dtype = dtype;
+  attrs->test_new_attr = test_new_attr;
+  //std::cout << "DJDBG MakeTidlSort extra attribute:" << test_new_attr << std::endl;
   static const Op& op = Op::Get("TidlSort");
   return CallNode::make(op, {data}, Attrs(attrs), {});
 }
@@ -65,14 +81,63 @@ TVM_REGISTER_API("relay.op._make.TidlSort")
 .set_body_typed(MakeTidlSort);
 
 RELAY_REGISTER_OP("TidlSort")
-.describe(R"doc(Returns the indices that would sort an
-input array along the given axis.
-)doc" TVM_ADD_FILELINE)
+.describe(R"doc(Returns the indices that would sort an input array along the given axis.)doc" TVM_ADD_FILELINE)
 .set_num_inputs(1)
-.set_attrs_type_key("relay.attrs.TidlAttrs")
+.set_attrs_type_key("relay.attrs.TidlSortAttrs")
 .add_argument("data", "Tensor", "Input data.")
 .set_support_level(6)
 .add_type_rel("TidlSort", TidlSortRel);
 
+/*!
+ * \brief Define new custom operator for TIDL backend
+ *
+ */
+
+TVM_REGISTER_NODE_TYPE(TidlMatAddAttrs);
+
+bool TidlMatAddRel(const Array<Type>& types,
+                int num_inputs,
+                const Attrs& attrs,
+                const TypeReporter& reporter) {
+  // Simple data type relation checker - just for prototyping
+  CHECK_EQ(types.size(), 3);
+  CHECK_EQ( types[0].as<TensorTypeNode>()->dtype, types[1].as<TensorTypeNode>()->dtype);
+  reporter->Assign(types[2], types[1]);
+  return true;
+}
+
+Expr MakeTidlMatAdd(Expr lhs, Expr rhs, std::string kernel_attr) {  
+  auto attrs = make_node<TidlMatAddAttrs>();
+   static const Op& op = Op::Get("TidlMatAdd");
+   //std::cout << "DJDBG MakeTidlMatAdd:" << kernel_attr << std::endl;
+   attrs->kernel_attr = kernel_attr;
+   return CallNode::make(op, {lhs, rhs}, Attrs(attrs), {});
+}
+
+TVM_REGISTER_API("relay.op._make.TidlMatAdd")
+.set_body_typed(MakeTidlMatAdd);
+
+RELAY_REGISTER_OP("TidlMatAdd")
+.describe("TIDL mat addition")
+.set_num_inputs(2)
+.set_attrs_type_key("relay.attrs.TidlMatAddAttrs")
+.add_argument("lhs", "Tensor", "The left hand side tensor.")  
+.add_argument("rhs", "Tensor", "The right hand side tensor.") 
+.set_support_level(1)
+.add_type_rel("TidlMatAdd", TidlMatAddRel);
+#if 0
+//Instead of using python wrapper we can register here directly
+.set_attr<TOpPattern>("TOpPattern", kOpaque)
+.set_attr<FTVMCompute>("FTVMCompute", [](const Attrs& attrs, const Array<Tensor>& inputs,
+                                        const Type& out_type, const Target& target) {
+    const auto* param = attrs.as<TidlMatAddAttrs>();
+    std::cout << "DJDBG: I am in this new compute function!!!:" << sizeof(param->kernel_attr) << std::endl;
+    return tvm::Array<tvm::Tensor>{topi::nn::bias_add(inputs[0], inputs[1], param->axis)};
+});
+#endif
+//return [topi.TidlMatAdd(inputs[0], inputs[1], kernel_attr=kernel_attr)]
+
 }  // namespace relay
 }  // namespace tvm
+
+

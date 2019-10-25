@@ -17,7 +17,7 @@
 """TIDL specific operation"""
 from . import _make
 
-def TidlSort(data, axis=-1, is_ascend=1, dtype="int32"):
+def TidlSort(data, axis=-1, is_ascend=1, dtype="int32", test_new_attr="test_new_attr_not_defined"):
     """Performs sorting along the given axis and returns an array of indicies
     having same shape as an input array that index data in sorted order.
 
@@ -43,5 +43,33 @@ def TidlSort(data, axis=-1, is_ascend=1, dtype="int32"):
     out : relay.Expr
         Tensor with same shape as data.
     """
-    print("DJDBG-TidlSort(algorithm)")
-    return _make.TidlSort(data, axis, is_ascend, dtype)
+    #print("DJDBG-TidlSort(algorithm)")
+    return _make.TidlSort(data, axis, is_ascend, dtype, test_new_attr)
+
+
+
+def TidlMatAdd(lhs, rhs, kernel_attr="kernel_attr_not_defined"):
+    """Addition with numpy-style broadcasting.
+
+    Parameters
+    ----------
+    lhs : relay.Expr
+        The left hand side input data
+    rhs : relay.Expr
+        The right hand side input data
+
+    Returns
+    -------
+    result : relay.Expr
+        The computed result.
+
+    Examples
+    --------
+    .. code:: python
+
+      x = relay.Var("a") # shape is [2, 3]
+      y = relay.Var("b") # shape is [2, 1]
+      z = relay.add(x, y)  # result shape is [2, 3]
+    """
+    #print("DJDBG-TidlMatAdd(show attribute):" + str(kernel_attr))
+    return _make.TidlMatAdd(lhs, rhs, kernel_attr)

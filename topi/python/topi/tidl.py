@@ -20,7 +20,7 @@ from tvm import api
 from .util import get_const_tuple
 
 @tvm.target.generic_func
-def TidlMatAdd(lhs, rhs, transa=False, transb=False, **kwargs):
+def TidlMatAdd(lhs, rhs, kernel_attr="djdbg_kernel_none2"):
     """Create an extern op that compute matrix addition of A and rhs with CrhsLAS
 
     This function serves as an example on how to call external libraries.
@@ -37,22 +37,23 @@ def TidlMatAdd(lhs, rhs, transa=False, transb=False, **kwargs):
     C : Tensor
         The result tensor.
     """
-    n = lhs.shape[1] if transa else lhs.shape[0]
-    m = rhs.shape[0] if transb else rhs.shape[1]
-    return _api.extern(
+    #print("DJDBG: in TVM, TidlMatAdd:" + kernel_attr)
+    n = lhs.shape[0]
+    m = rhs.shape[1]
+    return tvm.extern(
         (n, m),
         [lhs, rhs],
-        lambda ins, outs: _intrin.call_packed(
-            "tvm.contrib.tidl.my_matadd", ins[0], ins[1], outs[0]
+        lambda ins, outs: tvm.call_packed(
+            "tvm.contrib.tidl.my_matadd", ins[0], ins[1], outs[0], kernel_attr
         ),
-        name="C",
-        **kwargs
+        name="my_matadd_name_cpu",
+        tag="my_matadd_tag_cpu",
     )
 
 
 @tvm.target.generic_func
-def TidlSort(data, valid_count=None, axis=-1, is_ascend=1, dtype="float32"):
-   print("DJDBG: in TidlSort")
+def TidlSort(data, valid_count=None, axis=-1, is_ascend=1, dtype="float32", test_new_attr="default_for_test_new_attr"):
+   #print("DJDBG: in TVM, TidlSort")
 
    data_buf = api.decl_buffer(data.shape, data.dtype, "data_buf", data_alignment=8)
    out_buf = api.decl_buffer(data.shape, dtype, "out_buf", data_alignment=8)
@@ -61,11 +62,11 @@ def TidlSort(data, valid_count=None, axis=-1, is_ascend=1, dtype="float32"):
                     [data],
                     lambda ins, outs: tvm.call_packed(
                        "tvm.contrib.tidl.my_sort", ins[0],
-                        outs[0], axis, is_ascend),
+                        outs[0], axis, is_ascend, test_new_attr),
                     dtype=dtype,
                     in_buffers=[data_buf],
                     out_buffers=out_buf,
-                    name="my_sort_cpu",
-                    tag="my_sort_cpu")
+                    name="my_sort_name_cpu",
+                    tag="my_sort_tag_cpu")
 
    return out

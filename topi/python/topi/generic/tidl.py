@@ -36,3 +36,7 @@ def schedule_tidlsort(outs):
       The computation schedule for the op.
     """
     return _default_schedule(outs, False)
+
+@tvm.target.generic_func
+def schedule_tidlmatadd(outs):
+    return _default_schedule(outs, False)

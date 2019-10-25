@@ -15,10 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 """External function interface to TIDL-API libraries."""
+"""my_sort operator"""
+import tvm
+from tvm import api
+from .util import get_const_tuple
 from __future__ import absolute_import as _abs
-
 from .. import api as _api, intrin as _intrin
-
 
 def my_matadd(lhs, rhs, transa=False, transb=False, **kwargs):
     """Create an extern op that compute matrix addition of A and rhs with CrhsLAS
@@ -49,12 +51,8 @@ def my_matadd(lhs, rhs, transa=False, transb=False, **kwargs):
         **kwargs
     )
 
-"""my_sort operator"""
-import tvm
-from tvm import api
-from .util import get_const_tuple
 
-def my_sort(data, axis=-1, is_ascend=1, dtype="float32"):
+def my_sort(data, axis=-1, is_ascend=1, dtype="float32", test_new_attr="my_sort_test_new_attr"):
     """Performs sorting along the given axis and returns an array
     of indices having the same shape as an input array that index
     data in sorted order.
@@ -105,7 +103,7 @@ def my_sort(data, axis=-1, is_ascend=1, dtype="float32"):
                     [data],
                     lambda ins, outs: tvm.call_packed(
                         "tvm.contrib.tidl.my_sort", ins[0],
-                        outs[0], axis, is_ascend),
+                        outs[0], axis, is_ascend, test_new_attr),
                     dtype=dtype,
                     in_buffers=[data_buf],
                     out_buffers=out_buf,
