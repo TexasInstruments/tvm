@@ -42,6 +42,24 @@ def compute_TidlSort(attrs, inputs, _, target):
 
 register_pattern("TidlSort", OpPattern.OPAQUE)
 
+@register_schedule("TidlInference")
+def schedule_TidlInference(_, outs, target):
+    """Schedule definition of TidlInference"""
+    with target:
+        return topi.generic.schedule_tidlinference(outs)
+
+
+@register_compute("TidlInference")
+def compute_TidlInference(attrs, inputs, _, target):
+    """Compute definition of tidlinference"""
+    print("DJDBG in compute_TidlInference")
+    num_labels = get_const_int(attrs.num_labels)
+    inference_attr = attrs.inference_attr
+    return [topi.TidlInference(inputs[0], num_labels=num_labels, inference_attr=inference_attr)]
+
+
+register_pattern("TidlInference", OpPattern.OPAQUE)
+
 @register_compute("TidlMatAdd")
 def compute_TidlMatAdd(attrs, inputs, out_type, target):
     """Compute definition of tidlmatadd"""

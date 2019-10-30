@@ -95,7 +95,6 @@ def my_sort(data, axis=-1, is_ascend=1, dtype="float32", test_new_attr="my_sort_
         tvm_out = tvm.nd.array(np.zeros(dshape, dtype=data.dtype), ctx)
         f(tvm_data, tvm_out)
     """
-    print("DJDBG tidl.py dedicated, is invoked (my_sort)!")
     data_buf = api.decl_buffer(data.shape, data.dtype, "data_buf", data_alignment=8)
     out_buf = api.decl_buffer(data.shape, dtype, "out_buf", data_alignment=8)
     out = \
@@ -111,3 +110,38 @@ def my_sort(data, axis=-1, is_ascend=1, dtype="float32", test_new_attr="my_sort_
                     tag="argsort_cpu")
     return out
 
+def my_inference (data, dtype="float32", num_labels=0, inference_attr="my_inference_attr"):
+   """Performs NN inference by calling TIDL-API, providing input tensor and returns an array of softmax
+    normalized values, in 1D vector.
+
+    Parameters
+    ----------
+    data : tvm.Tensor
+        The input tensor.
+
+    num_labels : int32_t
+        Label count.
+
+    dtype : string, optional
+        DType of output.
+
+    Returns
+    -------
+    out : tvm.Tensor
+        Unsorted softmax output
+
+    """
+
+    data_buf = api.decl_buffer(data.shape, data.dtype, "data_buf", data_alignment=8)
+    out_buf = api.decl_buffer(data.shape, dtype, "out_buf", data_alignment=8)
+    out = \
+         tvm.extern(data.shape,
+                    [data],
+                    lambda ins, outs: tvm.call_packed(
+                        "tvm.contrib.tidl.my_inference", ins[0], outs[0], num_labels, inference_attr),
+                    dtype=dtype,
+                    in_buffers=[data_buf],
+                    out_buffers=out_buf,
+                    name="inference_tidl",
+                    tag="inference_tidl")
+    return out

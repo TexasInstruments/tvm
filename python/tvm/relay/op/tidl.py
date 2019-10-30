@@ -73,3 +73,9 @@ def TidlMatAdd(lhs, rhs, kernel_attr="kernel_attr_not_defined"):
     """
     #print("DJDBG-TidlMatAdd(show attribute):" + str(kernel_attr))
     return _make.TidlMatAdd(lhs, rhs, kernel_attr)
+
+def TidlInference(data, num_labels=1001, inference_attr="test_inference_attr_not_defined"):
+    print("DJDBG about to call _makeTidlInference")
+    return _make.TidlInference(data, num_labels, inference_attr)
+
+

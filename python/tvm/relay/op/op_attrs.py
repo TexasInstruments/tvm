@@ -125,6 +125,10 @@ class TidlMatAddAttrs(Attrs):
     """Attributes for tidl.my_matadd"""
 
 @register_relay_attr_node
+class TidlInferenceAttrs(Attrs):
+    """Attributes for tidl.my_inference"""
+
+@register_relay_attr_node
 class OnDeviceAttrs(Attrs):
     """Attributes for annotation.on_device"""
 

@@ -40,3 +40,7 @@ def schedule_tidlsort(outs):
 @tvm.target.generic_func
 def schedule_tidlmatadd(outs):
     return _default_schedule(outs, False)
+
+@tvm.target.generic_func
+def schedule_tidlinference(outs):
+    return _default_schedule(outs, False)

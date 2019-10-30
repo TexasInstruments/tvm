@@ -68,6 +68,19 @@ struct TidlMatAddAttrs : public tvm::AttrsNode<TidlMatAddAttrs> {
 
 };
 
+/*! \brief Attributes used in TIDL sort operators */
+struct TidlInferenceAttrs : public tvm::AttrsNode<TidlInferenceAttrs> {
+  int num_labels;
+  std::string inference_attr;
+
+  TVM_DECLARE_ATTRS(TidlInferenceAttrs, "relay.attrs.TidlInferenceAttrs") {
+    TVM_ATTR_FIELD(num_labels).set_default(1001)
+      .describe("Number of labels.");
+    TVM_ATTR_FIELD(inference_attr).set_default("Default value for new attr")
+      .describe("dummy attr.");
+  }
+};
+
 }  // namespace relay
 }  // namespace tvm
 #endif  // TVM_RELAY_ATTRS_TIDL_H_

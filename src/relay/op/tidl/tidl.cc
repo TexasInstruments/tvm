@@ -137,6 +137,62 @@ RELAY_REGISTER_OP("TidlMatAdd")
 #endif
 //return [topi.TidlMatAdd(inputs[0], inputs[1], kernel_attr=kernel_attr)]
 
+
+/*!
+ * \brief Define new custom operator for TIDL backend
+ *
+ */
+
+TVM_REGISTER_NODE_TYPE(TidlInferenceAttrs);
+
+bool TidlInferenceRel(const Array<Type>& types,
+                int num_inputs,
+                const Attrs& attrs,
+                const TypeReporter& reporter) {
+  // `types` contains: [data, result]
+  const TidlInferenceAttrs* param = attrs.as<TidlInferenceAttrs>();
+  CHECK_EQ(types.size(), 2);
+  const auto* data = types[0].as<TensorTypeNode>();
+  if (data == nullptr) {
+    CHECK(types[0].as<IncompleteTypeNode>())
+        << "Tidl: expect input type to be TensorType but get "
+        << types[0];
+    return false;
+  }
+  Array<IndexExpr> out_shape;
+  out_shape.push_back(data->shape[0]);
+  out_shape.push_back(param->num_labels);
+
+  reporter->Assign(types[1], TensorTypeNode::make(out_shape, Float(32)));
+  return true;
+}
+
+Expr MakeTidlInference(Expr data,
+                 int num_labels,
+                 std::string inference_attr) {
+  std::cout << "DJDBG in MakeTidlInference!" << std::endl;
+  auto attrs = make_node<TidlInferenceAttrs>();
+  attrs->num_labels = num_labels;
+  attrs->inference_attr = inference_attr;
+  //std::cout << "DJDBG MakeTidlSort extra attribute:" << test_new_attr << std::endl;
+  static const Op& op = Op::Get("TidlInference");
+  return CallNode::make(op, {data}, Attrs(attrs), {});
+}
+
+
+TVM_REGISTER_API("relay.op._make.TidlInference")
+.set_body_typed(MakeTidlInference);
+
+RELAY_REGISTER_OP("TidlInference")
+.describe(R"doc(Returns the softmax normalized classification result.)doc" TVM_ADD_FILELINE)
+.set_num_inputs(1)
+.set_attrs_type_key("relay.attrs.TidlInferenceAttrs")
+.add_argument("data", "Tensor", "Input data.")
+.set_support_level(6)
+.add_type_rel("TidlInference", TidlInferenceRel);
+
+
+
 }  // namespace relay
 }  // namespace tvm
 
