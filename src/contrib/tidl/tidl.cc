@@ -280,7 +280,7 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
   if(output->ndim == 1) std::cout << "DJDBG tensor output dimensions(1):" << output->shape[0] << std::endl;
   else if(output->ndim == 2) std::cout << "DJDBG tensor output dimensions(2):" << output->shape[0] << " " << output->shape[1] << std::endl;
   //TODO: Include TIDL-API calls
-  for(int32_t i = 0; i < num_labels; i++) *out_ptr++ = static_cast<DataType>(i);
+  for(int32_t i = 0; i < num_labels; i++) out_ptr[i] = static_cast<DataType>(i);
   
   for(int32_t k = 0; k < input->shape[0]; k ++) {
     std::cout << "NEW IMAGE:" << std::endl;
@@ -295,25 +295,44 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
   }
 
   // open the library
-  std::cout << "Opening libtidl.so...\n";
-  void* tidl_handle = dlopen("./libtidl.so", RTLD_LAZY);
+  std::cout << "Opening libtidl_api.so...\n";
+  // reset errors
+  dlerror();
+  void* ocl_handle = dlopen("libOpenCL.so", RTLD_NOW | RTLD_GLOBAL );
+  const char *dlsym_error0 = dlerror();
+  if (dlsym_error0) {
+     LOG(FATAL) << "Cannot open libOpenCL.so! " << dlsym_error0 << '\n';
+     return;
+  }
+  // reset errors
+  dlerror();
+  void* tidl_handle = dlopen("libtidl_api.so", RTLD_NOW | RTLD_GLOBAL );
+  const char *dlsym_error1 = dlerror();
+  if (dlsym_error1) {
+     LOG(FATAL) << "Cannot open libtidl_api.so! " << dlsym_error1 << '\n';
+     return;
+  }
  // load the symbol
   std::cout << "Loading symbol TidlRunSubgraph...\n";
   // reset errors
   dlerror();
   tidl_subgraph_t tidl_subgraph = (tidl_subgraph_t) dlsym(tidl_handle, "TidlRunSubgraph");
-  const char *dlsym_error = dlerror();
-  if (dlsym_error) {
-     std::cerr << "Cannot load symbol 'TidlRunSubgraph': " << dlsym_error << '\n';
+  const char *dlsym_error2 = dlerror();
+  if (dlsym_error2) {
+     LOG(FATAL) << "Cannot load symbol 'TidlRunSubgraph': " << dlsym_error2 << '\n';
      dlclose(tidl_handle); 
+     dlclose(ocl_handle); 
      return;
   }
   // use it to do the calculation
   std::cout << "Calling tidl_subgraph...\n";
   tidl_subgraph(1, 0, 1, 1, inputTensors, outputTensors);
+
   // close the library
   std::cout << "Closing tidl library...\n";
   dlclose(tidl_handle);
+  std::cout << "Closing opencl library...\n";
+  dlclose(ocl_handle);
 }
 //------------------------------------------------------------------------------------------------------------
 
