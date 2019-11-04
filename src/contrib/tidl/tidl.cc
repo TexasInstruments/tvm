@@ -42,9 +42,13 @@ namespace contrib {
 
 using namespace runtime;
 
+typedef void (*tidl_subgraph_t)(int, int, int, int, float **, float **);
+//Singletons required for making calls to TIDL-API
+static void *tidl_handle = NULL;
+static tidl_subgraph_t tidl_subgraph = (tidl_subgraph_t)NULL;
+
 #define MAX_INPUT_TENSORS  4
 #define MAX_OUTPUT_TENSORS 4
-typedef void (*tidl_subgraph_t)(int, int, int, int, float **, float **);
 //=============================
 //Adding my specific matrix add
 //=============================
@@ -279,8 +283,10 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
 
   if(output->ndim == 1) std::cout << "DJDBG tensor output dimensions(1):" << output->shape[0] << std::endl;
   else if(output->ndim == 2) std::cout << "DJDBG tensor output dimensions(2):" << output->shape[0] << " " << output->shape[1] << std::endl;
+
+#ifdef VERBOSE
   //TODO: Include TIDL-API calls
-  for(int32_t i = 0; i < num_labels; i++) out_ptr[i] = static_cast<DataType>(i);
+  //for(int32_t i = 0; i < num_labels; i++) out_ptr[i] = static_cast<DataType>(i);
   
   for(int32_t k = 0; k < input->shape[0]; k ++) {
     std::cout << "NEW IMAGE:" << std::endl;
@@ -293,36 +299,30 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
     }
     std::cout << std::endl;
   }
+#endif
 
-  // open the library
-  std::cout << "Opening libtidl_api.so...\n";
-  // reset errors
-  dlerror();
-  void* ocl_handle = dlopen("libOpenCL.so", RTLD_NOW | RTLD_GLOBAL );
-  const char *dlsym_error0 = dlerror();
-  if (dlsym_error0) {
-     LOG(FATAL) << "Cannot open libOpenCL.so! " << dlsym_error0 << '\n';
-     return;
-  }
-  // reset errors
-  dlerror();
-  void* tidl_handle = dlopen("libtidl_api.so", RTLD_NOW | RTLD_GLOBAL );
-  const char *dlsym_error1 = dlerror();
-  if (dlsym_error1) {
-     LOG(FATAL) << "Cannot open libtidl_api.so! " << dlsym_error1 << '\n';
-     return;
-  }
- // load the symbol
-  std::cout << "Loading symbol TidlRunSubgraph...\n";
-  // reset errors
-  dlerror();
-  tidl_subgraph_t tidl_subgraph = (tidl_subgraph_t) dlsym(tidl_handle, "TidlRunSubgraph");
-  const char *dlsym_error2 = dlerror();
-  if (dlsym_error2) {
-     LOG(FATAL) << "Cannot load symbol 'TidlRunSubgraph': " << dlsym_error2 << '\n';
-     dlclose(tidl_handle); 
-     dlclose(ocl_handle); 
-     return;
+  if(!tidl_handle)
+  {
+    // reset errors
+    dlerror();
+    tidl_handle = dlopen("libtidl_api.so", RTLD_NOW | RTLD_GLOBAL );
+    const char *dlsym_error1 = dlerror();
+    if (dlsym_error1) {
+      LOG(FATAL) << "Cannot open libtidl_api.so! " << dlsym_error1 << '\n';
+      return;
+    }
+    // load the symbol
+    std::cout << "Loading symbol TidlRunSubgraph...\n";
+    // reset errors
+    dlerror();
+    tidl_subgraph = (tidl_subgraph_t) dlsym(tidl_handle, "TidlRunSubgraph");
+    const char *dlsym_error2 = dlerror();
+    if (dlsym_error2) {
+       LOG(FATAL) << "Cannot load symbol 'TidlRunSubgraph': " << dlsym_error2 << '\n';
+       dlclose(tidl_handle); 
+       //dlclose(ocl_handle); 
+       return;
+    }
   }
   // use it to do the calculation
   std::cout << "Calling tidl_subgraph...\n";
@@ -331,8 +331,6 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
   // close the library
   std::cout << "Closing tidl library...\n";
   dlclose(tidl_handle);
-  std::cout << "Closing opencl library...\n";
-  dlclose(ocl_handle);
 }
 //------------------------------------------------------------------------------------------------------------
 
