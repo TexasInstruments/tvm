@@ -28,11 +28,13 @@
 #include <algorithm>
 #include <vector>
 #include <dlfcn.h>
+#include <memory.h>
 
 extern "C" {
 //#include <cblas.h>
   extern void TidlRunSubgraph(int total_subgraphs, 
                               int subgraph_id, 
+                              int batch_size,
                               int num_inputs, 
                               int num_outputs, float **inputTensors, float **outputTensors);
 }
@@ -42,13 +44,14 @@ namespace contrib {
 
 using namespace runtime;
 
-typedef void (*tidl_subgraph_t)(int, int, int, int, float **, float **);
+typedef void (*tidl_subgraph_t)(int, int, int, int, int, float **, float **);
 //Singletons required for making calls to TIDL-API
 static void *tidl_handle = NULL;
 static tidl_subgraph_t tidl_subgraph = (tidl_subgraph_t)NULL;
 
 #define MAX_INPUT_TENSORS  4
 #define MAX_OUTPUT_TENSORS 4
+#define MAX_BATCH_SIZE     8
 //=============================
 //Adding my specific matrix add
 //=============================
@@ -268,11 +271,17 @@ template<typename DataType, typename OutType>
 void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std::string inference_attr) {
   auto data_ptr = reinterpret_cast<DataType *>(static_cast<char *>(input->data) + input->byte_offset);
   auto out_ptr  = reinterpret_cast<OutType *>(static_cast<char *>(output->data) + output->byte_offset);
-  float *inputTensors[MAX_INPUT_TENSORS];
-  float *outputTensors[MAX_OUTPUT_TENSORS];
+  float *inputTensors[MAX_INPUT_TENSORS*MAX_BATCH_SIZE];
+  float *outputTensors[MAX_OUTPUT_TENSORS*MAX_BATCH_SIZE];
+  float *input_ptr  = static_cast<float *>(data_ptr);
+  float *output_ptr = static_cast<float *>(out_ptr);
+  int batch_size = input->shape[0];
+  int image_size = input->shape[1] * input->shape[2] * input->shape[3];
 
-  inputTensors[0]  = static_cast<float *>(data_ptr); 
-  outputTensors[0] = static_cast<float *>(out_ptr);
+  for(int i = 0; i < batch_size; i++) {
+    inputTensors[i]  = &input_ptr[i * image_size];
+    outputTensors[i] = &output_ptr[i * num_labels];
+  }
 
   std::cout << "DJDBG_from_my_inference:" << inference_attr << std::endl;
   if(input->ndim == 1) std::cout << "DJDBG tensor dimensions(1):" << input->shape[0] << std::endl;
@@ -320,13 +329,12 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
     if (dlsym_error2) {
        LOG(FATAL) << "Cannot load symbol 'TidlRunSubgraph': " << dlsym_error2 << '\n';
        dlclose(tidl_handle); 
-       //dlclose(ocl_handle); 
        return;
     }
   }
   // use it to do the calculation
   std::cout << "Calling tidl_subgraph...\n";
-  tidl_subgraph(1, 0, 1, 1, inputTensors, outputTensors);
+  tidl_subgraph(1, 0, batch_size, 1, 1, inputTensors, outputTensors);
 
   // close the library
   std::cout << "Closing tidl library...\n";
