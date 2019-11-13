@@ -89,7 +89,7 @@ from tensorflow.python.tools import optimize_for_inference_lib
 #       Therefore, it needs to be provided by the caller. 
 ################################################################################
 def tidl_check_model(model_file, calib_image, subgraph_name, model_input_shape,
-                     tidl_import_tool, tidl_calib_tool, artifacts_folder):
+                     tidl_import_tool, tidl_calib_tool, artifacts_folder, conv2d_kernel_type):
 
   print('Check if TIDL supports ' + model_file)
 
@@ -112,7 +112,7 @@ def tidl_check_model(model_file, calib_image, subgraph_name, model_input_shape,
 
   # Try to import the model: return 1 if import succeeds and 0 if import fails
   result = tidl_import_tf_model(opt_model_file, raw_image, model_input_shape,
-                                       tidl_import_tool, tidl_calib_tool, subgraph_name, artifacts_folder)
+                                       tidl_import_tool, tidl_calib_tool, subgraph_name, artifacts_folder, conv2d_kernel_type)
 
   return result
 
@@ -225,7 +225,7 @@ def tidl_tf_image_preprocess(input_image, output_image, output_dim):
 #       0 if the model cannot run on TIDL
 ################################################################################
 def tidl_import_tf_model(opt_model_file, raw_image, input_shape,
-                         tidl_import_tool, tidl_calib_tool, subgraph_name, artifacts_folder):
+                         tidl_import_tool, tidl_calib_tool, subgraph_name, artifacts_folder, conv2d_kernel_type=None):
 
   # TIDL net and params binary files
   tidl_net_bin_file    = "./" + artifacts_folder + "/" + subgraph_name + '_net.bin'
@@ -250,6 +250,8 @@ def tidl_import_tf_model(opt_model_file, raw_image, input_shape,
       config_file.write("inWidth            = {}\n".format(input_shape[0]))
       config_file.write("inHeight           = {}\n".format(input_shape[1]))
       config_file.write("inNumChannels      = {}\n".format(input_shape[2]))
+      if conv2d_kernel_type:
+         config_file.write("conv2dKernelType   = {}\n".format(conv2d_kernel_type))
 
   # Run TIDL import tool
   try: 

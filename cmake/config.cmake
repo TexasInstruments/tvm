@@ -40,6 +40,13 @@
 # Backend runtimes.
 #---------------------------------------------
 
+# Whether enable TIDL during compile,
+#
+# Possible values:
+# - ON: enable TIDL 
+# - OFF: disable TIDL
+set(USE_TIDL ON)
+
 # Whether enable CUDA during compile,
 #
 # Possible values:
@@ -118,7 +125,7 @@ set(USE_MICRO_STANDALONE_RUNTIME OFF)
 # - ON: enable llvm with cmake's find search
 # - OFF: disable llvm
 # - /path/to/llvm-config: enable specific LLVM when multiple llvm-dev is available.
-set(USE_LLVM OFF)
+set(USE_LLVM ON)
 
 #---------------------------------------------
 # Contrib libraries
