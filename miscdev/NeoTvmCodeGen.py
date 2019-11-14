@@ -75,6 +75,9 @@ parser.add_argument("modelName", help="Model name")
 parser.add_argument("--forced_arm_offload", "-a", help="Force ARM-only execution", action='store_true', default=False)
 parser.add_argument("--forced_tidl_offload", "-t", help="Force TIDL offload", action='store_true', default=False)
 parser.add_argument("--batch_size", "-b", help="Batch size", type=int, default=4)
+parser.add_argument("--input_node", "-i", help="Input node name", default=None)
+parser.add_argument("--output_node", "-o", help="Output node name", default=None)
+parser.add_argument("--input_shape", "-s", help="Input shape: H W C, e.g. -s 224 224 3", nargs="+", type=int, default=-1)
 
 try:
     args = parser.parse_args()
@@ -85,6 +88,7 @@ forced_dim_expansion = True
 batch_size      = args.batch_size
 #tidl_input_node = 'x'
 conv2d_kernel_type = None
+customModel = False
 
 if args.modelName == "mobileNet1":
   model      = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
@@ -123,10 +127,22 @@ elif args.modelName == "inceptionv3":
   out_node   = 'InceptionV3/Predictions/Softmax'
   model_input_shape = (299,299,3)
 else:
-  print("Model:" + str(args.modelName) + " not supported!")
-  quit()
+  model = args.modelName
+  print("Custom TF Model expected:" + args.modelName)
+  input_node = args.input_node
+  out_node   = args.output_node
+  model_input_shape = tuple(args.input_shape)
+  print(model)
+  print(input_node)
+  print(out_node)
+  print(str(model_input_shape))
+  customModel = True
 
-artifacts_folder = "./output4/" + args.modelName
+if customModel:
+  artifacts_folder = "./output4/custom"
+else:
+  artifacts_folder = "./output4/" + args.modelName
+
 if not os.path.exists(artifacts_folder):
    #Create outputfolder
    os.makedirs(artifacts_folder)
