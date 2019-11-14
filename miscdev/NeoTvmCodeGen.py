@@ -148,7 +148,12 @@ print(data_shape_input)
 #target = "llvm"
 target = "llvm -target=armv7l-linux-gnueabihf"
 
-plsdk_devkit = os.getenv('TIDL_PLSDK') + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+if os.getenv("TIDL_PLSDK") is None:
+  plsdk_devkit = os.getenv('HOME') + "/ti-processor-sdk-linux-am57xx-evm-06.01.00.08" + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+else: 
+  plsdk_devkit = os.getenv('TIDL_PLSDK') + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+print("PLSDK path set to:" + plsdk_devkit)
+
 tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
 tidl_import_tool = plsdk_devkit + "tidl_model_import.out"
 arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"

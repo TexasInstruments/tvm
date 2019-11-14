@@ -52,7 +52,7 @@ def schedule_TidlInference(_, outs, target):
 @register_compute("TidlInference")
 def compute_TidlInference(attrs, inputs, _, target):
     """Compute definition of tidlinference"""
-    print("DJDBG in compute_TidlInference")
+    #print("DJDBG in compute_TidlInference")
     num_labels = get_const_int(attrs.num_labels)
     inference_attr = attrs.inference_attr
     return [topi.TidlInference(inputs[0], num_labels=num_labels, inference_attr=inference_attr)]

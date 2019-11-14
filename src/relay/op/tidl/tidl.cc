@@ -170,7 +170,7 @@ bool TidlInferenceRel(const Array<Type>& types,
 Expr MakeTidlInference(Expr data,
                  int num_labels,
                  std::string inference_attr) {
-  std::cout << "DJDBG in MakeTidlInference!" << std::endl;
+  //std::cout << "DJDBG in MakeTidlInference!" << std::endl;
   auto attrs = make_node<TidlInferenceAttrs>();
   attrs->num_labels = num_labels;
   attrs->inference_attr = inference_attr;

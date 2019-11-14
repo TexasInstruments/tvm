@@ -73,7 +73,7 @@ def TidlSort(data, valid_count=None, axis=-1, is_ascend=1, dtype="float32", test
 
 @tvm.target.generic_func
 def TidlInference(data, num_labels=1001, inference_attr="default_for_test_inference_attr"):
-   print("DJDBG: in TVM, TidlInference")
+   #print("DJDBG: in TVM, TidlInference")
 
    data_buf = api.decl_buffer(data.shape, data.dtype, "data_buf", data_alignment=8)
    out_shape = [data.shape[0], num_labels]

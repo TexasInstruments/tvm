@@ -283,6 +283,7 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
     outputTensors[i] = &output_ptr[i * num_labels];
   }
 
+#ifdef VERBOSE
   std::cout << "DJDBG_from_my_inference:" << inference_attr << std::endl;
   if(input->ndim == 1) std::cout << "DJDBG tensor dimensions(1):" << input->shape[0] << std::endl;
   else if(input->ndim == 2) std::cout << "DJDBG tensor dimensions(2):" << input->shape[0] << " " << input->shape[1] << std::endl;
@@ -292,6 +293,7 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
 
   if(output->ndim == 1) std::cout << "DJDBG tensor output dimensions(1):" << output->shape[0] << std::endl;
   else if(output->ndim == 2) std::cout << "DJDBG tensor output dimensions(2):" << output->shape[0] << " " << output->shape[1] << std::endl;
+#endif
 
 #ifdef VERBOSE
   //TODO: Include TIDL-API calls
@@ -348,7 +350,7 @@ TVM_REGISTER_GLOBAL("tvm.contrib.tidl.my_inference")
   DLTensor *output = args[1]; // Otput tensor
   int32_t num_labels = args[2];
   std::string inference_attr = args[3];
-  std::cout << "DJDBG_my_inference_data_types:" << input->dtype << " " << output->dtype << " num_labels:" << num_labels << std::endl;
+  //std::cout << "DJDBG_my_inference_data_types:" << input->dtype << " " << output->dtype << " num_labels:" << num_labels << std::endl;
 
   //CHECK_EQ(input->ndim, 4); // e.g. [1, 3, 224, 224], NCHW
 
