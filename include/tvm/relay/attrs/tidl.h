@@ -32,43 +32,6 @@ namespace tvm {
 namespace relay {
 
 /*! \brief Attributes used in TIDL sort operators */
-struct TidlSortAttrs : public tvm::AttrsNode<TidlSortAttrs> {
-  int axis;
-  bool is_ascend;
-  DataType dtype;
-  std::string test_new_attr;
-
-  TVM_DECLARE_ATTRS(TidlSortAttrs, "relay.attrs.TidlSortAttrs") {
-    TVM_ATTR_FIELD(axis).set_default(-1)
-      .describe("Axis along which to sort the input tensor."
-                "If not given, the flattened array is used.");
-    TVM_ATTR_FIELD(is_ascend).set_default(true)
-      .describe("Whether to sort in ascending or descending order."
-                "By default, sort in ascending order");
-    TVM_ATTR_FIELD(dtype).set_default(NullValue<DataType>())
-      .describe("DType of the output indices.");
-    TVM_ATTR_FIELD(test_new_attr).set_default("Default value for new attr")
-      .describe("dummy attr.");
-  }
-};
-
-/*! \brief Attributes used in TIDL sort operators */
-struct TidlMatAddAttrs : public tvm::AttrsNode<TidlMatAddAttrs> {
-  int axis;
-  std::string kernel_attr;
-#if 1
-  TVM_DECLARE_ATTRS(TidlMatAddAttrs, "relay.attrs.TidlMatAddAttrs") {
-    TVM_ATTR_FIELD(axis).set_default(-1)
-      .describe("Axis along which to sort the input tensor."
-                "If not given, the flattened array is used.");
-    TVM_ATTR_FIELD(kernel_attr).set_default("djdbg_no_kernel_attr")
-      .describe("Kernel name for selection of precompiled model.");
-  }
-#endif
-
-};
-
-/*! \brief Attributes used in TIDL sort operators */
 struct TidlInferenceAttrs : public tvm::AttrsNode<TidlInferenceAttrs> {
   int num_labels;
   std::string inference_attr;

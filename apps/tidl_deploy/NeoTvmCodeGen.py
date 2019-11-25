@@ -222,7 +222,7 @@ else:
     #   sym: relay expr for given tensorflow protobuf.
     #   params: params converted from tensorflow params (tensor protobuf).
     shape_dict = {input_node : data_shape_input}
-    print("DJDBG:" + str(shape_dict))
+    print("Inut node shape dict:" + str(shape_dict))
     mod, params = relay.frontend.from_tensorflow(graph_def,
                                                  layout=layout,
                                                  shape=shape_dict, outputs=None)

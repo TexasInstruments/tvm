@@ -122,7 +122,6 @@ void OpRegistry::UpdateAttr(const std::string& key,
   if (op_map->data_.size() <= index) {
     op_map->data_.resize(index + 1, std::make_pair(TVMRetValue(), 0));
   }
-  //std::cout << "DJDBG_updateattr:" << key << std::endl;
   std::pair<TVMRetValue, int>& p = op_map->data_[index];
   CHECK(p.second != plevel)
       << "Attribute " << key << " of operator " << this->name
@@ -187,7 +186,6 @@ TVM_REGISTER_API("relay.op._Register")
     auto& reg =
         OpRegistry::Registry()->__REGISTER_OR_GET__(op_name).set_name();
     // enable resgiteration and override of certain properties
-    //std::cout << "DJDBG_register: op_name:" << op_name << " attr_key:" << attr_key << std::endl;
     if (attr_key == "num_inputs" && plevel > 128) {
       reg.set_num_inputs(value);
     } else if (attr_key == "attrs_type_key" && plevel > 128) {

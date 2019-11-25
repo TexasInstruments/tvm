@@ -135,8 +135,6 @@ void AddFP32(TVMArgs args, TVMRetValue *ret) {
   float *ptr_b = reinterpret_cast<float *>(static_cast<char *>(B->data) + B->byte_offset);
   float *ptr_c = reinterpret_cast<float *>(static_cast<char *>(C->data) + C->byte_offset);
 
-  //std::cout << "DJDBG my_matadd...actually INVOKED, FLOAT!!! kernel_attr:" << kernel_attr << std::endl;
-
   for(int64_t i = 0; i < C->shape[0]; i ++) {
     for(int64_t j = 0; j < C->shape[1]; j ++) {
       *ptr_c++ = *ptr_a++ + *ptr_b++; 
@@ -164,7 +162,6 @@ void AddFP64(TVMArgs args, TVMRetValue *ret) {
   double *ptr_b = reinterpret_cast<double *>(static_cast<char *>(B->data) + B->byte_offset);
   double *ptr_c = reinterpret_cast<double *>(static_cast<char *>(C->data) + C->byte_offset);
 
-  //std::cout << "DJDBG my_matadd ...actually INVOKED, DOUBLE!!! kernel_attr:" << kernel_attr << std::endl;
   for(int64_t i = 0; i < C->shape[0]; i ++) {
     for(int64_t j = 0; j < C->shape[1]; j ++) {
       *ptr_c++ = *ptr_a++ + *ptr_b++; 
@@ -205,8 +202,6 @@ void my_argsort(DLTensor* input, DLTensor* output, int32_t axis, bool is_ascend,
   auto data_ptr = static_cast<DataType *>(input->data);
   auto out_ptr = static_cast<OutType *>(output->data);
   std::vector<std::pair<int64_t, DataType> > sorter;
-
-  //std::cout << "DJDBG_from_my_argsort:" << test_new_attr << std::endl;
 
   int axis_mul_before = 1;
   int axis_mul_after = 1;
@@ -284,21 +279,6 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
   }
 
 #ifdef VERBOSE
-  std::cout << "DJDBG_from_my_inference:" << inference_attr << std::endl;
-  if(input->ndim == 1) std::cout << "DJDBG tensor dimensions(1):" << input->shape[0] << std::endl;
-  else if(input->ndim == 2) std::cout << "DJDBG tensor dimensions(2):" << input->shape[0] << " " << input->shape[1] << std::endl;
-  else if(input->ndim == 3) std::cout << "DJDBG tensor dimensions(3):" << input->shape[0] << " " << input->shape[1] << " " << input->shape[2] << std::endl;
-  else if(input->ndim == 4) std::cout << "DJDBG tensor dimensions(4):" << input->shape[0] << " " << input->shape[1] << " " << input->shape[2] << " " << input->shape[3] << std::endl;
-  else std::cout << std::endl << "Unsupported input dim:" << input->ndim << std::endl; 
-
-  if(output->ndim == 1) std::cout << "DJDBG tensor output dimensions(1):" << output->shape[0] << std::endl;
-  else if(output->ndim == 2) std::cout << "DJDBG tensor output dimensions(2):" << output->shape[0] << " " << output->shape[1] << std::endl;
-#endif
-
-#ifdef VERBOSE
-  //TODO: Include TIDL-API calls
-  //for(int32_t i = 0; i < num_labels; i++) out_ptr[i] = static_cast<DataType>(i);
-  
   for(int32_t k = 0; k < input->shape[0]; k ++) {
     std::cout << "NEW IMAGE:" << std::endl;
     for(int32_t i = 0; i < input->shape[1]; i ++) {
@@ -322,9 +302,6 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
       LOG(FATAL) << "Cannot open libtidl_api.so! " << dlsym_error1 << '\n';
       return;
     }
-    // load the symbol
-    std::cout << "Loading symbol TidlRunSubgraph...\n";
-    // reset errors
     dlerror();
     tidl_subgraph = (tidl_subgraph_t) dlsym(tidl_handle, "TidlRunSubgraph");
     const char *dlsym_error2 = dlerror();
@@ -339,7 +316,6 @@ void my_arginference(DLTensor* input, DLTensor* output, int32_t num_labels, std:
   tidl_subgraph(1, 0, batch_size, 1, 1, inputTensors, outputTensors);
 
   // close the library
-  std::cout << "Closing tidl library...\n";
   dlclose(tidl_handle);
 }
 //------------------------------------------------------------------------------------------------------------
@@ -350,10 +326,7 @@ TVM_REGISTER_GLOBAL("tvm.contrib.tidl.my_inference")
   DLTensor *output = args[1]; // Otput tensor
   int32_t num_labels = args[2];
   std::string inference_attr = args[3];
-  //std::cout << "DJDBG_my_inference_data_types:" << input->dtype << " " << output->dtype << " num_labels:" << num_labels << std::endl;
-
   //CHECK_EQ(input->ndim, 4); // e.g. [1, 3, 224, 224], NCHW
-
   auto data_dtype = TVMType2String(input->dtype);
   auto out_dtype  = TVMType2String(output->dtype);
   my_arginference<float, float>(input, output, num_labels, inference_attr);
