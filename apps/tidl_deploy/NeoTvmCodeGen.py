@@ -77,6 +77,7 @@ parser.add_argument("--forced_tidl_offload", "-t", help="Force TIDL offload", ac
 parser.add_argument("--batch_size", "-b", help="Batch size", type=int, default=4)
 parser.add_argument("--input_node", "-i", help="Input node name", default=None)
 parser.add_argument("--output_node", "-o", help="Output node name", default=None)
+parser.add_argument("--calibration_image", "-c", help="Calibration image", default="airshow.jpg")
 parser.add_argument("--input_shape", "-s", help="Input shape: H W C, e.g. -s 224 224 3", nargs="+", type=int, default=-1)
 
 try:
@@ -100,32 +101,8 @@ elif args.modelName == "mobileNet2":
   model = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
   input_node = "input"
   out_node   = 'MobilenetV2/Predictions/Reshape_1'
+  model_input_shape = (224,224,3)
   conv2d_kernel_type = " 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0"
-  model_input_shape = (224,224,3)
-elif args.modelName == "mobileNet3":
-  model = "./mobileNet3/v3-large_224_1.0_float.pb"
-  input_node = "input"
-  out_node   = 'MobilenetV3/Predictions/Reshape'
-  model_input_shape = (224,224,3)
-elif args.modelName == "tidl_inceptionv1":
-  input_node = "Placeholder"
-  model = "./inceptionv1/inception_v1_fbn.pb"
-  out_node = "softmax/Reshape"
-  model_input_shape = (224,224,3)
-  conv2d_kernel_type = "0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0"
-  args.forced_tidl_offload = True
-  args.forced_arm_offload = False
-elif args.modelName == "inceptionv1":
-  model = "./inceptionv1/classify_image_graph_def-with_shapes.pb"
-  input_node = "DecodeJpeg/contents"
-  out_node = "softmax"
-  model_input_shape = (299,299,3)
-  forced_dim_expansion = False
-elif args.modelName == "inceptionv3":
-  model  = "./inceptionv3/inception_v3_2016_08_28_frozen-with_shapes.pb"
-  input_node = 'input'
-  out_node   = 'InceptionV3/Predictions/Softmax'
-  model_input_shape = (299,299,3)
 else:
   model = args.modelName
   print("Custom TF Model expected:" + args.modelName)
@@ -152,7 +129,7 @@ else:
    for f in filelist:
       os.remove(os.path.join(artifacts_folder, f)) 
 
-image = './airshow.jpg'
+image = args.calibration_image
 
 data_shape_input = list(model_input_shape)
 if forced_dim_expansion:
