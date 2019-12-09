@@ -31,7 +31,7 @@
 namespace tvm {
 namespace relay {
 
-/*! \brief Attributes used in TIDL sort operators */
+/*! \brief Attributes used in TIDL inference operator */
 struct TidlInferenceAttrs : public tvm::AttrsNode<TidlInferenceAttrs> {
   int num_labels;
   std::string inference_attr;
