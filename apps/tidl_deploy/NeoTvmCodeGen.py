@@ -181,8 +181,8 @@ else:
   print("Run this model on ARM")
   #layout = 'NHWC'
   layout = None
-  with tf.compat.v1.gfile.GFile(model, 'rb') as f:
-    graph_def = tf.compat.v1.GraphDef()
+  with tf.gfile.GFile(model, 'rb') as f:
+    graph_def = tf.GraphDef()
     graph_def.ParseFromString(f.read())
     graph = tf.import_graph_def(graph_def, name='')
     graph_def = tf_testing.ProcessGraphDefParam(graph_def)

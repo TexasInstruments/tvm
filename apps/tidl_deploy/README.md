@@ -1,5 +1,8 @@
 NeoTvmCodeGen.py script compiles Tensorflow models to TVM runtime (NEO-AI-DLR) compatible modules.
-Please note that script requires TF 1.14/1.15 to be installed, as well as Python OpenCV package (pip3 install opencv-python).
+Please note that script requires TF 1.14/1.15 to be installed, as well as Python OpenCV and ANTLR4 packages:
+- pip3 install opencv-python --user
+- pip3 install antlr4-python3-runtime --user
+
 If xNN model is not compatible with TIDL framework for edge devices, it falls back to ARM only execution, and compiles a 
 set of artifacts for ARMv7 platform (in ./output4/<modelname> folder)
 - deploy_graph.json
