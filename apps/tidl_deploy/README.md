@@ -28,8 +28,19 @@ If we use a xNN model that can be fully compiled for execution using TIDL librar
 
 Codegen examples:
 
+-  Set environment variable pointing to location of Processor Linux SDK (http://software-dl.ti.com/processor-sdk-linux/esd/docs/latest/linux/Overview_Getting_Started_Guide.html#download-and-install-the-sdk):
+
+```
+   export TIDL_PLSDK=<location of PLSDK 6.x.y.z>
+   e.g. export TIDL_PLSDK=/home/<user>/ti-processor-sdk-linux-am57xx-evm-06.x.y.z
+   If TIDL_PLSDK environment variable is not set, default location for PLSDK 6.x.y.z is assumed: $HOME/ti-processor-sdk-linux-am57xx-evm-06.x.y.z/
+
+```
+
+-  Download and extract mobilenet<1|2> model(s) - please check README in mobilenet<1|2> subfolder. 
+    
 - ``python3 NeoTvmCodeGen.py mobileNet1 (or mobilenet2)``
-    First mobilenet1 model need to be downloaded and decompressed (please check README in mobilenet1 subfolder). TF mobilenet1 model is compatible with TIDL, and it will be compiled into set of files in ``./output4/mobilenet1``
+    TF mobilenet1 model is compatible with TIDL, and it will be compiled into set of files in ``./output4/mobilenet1``
 
 - ``python3 NeoTvmCodeGen.py mobileNet1 -a``
     This is an example of forced compilation for ARM-only execution. This is useful for comparing accuracy, execution time.
