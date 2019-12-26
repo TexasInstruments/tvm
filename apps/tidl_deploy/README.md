@@ -85,3 +85,8 @@ Command line usage
 
 ```
 
+An example of custom model conversion:
+
+```
+python3 NeoTvmCodeGen.py ./inceptionv1/inception_v1_fbn.pb --batch_size 4 --input_node data -s 224 224 3
+```

@@ -259,12 +259,14 @@ def tidl_import_tf_model(opt_model_file, raw_image, input_shape,
     console_out = result.stdout.decode('utf-8')
   except:
     print("TIDL import crashed")
-    return 0
+    return 0, null
 
   # Check TIDL import result
   if console_out.find('error')==-1 and console_out.find('ERROR')==-1:
     print("TIDL import succeeded")
-    return 1
+    search_for_last_node_dim = os.popen("lastnode=`ls -1 ./tempDir/trace_dump*.y | cut -d'_' -f3 | sort -n | tail -1`; ls -1 ./tempDir/trace_dump_${lastnode}_*.y | cut -d'_' -f4 | cut -d'.' -f1")
+    last_node_dim = search_for_last_node_dim.read().rstrip()
+    return 1, last_node_dim
   else:
     print("TIDL import failed")
-    return 0
+    return 0, null

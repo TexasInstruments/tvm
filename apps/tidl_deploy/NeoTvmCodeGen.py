@@ -77,6 +77,7 @@ parser.add_argument("--forced_tidl_offload", "-t", help="Force TIDL offload", ac
 parser.add_argument("--batch_size", "-b", help="Batch size", type=int, default=4)
 parser.add_argument("--input_node", "-i", help="Input node name", default=None)
 parser.add_argument("--output_node", "-o", help="Output node name", default=None)
+parser.add_argument("--num_labels", "-l", help="Number of classification classes", type=int, default=0)
 parser.add_argument("--calibration_image", "-c", help="Calibration image", default="airshow.jpg")
 parser.add_argument("--input_shape", "-s", help="Input shape: H W C, e.g. -s 224 224 3", nargs="+", type=int, default=-1)
 
@@ -152,7 +153,7 @@ tidl_import_tool = plsdk_devkit + "tidl_model_import.out"
 arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
 
 if not args.forced_arm_offload:
-  tidl_offload = tidl_check_model(model, image, 'tidl_subgraph', model_input_shape,
+  tidl_offload, last_node_dim = tidl_check_model(model, image, 'tidl_subgraph', model_input_shape,
                                   tidl_import_tool, tidl_calib_tool, artifacts_folder, conv2d_kernel_type)
 else:
   tidl_offload = False
@@ -167,9 +168,21 @@ if args.forced_arm_offload and not args.forced_tidl_offload:
 
 if tidl_offload:
   print("Offload this model to TIDL")
+  output_dim = last_node_dim.split('x')
+  if(int(output_dim[1]) != 1):
+    print(int(output_dim[1]) + 2)
+    print("Base on trace in tempDir folder, last node is not 1D vector! Instead it is:" + last_node_dim)
+    quit()
+
+  if(args.num_labels == 0):
+    num_labels = int(output_dim[0])
+  else:
+    num_labels = args.num_labels
+
+  print("num_labels set to " + str(num_labels))
   #x = relay.var(x, shape=data_shape_input)
   x = relay.var(input_node, shape=data_shape_input)
-  q = relay.TidlInference(x, num_labels=1001)
+  q = relay.TidlInference(x, num_labels)
   func = relay.Function([x], q)
   net = relay.Module.from_expr(func)
   print(net)
