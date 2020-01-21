@@ -97,16 +97,34 @@ if args.modelName == "mobileNet1":
   input_node = "input"
   out_node   = 'MobilenetV1/Predictions/Reshape_1'
   model_input_shape = (224,224,3)
-  conv2d_kernel_type = " 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0"
 elif args.modelName == "mobileNet2":
   model = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
   input_node = "input"
   out_node   = 'MobilenetV2/Predictions/Reshape_1'
   model_input_shape = (224,224,3)
-  conv2d_kernel_type = " 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0"
+elif args.modelName == "mobileNet1tflite":
+  model      = "./mobileNet1tflite/mobilenet_v1_1.0_224.tflite"
+  input_node = "input"
+  out_node   = 'MobilenetV1/Predictions/Reshape_1'
+  model_input_shape = (224,224,3)
+elif args.modelName == "mobileNet2tflite":
+  model      = "./mobileNet2tflite/mobilenet_v2_1.0_224.tflite"
+  input_node = "input"
+  out_node   = 'MobilenetV2/Predictions/Reshape_1'
+  model_input_shape = (224,224,3)
+elif args.modelName == "resNet18v1Onnx":
+  model      = "./resNet18v1Onnx/resnet18v1.onnx"
+  input_node = "data"
+  out_node   = 'resnetv15_dense0_fwd'
+  model_input_shape = (224,224,3)
+elif args.modelName == "squeezeNetOnnx":
+  model      = "./squeezeNetOnnx/squeezenet1.1.onnx"
+  input_node = "data"
+  out_node   = 'squeezenet0_flatten0_reshape0'
+  model_input_shape = (224,224,3)
 else:
   model = args.modelName
-  print("Custom TF Model expected:" + args.modelName)
+  print("Custom Model expected:" + args.modelName)
   input_node = args.input_node
   out_node   = args.output_node
   model_input_shape = tuple(args.input_shape)

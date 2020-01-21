@@ -66,6 +66,10 @@ import tensorflow as tf
 from tensorflow.python.framework import dtypes
 from tensorflow.python.tools import optimize_for_inference_lib
 
+MODEL_TYPE_TF     = 1
+MODEL_TYPE_ONNX   = 2
+MODEL_TYPE_TFLITE = 3
+
 ################################################################################
 # Function tidl_check_model: 
 #   Check if a given model is supported by TIDL. Currently, only Tensorflow
@@ -91,30 +95,49 @@ from tensorflow.python.tools import optimize_for_inference_lib
 def tidl_check_model(model_file, calib_image, subgraph_name, model_input_shape,
                      tidl_import_tool, tidl_calib_tool, artifacts_folder, conv2d_kernel_type):
 
-  print('Check if TIDL supports ' + model_file)
+    print('Check if TIDL supports ' + model_file)
+    raw_image = "./raw_calib_image.bin"
+    
+    # Check model type - can only recognize TF/ONNX/TFlite models
+    if model_file.endswith('.pb'):
+        print ('Importing TF model to TIDL')
 
-  # Check model type - can only recognize TF models
-  if model_file.endswith('.pb'):
-    print ('Importing TF model to TIDL')
-  else:
-    print ('This model is not supported by TIDL')
-    return 0
+        # Optimize TF model - assuming provided model is a frozen model
+        opt_model_file = model_file.replace(".pb", "_opt.pb")
+        result = tidl_optimize_tf_model(model_file, opt_model_file)
 
-  # Optimize TF model - assuming provided model is a frozen model
-  opt_model_file = model_file.replace(".pb", "_opt.pb")
-  result = tidl_optimize_tf_model(model_file, opt_model_file)
-  if(result == 0):
-    return 0
+        if(result == 0):
+            return 0
 
-  # Pre-process calibration image to raw data saved in binary format
-  raw_image = "./raw_calib_image.bin"
-  tidl_tf_image_preprocess(calib_image, raw_image, model_input_shape)
+        model_type = MODEL_TYPE_TF
+        model = opt_model_file
+    
+    elif model_file.endswith('.tflite'):
+        print ('Importing TF lite model to TIDL')
+        model_type = MODEL_TYPE_TFLITE
+        model = model_file
 
-  # Try to import the model: return 1 if import succeeds and 0 if import fails
-  result = tidl_import_tf_model(opt_model_file, raw_image, model_input_shape,
-                                       tidl_import_tool, tidl_calib_tool, subgraph_name, artifacts_folder, conv2d_kernel_type)
+    elif model_file.endswith('.onnx'):
+        print ('Importing ONNX model to TIDL')
+        model_type = MODEL_TYPE_ONNX
+        model = model_file
 
-  return result
+    else:
+        print ('This model is not supported by TIDL')
+        return 0
+
+    # Pre-process calibration image to raw data saved in binary format
+    if model_file.endswith('.pb') or model_file.endswith('.tflite'):
+        tidl_image_preprocess_tf(calib_image, raw_image, model_input_shape)
+    else:
+        tidl_image_preprocess_onnx(calib_image, raw_image, model_input_shape)
+
+    # Try to import the model: return 1 if import succeeds and 0 if import fails
+    result = tidl_import(model_type, model, raw_image, model_input_shape,
+                         tidl_import_tool, tidl_calib_tool, subgraph_name, 
+                         artifacts_folder, conv2d_kernel_type)
+
+    return result
 
 ################################################################################
 # Function tidl_optimize_tf_model:
@@ -160,58 +183,92 @@ def tidl_optimize_tf_model(input_model, output_model):
   return 1
 
 ################################################################################
-# Function tidl_tf_image_preprocess:
-#   Preprocess image for TIDL import - convert coded image to raw data and write
-#   to a file.  
+# Function tidl_image_preprocess_tf:
+#   Preprocess image for TIDL import of TF and TF lite models:
+#      - convert coded image to raw data 
+#      - process raw data according to TF specification:
+#        1.	Crop the image to 0.875 of original size
+#        2.	Resize the cropped image to desired HeightxWidth
+#        3.	Normalize the image to [-128,127] 
+#      - write raw data to a file.  
 ################################################################################
-def tidl_tf_image_preprocess(input_image, output_image, output_dim):
-  output_image_size = output_dim[0:2] # get image height and weight
+def tidl_image_preprocess_tf(input_image, output_image, output_dim):
+    print('Pre-process image for TF or TF lite')
 
-  image_BGR = cv2.imread(filename = input_image)
-  
-  # convert to RGB format - openCV reads image as BGR format
-  image = cv2.cvtColor(image_BGR, cv2.COLOR_BGR2RGB)
+    # read image and convert to RGB format - openCV reads image as BGR format
+    image_BGR = cv2.imread(filename = input_image)  
+    image = cv2.cvtColor(image_BGR, cv2.COLOR_BGR2RGB)
 
-  # crop and resize image 
-  orig_H = image.shape[0]
-  orig_W = image.shape[1]
-  factor = 0.875
-  crop_W = orig_W * factor
-  crop_H = orig_H * factor
-  half_W = orig_W/2
-  half_H = orig_H/2
-  start_x = half_H - crop_H/2
-  start_y = half_W - crop_W/2
-  end_x = start_x + crop_H
-  end_y = start_y + crop_W
-  x0 = round(start_x)
-  x1 = round(end_x)
-  y0 = round(start_y)
-  y1 = round(end_y)
-  cropped_image = image[x0:x1,y0:y1]
-  resized_image = cv2.resize(cropped_image, output_image_size, interpolation = cv2.INTER_AREA)
+    output_image_size = output_dim[0:2] # get image height and weight
 
-  # serialize data to be written to a file
-  r,g,b = cv2.split(resized_image)
-  total_per_plane = output_image_size[0]*output_image_size[1];
-  rr = r.reshape(1,total_per_plane)
-  rg = g.reshape(1,total_per_plane)
-  rb = b.reshape(1,total_per_plane)
-  y = np.hstack((rr,rg,rb))
-  
-  # subtract all pixels by 128 -> convert to int8 
-  mean = np.full(y.shape,128)
-  y = y.astype(np.int32)
-  mean = mean.astype(np.int32)
-  y_sub_mean = cv2.subtract(y,mean)
-  np.clip(y_sub_mean,-128,127)
-  y_sub_mean.astype('int8').tofile(output_image)
+    # crop and resize image 
+    orig_H = image.shape[0]
+    orig_W = image.shape[1]
+    factor = 0.875
+    crop_W = orig_W * factor
+    crop_H = orig_H * factor
+    half_W = orig_W/2
+    half_H = orig_H/2
+    start_x = half_H - crop_H/2
+    start_y = half_W - crop_W/2
+    end_x = start_x + crop_H
+    end_y = start_y + crop_W
+    x0 = round(start_x)
+    x1 = round(end_x)
+    y0 = round(start_y)
+    y1 = round(end_y)
+    cropped_image = image[x0:x1,y0:y1]
+    resized_image = cv2.resize(cropped_image, output_image_size, interpolation = cv2.INTER_AREA)
+
+    # serialize data to be written to a file
+    r,g,b = cv2.split(resized_image)
+    total_per_plane = output_image_size[0]*output_image_size[1];
+    rr = r.reshape(1,total_per_plane)
+    rg = g.reshape(1,total_per_plane)
+    rb = b.reshape(1,total_per_plane)
+    y = np.hstack((rr,rg,rb))
+
+    # subtract all pixels by 128 -> convert to int8 
+    mean = np.full(y.shape,128)
+    y = y.astype(np.int32)
+    mean = mean.astype(np.int32)
+    y_sub_mean = cv2.subtract(y,mean)
+    np.clip(y_sub_mean,-128,127)
+    y_sub_mean.astype('int8').tofile(output_image)
+
+################################################################################
+# Function tidl_image_preprocess_onnx:
+#   Preprocess image for TIDL import of ONNX modles:
+#      - convert coded image to raw data with range [0, 255]
+#      - write raw data to a file.  
+#   TIDL will preprocess data according to ONNX specification. 
+################################################################################
+def tidl_image_preprocess_onnx(input_image, output_image, output_dim):
+    print('Pre-process image for ONNX')
+
+    # read image and convert to RGB format - openCV reads image as BGR format
+    image_BGR = cv2.imread(filename = input_image)   
+    image = cv2.cvtColor(image_BGR, cv2.COLOR_BGR2RGB)
+
+    output_image_size = output_dim[0:2] # get image height and weight
+    resized_image = cv2.resize(image, output_image_size, interpolation = cv2.INTER_AREA)
+
+    r,g,b = cv2.split(resized_image)
+    total_per_plane = output_image_size[0]*output_image_size[1];
+    rr = r.reshape(1,total_per_plane)
+    rg = g.reshape(1,total_per_plane)
+    rb = b.reshape(1,total_per_plane)
+
+    y = np.hstack((rr, rg, rb))
+    y.astype('uint8').tofile(output_image);
+
 
 ################################################################################
 # Function tidl_import_tf_model:
 #   Run TIDL import of the optimized TF model
 # Input:
-#       opt_model_file:    file name of the optimized TF model
+#       model_type:        type of model (TF: 1, ONNX: 2, TF lite: 3)
+#       model:             file name of the model
 #       raw_image:         file name of the raw image for TIDL calibration
 #       input_shape:       shape of the input tensor of the model 
 #       tidl_import_tool:  file name of TIDL import tool executable
@@ -224,49 +281,55 @@ def tidl_tf_image_preprocess(input_image, output_image, output_dim):
 #       1 if the model can run on TIDL 
 #       0 if the model cannot run on TIDL
 ################################################################################
-def tidl_import_tf_model(opt_model_file, raw_image, input_shape,
-                         tidl_import_tool, tidl_calib_tool, subgraph_name, artifacts_folder, conv2d_kernel_type=None):
+def tidl_import(model_type, model, raw_image, input_shape, tidl_import_tool, 
+                tidl_calib_tool, subgraph_name, artifacts_folder, conv2d_kernel_type=None):
 
-  # TIDL net and params binary files
-  tidl_net_bin_file    = "./" + artifacts_folder + "/" + subgraph_name + '_net.bin'
-  tidl_params_bin_file = "./" + artifacts_folder + "/" + subgraph_name + '_params.bin'
+    # TIDL net and params binary files
+    tidl_net_bin_file    = "./" + artifacts_folder + "/" + subgraph_name + '_net.bin'
+    tidl_params_bin_file = "./" + artifacts_folder + "/" + subgraph_name + '_params.bin'
 
-  # Generate import config file
-  import_config_file = './tidl_import_config.txt'
-  with open(import_config_file,'w') as config_file:
-      config_file.write("randParams         = 0\n") 
-      config_file.write("modelType          = 1\n")
-      config_file.write("quantizationStyle  = 1\n") 
-      config_file.write("quantRoundAdd      = 50\n")
-      config_file.write("numParamBits       = 12\n")
-      config_file.write("inputNetFile       = {}\n".format(opt_model_file))
-      config_file.write("inputParamsFile    = NA\n")
-      config_file.write("outputNetFile      = {}\n".format(tidl_net_bin_file))
-      config_file.write("outputParamsFile   = {}\n".format(tidl_params_bin_file))
-      config_file.write("inElementType      = 1\n")
-      config_file.write("rawSampleInData    = 1\n")
-      config_file.write("sampleInData       = {}\n".format(raw_image))
-      config_file.write("tidlStatsTool      = {}\n".format(tidl_calib_tool))
-      config_file.write("inWidth            = {}\n".format(input_shape[0]))
-      config_file.write("inHeight           = {}\n".format(input_shape[1]))
-      config_file.write("inNumChannels      = {}\n".format(input_shape[2]))
-      if conv2d_kernel_type:
-         config_file.write("conv2dKernelType   = {}\n".format(conv2d_kernel_type))
+    # Generate import config file
+    import_config_file = './tidl_import_config.txt'
+    with open(import_config_file,'w') as config_file:
+        config_file.write("randParams         = 0\n") 
+        config_file.write("modelType          = {}\n".format(model_type))
+        config_file.write("quantizationStyle  = 1\n") 
+        config_file.write("quantRoundAdd      = 50\n")
+        config_file.write("numParamBits       = 12\n")
+        config_file.write("inputNetFile       = {}\n".format(model))
+        config_file.write("inputParamsFile    = NA\n")
+        config_file.write("outputNetFile      = {}\n".format(tidl_net_bin_file))
+        config_file.write("outputParamsFile   = {}\n".format(tidl_params_bin_file))
+        config_file.write("inElementType      = 1\n")
+        config_file.write("sampleInData       = {}\n".format(raw_image))
+        config_file.write("tidlStatsTool      = {}\n".format(tidl_calib_tool))
+        config_file.write("inWidth            = {}\n".format(input_shape[0]))
+        config_file.write("inHeight           = {}\n".format(input_shape[1]))
+        config_file.write("inNumChannels      = {}\n".format(input_shape[2]))
+        if conv2d_kernel_type:
+            config_file.write("conv2dKernelType   = {}\n".format(conv2d_kernel_type))
+        if model_type == MODEL_TYPE_ONNX:
+            config_file.write("rawSampleInData = 0\n")
+            config_file.write("preProcType     = 256\n")
+            config_file.write("inMean  = 123.675 116.28 103.53\n")
+            config_file.write("inScale = 0.017125 0.017507 0.017429\n")
+        else:
+            config_file.write("rawSampleInData   = 1\n")
 
-  # Run TIDL import tool
-  try: 
-    result = subprocess.run([tidl_import_tool, import_config_file], stdout=subprocess.PIPE)
-    console_out = result.stdout.decode('utf-8')
-  except:
-    print("TIDL import crashed")
-    return 0, null
-
-  # Check TIDL import result
-  if console_out.find('error')==-1 and console_out.find('ERROR')==-1:
-    print("TIDL import succeeded")
-    search_for_last_node_dim = os.popen("lastnode=`ls -1 ./tempDir/trace_dump*.y | cut -d'_' -f3 | sort -n | tail -1`; ls -1 ./tempDir/trace_dump_${lastnode}_*.y | cut -d'_' -f4 | cut -d'.' -f1")
-    last_node_dim = search_for_last_node_dim.read().rstrip()
-    return 1, last_node_dim
-  else:
-    print("TIDL import failed")
-    return 0, null
+    # Run TIDL import tool
+    try: 
+        result = subprocess.run([tidl_import_tool, import_config_file], stdout=subprocess.PIPE)
+        console_out = result.stdout.decode('utf-8')
+    except:
+        print("TIDL import crashed")
+        return 0, null
+  
+    # Check TIDL import result
+    if console_out.find('error')==-1 and console_out.find('ERROR')==-1:
+        print("TIDL import succeeded")
+        search_for_last_node_dim = os.popen("lastnode=`ls -1 ./tempDir/trace_dump*.y | cut -d'_' -f3 | sort -n | tail -1`; ls -1 ./tempDir/trace_dump_${lastnode}_*.y | cut -d'_' -f4 | cut -d'.' -f1")
+        last_node_dim = search_for_last_node_dim.read().rstrip()
+        return 1, last_node_dim
+    else:
+        print("TIDL import failed")
+        return 0, null
