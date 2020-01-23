@@ -69,6 +69,7 @@ from tvm.contrib import graph_runtime as runtime
 from tvm import relay
 from tidl_import import tidl_check_model
 from tvm.contrib import cc
+from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("modelName", help="Model name")
@@ -161,7 +162,7 @@ print(data_shape_input)
 target = "llvm -target=armv7l-linux-gnueabihf"
 
 if os.getenv("TIDL_PLSDK") is None:
-  plsdk_devkit = os.getenv('HOME') + "/ti-processor-sdk-linux-am57xx-evm-06.01.00.08" + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+  plsdk_devkit = os.getenv('HOME') + "/ti-processor-sdk-linux-am57xx-evm-06.02.00.75" + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
 else: 
   plsdk_devkit = os.getenv('TIDL_PLSDK') + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
 print("PLSDK path set to:" + plsdk_devkit)
@@ -169,6 +170,11 @@ print("PLSDK path set to:" + plsdk_devkit)
 tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
 tidl_import_tool = plsdk_devkit + "tidl_model_import.out"
 arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
+
+model_path = Path(model)
+if not model_path.is_file():
+  print('Error: model file ' + model + ' does NOT exist!')
+  quit()
 
 if not args.forced_arm_offload:
   tidl_offload, last_node_dim = tidl_check_model(model, image, 'tidl_subgraph', model_input_shape,

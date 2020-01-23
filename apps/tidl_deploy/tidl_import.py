@@ -107,7 +107,7 @@ def tidl_check_model(model_file, calib_image, subgraph_name, model_input_shape,
         result = tidl_optimize_tf_model(model_file, opt_model_file)
 
         if(result == 0):
-            return 0
+            return 0, None
 
         model_type = MODEL_TYPE_TF
         model = opt_model_file
@@ -124,7 +124,7 @@ def tidl_check_model(model_file, calib_image, subgraph_name, model_input_shape,
 
     else:
         print ('This model is not supported by TIDL')
-        return 0
+        return 0, None
 
     # Pre-process calibration image to raw data saved in binary format
     if model_file.endswith('.pb') or model_file.endswith('.tflite'):
@@ -133,11 +133,9 @@ def tidl_check_model(model_file, calib_image, subgraph_name, model_input_shape,
         tidl_image_preprocess_onnx(calib_image, raw_image, model_input_shape)
 
     # Try to import the model: return 1 if import succeeds and 0 if import fails
-    result = tidl_import(model_type, model, raw_image, model_input_shape,
-                         tidl_import_tool, tidl_calib_tool, subgraph_name, 
-                         artifacts_folder, conv2d_kernel_type)
-
-    return result
+    return tidl_import(model_type, model, raw_image, model_input_shape,
+                       tidl_import_tool, tidl_calib_tool, subgraph_name, 
+                       artifacts_folder, conv2d_kernel_type)
 
 ################################################################################
 # Function tidl_optimize_tf_model:
@@ -322,7 +320,7 @@ def tidl_import(model_type, model, raw_image, input_shape, tidl_import_tool,
         console_out = result.stdout.decode('utf-8')
     except:
         print("TIDL import crashed")
-        return 0, null
+        return 0, None
   
     # Check TIDL import result
     if console_out.find('error')==-1 and console_out.find('ERROR')==-1:
@@ -332,4 +330,4 @@ def tidl_import(model_type, model, raw_image, input_shape, tidl_import_tool,
         return 1, last_node_dim
     else:
         print("TIDL import failed")
-        return 0, null
+        return 0, None
