@@ -42,6 +42,8 @@ from tvm.relay.expr_functor import ExprVisitor
 
 from tvm.relay.op.annotation import tidlAnnotation
 
+import tidl_relay_import as tidl
+
 ######################################################################
 # Define Neural Network in Relay
 # ------------------------------
@@ -51,6 +53,9 @@ input_name = 'data'
 
 shape_dict = {input_name: image_shape }
 mod, params = relay.frontend.from_onnx(onnx_model, shape_dict)
+
+with open("mod_params_resnet18v2.txt","w") as params_file:
+    print(params, file=params_file)
 
 # set show_meta_data=True if you want to show meta data
 print("-------------------------------")
@@ -65,6 +70,10 @@ for node in op_white_list:
 
 if graph_supported_by_tidl:
     print("resnet18v2.onnx can be offloaded to TIDL.")
+    if tidl.relay_ir_import(mod, params) == False:
+        print("Importing this model to TIDL failed!")
+    else:
+        print("Importing this model to TIDL succeeded!")
 else:
     print("resnet18v2.onnx can not be offloaded to TIDL.")
 

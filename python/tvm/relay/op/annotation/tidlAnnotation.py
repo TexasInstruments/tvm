@@ -48,20 +48,26 @@ def traverse_expr(node, node_dict):
     node_dict[node] = len(node_dict)
 
 
-def findInpCallNode(node_dict, callNode):
-    """ Find the input nodes of a given relay.expr.Call node.
+def find_in_call_nodes(node_dict, this_node):
+    r""" Find the input nodes of a given relay.expr.Call node.
         If the input node is a relay.expr.TupleGetItem node, then go up one more level.
 
-    Function parameters:
-       node_dict: dictionary of all nodes of the graph 
-       callNode:  a relay.expr.Call node 
-    Returns:
-       inpCallNodeDict: dictionary of all input nodes of the given node
+    Parameters
+    ----------
+       node_dict : dict
+           Dictionary of all nodes of the graph 
+       this_node :  relay.expr.Call
+           Node (operator) whose input nodes are to be found
+    Returns
+    -------
+       inpCallNodeDict : dict
+           Dictionary of all input nodes of the given node
     """
+
     inpCallNodeDict = {}
     node_dict_key_list = list(node_dict.keys())
     node_dict_val_list = list(node_dict.values())
-    args = [node_dict[arg] for arg in callNode.args]
+    args = [node_dict[arg] for arg in this_node.args]
     for idx in args:
         inpCallNode = node_dict_key_list[node_dict_val_list.index(idx)]
         if isinstance(inpCallNode, relay.expr.TupleGetItem):
@@ -72,41 +78,61 @@ def findInpCallNode(node_dict, callNode):
              
     return inpCallNodeDict
 
-def findOutCallNode(node_dict, callNode):
-    """ Find the output nodes of a given relay.expr.Call node.
+def find_out_call_nodes(node_dict, this_node):
+    r""" Find the output nodes of a given relay.expr.Call node.
 
-    Function parameters:
-       node_dict: dictionary of all nodes of the graph 
-       callNode:  a relay.expr.Call node 
-    Returns:
-       outCallNodeDict: dictionary of all output nodes of the given node
+    Parameters
+    ----------
+       node_dict : dict
+           Dictionary of all nodes of the graph 
+       this_node :  relay.expr.Call
+           Node (operator) whose output nodes are to be found
+
+    Returns
+    -------
+       outCallNodeDict : dict
+           Dictionary of all output nodes of the given node
     """
+
     outCallNodeDict = {}
-    thisNodeIdx = node_dict[callNode]
+    node_dict_key_list = list(node_dict.keys())
+    node_dict_val_list = list(node_dict.values())
+    thisNodeIdx = node_dict[this_node]
     for node, nodeIdx in node_dict.items():
         if isinstance(node, relay.expr.Call):
             args = [node_dict[arg] for arg in node.args]
             if thisNodeIdx in args:
                 outCallNodeDict[len(outCallNodeDict)] = node
 
+        if isinstance(node, relay.expr.TupleGetItem):
+            next_node = node_dict_key_list[node_dict_val_list.index(nodeIdx+1)]
+            args = [node_dict[arg] for arg in next_node.args]
+            if thisNodeIdx+1 in args:
+                outCallNodeDict[len(outCallNodeDict)] = next_node
+
     return outCallNodeDict
 
 
 def tidl_node_validation(node_dict, call_node):
-    """ Decide if a relay.expr.Call node can be supported by TIDL or not.
+    r""" Decide if a relay.expr.Call node can be supported by TIDL or not.
+        Relay Operator documentation: https://docs.tvm.ai/langref/relay_op.html
 
-    Function parameters:
-       node_dict: dictionary of all nodes of the graph 
-       callNode:  a relay.expr.Call node 
-    Returns:
+    Parameters
+    ----------
+       node_dict : dictionary
+           Dictionary of all nodes of the graph 
+       call_node :  relay.expr.Call
+           Node (operator) to be checked if it can be supported by TIDL
+    Returns
+    -------
        True  - if this node (operator) can be supported by TIDL
        False - if this node (operator) can not be supported by TIDL
     """
+
     #print("===== OP: " + call_node.op.name + " =====")
     data = call_node.args[0]  # call_node is tvm.relay.expr.Call
 
     # Check the op to decide if it is supported by TIDL
-    # Relay Operator documentation: https://docs.tvm.ai/langref/relay_op.html
     if call_node.op.name == "add":
         return True
 
@@ -136,10 +162,11 @@ def tidl_node_validation(node_dict, call_node):
     elif call_node.op.name == "nn.bias_add":
         return True
 
-    elif call_node.op.name == "nn.clip":
+    elif call_node.op.name == "clip":
         a_min = call_node.attrs.a_min
         a_max = call_node.attrs.a_max
         supported = (a_min == 0 and a_max == 6)
+        #print('nn.clip.a_min is ' + str(a_min) + ', ' + 'nn.clip.a_max is ' + str(a_max))
         return (supported)
 
     elif call_node.op.name == "nn.concatenate":
@@ -210,7 +237,7 @@ def tidl_node_validation(node_dict, call_node):
 
     elif call_node.op.name == "vision.multibox_prior":
         supported = 0
-        outCallNodes = findOutCallNode(node_dict, call_node)
+        outCallNodes = find_out_call_nodes(node_dict, call_node)
         for idx in outCallNodes:
             if outCallNodes[idx].op.name == "nn.concatenate" or \
                outCallNodes[idx].op.name == "vision.nms":
@@ -224,6 +251,9 @@ def tidl_node_validation(node_dict, call_node):
     elif call_node.op.name == "nn.nms":
         return True
 
+    elif call_node.op.name == "nn.pad":
+        return True
+
     elif call_node.op.name == "nn.prelu":
         return True
 
@@ -234,7 +264,7 @@ def tidl_node_validation(node_dict, call_node):
         supported = False
         reshape_after_transpose = False
         transpose_after_reshape = False
-        inpCallNodes = findInpCallNode(node_dict, call_node)
+        inpCallNodes = find_in_call_nodes(node_dict, call_node)
         for idx in inpCallNodes:
             if inpCallNodes[idx].op.name == "nn.avg_pool2d" or \
                inpCallNodes[idx].op.name == "nn.global_avg_pool2d" or \
@@ -244,7 +274,7 @@ def tidl_node_validation(node_dict, call_node):
             elif inpCallNodes[idx].op.name == "transpose":
                 reshape_after_transpose = True
 
-        outCallNodes = findOutCallNode(node_dict, call_node)
+        outCallNodes = find_out_call_nodes(node_dict, call_node)
         for idx in outCallNodes:
             if outCallNodes[idx].op.name == "nn.softmax":
                 supported = True
@@ -267,7 +297,7 @@ def tidl_node_validation(node_dict, call_node):
 
     elif call_node.op.name == "squeeze":
         supported = False
-        outCallNodes = findOutCallNode(node_dict, call_node)
+        outCallNodes = find_out_call_nodes(node_dict, call_node)
         for idx in outCallNodes:
             if outCallNodes[idx].op.name == "reshape":
                 supported = True
@@ -278,14 +308,14 @@ def tidl_node_validation(node_dict, call_node):
         supported = False
         reshape_after_transpose = False
         transpose_after_reshape = False
-        outCallNodes = findOutCallNode(node_dict, call_node)
+        outCallNodes = find_out_call_nodes(node_dict, call_node)
         for idx in outCallNodes:
             if outCallNodes[idx].op.name == "nn.batch_flatten":
                 supported = True
             elif outCallNodes[idx].op.name == "reshape":
                 reshape_after_transpose = True
 
-        inpCallNodes = findInpCallNode(node_dict, call_node)
+        inpCallNodes = find_in_call_nodes(node_dict, call_node)
         for idx in inpCallNodes:
             if inpCallNodes[idx].op.name == "reshape":
                 transpose_after_reshape = True
@@ -297,22 +327,29 @@ def tidl_node_validation(node_dict, call_node):
         return False
 
 def tidl_annotation(mod):
-    """ Annotate all nodes in a graph: supported by TIDL or not
+    r""" Annotate each operator (node) in a given graph as supported by TIDL or not
 
-    Function parameters:
-       mod: graph defined by tvm.relay.Module 
+    Parameters
+    ----------
+       mod : tvm.relay.Module 
+           Relay IR graph
 
-    Returns:
-       op_white_list: dictionary with relay.expr.Call nodes as keys and with following values:
-           True  - if the node (operator) can be supported by TIDL
-           False - if the node (operator) can not be supported by TIDL
+    Returns
+    -------
+       op_annotations : dict 
+           Dictionary of relay.expr.Call nodes with one of the following values:
+           - True : if the node (operator) can be supported by TIDL
+           - False: if the node (operator) can not be supported by TIDL
     """
+
+    # Traverse the graph and generate a dictionary of all nodes
     node_dict = {}
     relay.analysis.post_order_visit(mod['main'], lambda node: traverse_expr(node, node_dict)) 
 
-    op_white_list = {}
+    op_annotations = {}
     for node in node_dict:
+        # Only look at relay.expr.Call node
         if isinstance(node, relay.expr.Call):
-            op_white_list[node] = tidl_node_validation(node_dict, node)
+            op_annotations[node] = tidl_node_validation(node_dict, node)
 
-    return op_white_list
+    return op_annotations
