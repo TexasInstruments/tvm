@@ -252,7 +252,7 @@ def tidl_node_validation(node_dict, call_node):
         return True
 
     elif call_node.op.name == "nn.pad":
-        return True
+        return (call_node.attrs.pad_value == 0.0 and call_node.attrs.pad_mode == 'constant')
 
     elif call_node.op.name == "nn.prelu":
         return True

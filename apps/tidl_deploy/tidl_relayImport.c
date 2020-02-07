@@ -35,10 +35,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include "tidl_import.h"
 #include "itidl_ti.h"
 #include "ti_dl.h"
+#include "tidl_import_utils.h"
 
 #define TIDL_IMPORT_ENABLE_DBG_PRINT
 #ifdef TIDL_IMPORT_ENABLE_DBG_PRINT
@@ -57,39 +57,6 @@ typedef struct tidlImportState
   int numErrs;
   int numUnsupportedLayers;
 } tidlImportState_t;
-
-sTIDL_OrgNetwork_t      orgTIDLNetStructure;
-sTIDL_OrgNetwork_t      tempTIDLNetStructure;
-sTIDL_Network_t         tIDLNetStructure;
-tidlImportState_t       tidlImpState;
-
-static int totalMemAllocation = 0;
-void * my_malloc(int size)
-{
-  void *ptr;
-  totalMemAllocation += size;
-  ptr = malloc(size);
-  assert(ptr != NULL);
-
-  return ptr;
-}
-
-int tidlImpConvertRelayIr(void *relayIrAst, tidlImpConfig *config,
-                          char *tidlNetFile, char *tidlParamsFile)
-{
-  printf("Hello TIDL import library Relay IR conversion!\n");
-
-  return 0;
-}
-
-int tidlImpCalibRelayIr(void *relayIrInTensor, char *tidlCalibTool, 
-                        tidlCalibConfig *config,
-                        char *tidlNetFile, char *tidlParamsFile)
-{
-  printf("Hello TIDL import library Relay IR calibration!\n");
-
-  return 0;
-}
 
 typedef struct Conv2dParams
 {
@@ -118,12 +85,45 @@ typedef struct InOutNodes
   void *out_nodes;
 } InOutNodes;
 
-void tidlImportInit()
+sTIDL_OrgNetwork_t      orgTIDLNetStructure;
+sTIDL_OrgNetwork_t      tempTIDLNetStructure;
+sTIDL_Network_t         tIDLNetStructure;
+tidlImportState_t       tidlImpState;
+//tidlImpConfig           tidlConfigParams;
+tidlImpConfig           gParams;    // to do: cleanup here
+
+int32_t gloab_data_format = TIDL_DATA_FORMAT_UNDEFINED;
+
+#define GET_DATA_INDEX (tidlImpState.dataIndex++)
+#define GET_LAYER_PTR  (&orgTIDLNetStructure.TIDLPCLayers[tidlImpState.layerIndex])
+
+sTIDL_tfOutRehapeMap_t sTIDL_relayOutRehapeTable[] =
+{
+};
+
+// Python to C has to have 2 arguments - to figure out why
+void tidlImportInit(tidlImpConfig * cfg, void * ptr_unused)
 {
   int i;
 
   printf("Initializing TIDL import.\n");
 
+  gParams.numParamBits  = cfg->numParamBits;
+  gParams.quantRoundAdd = cfg->quantRoundAdd;
+  gParams.inQuantFactor = cfg->inQuantFactor;
+  gParams.inElementType = cfg->inElementType;
+  gParams.inNumChannels = cfg->inNumChannels;
+  gParams.inHeight      = cfg->inHeight;
+  gParams.inWidth       = cfg->inWidth;
+
+  printf("numParamBits  = %d\n", gParams.numParamBits );
+  printf("quantRoundAdd = %d\n", gParams.quantRoundAdd);
+  printf("inQuantFactor = %d\n", gParams.inQuantFactor);
+  printf("inElementType = %d\n", gParams.inElementType);
+  printf("inNumChannels = %d\n", gParams.inNumChannels);
+  printf("inHeight      = %d\n", gParams.inHeight     );
+  printf("inWidth       = %d\n", gParams.inWidth      );
+  
   tidlImpState.gloab_data_format = 1; //TIDL_DATA_FORMAT_NCHW;
   tidlImpState.layerIndex = 0;
   tidlImpState.dataIndex  = 0;
@@ -134,26 +134,28 @@ void tidlImportInit()
   {
     /* Set default values of numInBufs and numOutBufs which may be changed by
        tidl_tfMapFunc below for certain layers. */
+    orgTIDLNetStructure.TIDLPCLayers[i].layerType =  TIDL_UnSuportedLayer;
     orgTIDLNetStructure.TIDLPCLayers[i].numInBufs =  1;
     orgTIDLNetStructure.TIDLPCLayers[i].numOutBufs = 1;
   }
 }
 
 
-void tidlImportConv2d(Conv2dParams * conv2dInfo, tidlImpConfig *config)
+void tidlImportConv2d(Conv2dParams * conv2dInfo, void * ptr_unused)
 {
-  int i, num_weights, size;
+  int i, num_weights;
+  size_t size;
   float * weights;
   sTIDL_LayerPC_t *layer;
   sTIDL_ConvParams_t *convParams;
 
-  TIDL_IMPORT_DBG_PRINT("Importing conv2d layer... \n");
+  TIDL_IMPORT_DBG_PRINT("----- Importing conv2d layer ----- \n");
   printf("Layer index is: %d\n", tidlImpState.layerIndex);
-  layer = &orgTIDLNetStructure.TIDLPCLayers[tidlImpState.layerIndex];
+  layer = GET_LAYER_PTR;
   layer->numOutBufs = 1;
 
   layer->layerType = TIDL_ConvolutionLayer;
-  layer->outData[0].dataId = tidlImpState.dataIndex++;
+  layer->outData[0].dataId = GET_DATA_INDEX;
   layer->outData[0].elementType = TIDL_SignedChar;
 
   convParams = &layer->layerParams.convParams;
@@ -178,11 +180,14 @@ void tidlImportConv2d(Conv2dParams * conv2dInfo, tidlImpConfig *config)
   printf("Number of weights: %d\n",num_weights);
   printf("Weights type: %s\n", conv2dInfo->weights_type);
   if(strcmp(conv2dInfo->weights_type, "float32") == 0) {
-    size = sizeof(float)*num_weights;
-    printf("float32, size is %d\n", size);
+    size = sizeof(float)*(size_t)num_weights;
+    printf("float32, size is %ld\n", size);
   }
-  else if(strcmp(conv2dInfo->weights_type, "int32") == 0) {
-    size = sizeof(int32_t)*num_weights;
+  //else if(strcmp(conv2dInfo->weights_type, "int8") == 0) {
+  //  size = sizeof(int8_t)*num_weights;
+  //}
+  else {
+    // No action is needed as Python wrapper already verifies supported data types
   }
 
   layer->weights.ptr = my_malloc(size);
@@ -204,37 +209,199 @@ void tidlImportConv2d(Conv2dParams * conv2dInfo, tidlImpConfig *config)
 //    printf("%f\t", weights[i]);
 //  }
 
-  //tidlImpState.dataIndex++;
-  //tidlImpState.layerIndex++;
   //printf("Number of layers imported to TIDL: %d\n", tidlImpState.layerIndex);
 }
 
+/*==============================================================================
+ * Link this node with other nodes that have been imported so far
+ *
+ * Equivalent to following 4 functions in TF import:
+ *   - tidl_tfLayerFillTensorNames()
+ *   - tidl_tfLayerUpdateConsumerCount()
+ *   - tidl_linkInputTensors()
+ *   - tidl_linkOutputTensors()
+==============================================================================*/
 // It seems Python calling C has to have at least 2 arguments -- to find out
-void tidlImportSetInOutNodes(InOutNodes *inOutNodes, tidlImpConfig *config)
+void tidlImportLinkNodes(InOutNodes *inOutNodes, tidlImpConfig *config)
 {
+  sTIDL_LayerPC_t *layer;
   int i;
-  int *in_nodes;
+  int32_t *in_nodes;
   char str[10];
-  printf("Setup input and output nodes for node %d.\n", inOutNodes->this_node);
 
-  printf("Number of input nodes: %d\n", inOutNodes->num_in_nodes);
-  printf("Number of output nodes: %d\n", inOutNodes->num_out_nodes);
-  in_nodes = (int *)inOutNodes->in_nodes;
-  if(inOutNodes->num_in_nodes == 0) {
-    printf("Number of input nodes is 0. This is the first node.\n");
-  }
-  else {
+  printf("----- Fill tensor names for layer %d -----\n", inOutNodes->this_node);
+  //printf("Number of input nodes: %d\n", inOutNodes->num_in_nodes);
+  //printf("Number of output nodes: %d\n", inOutNodes->num_out_nodes);
+
+  layer = GET_LAYER_PTR;
+  
+  // change node index to layer name
+  sprintf(str, "%d", inOutNodes->this_node);
+  strcpy((char*)layer->name, str);
+
+  // fill in input node names
+  if(inOutNodes->num_in_nodes > 0) {
+    in_nodes = (int32_t *)inOutNodes->in_nodes;
     for(i=0; i<inOutNodes->num_in_nodes; i++)
     {
+      // input data name is the name of the input node 
       sprintf(str, "%d", in_nodes[i]);
-      printf("Input node %d: node %s\n", i, str);
+      strcpy((char*)layer->inDataNames[i], str);
+      printf("Layer %d's input node %d name: %s\n", inOutNodes->this_node, i, str);
     }
   }
+  else {
+    printf("Number of input nodes is 0. This is the first node.\n");
+    if(tidlImpState.layerIndex > 0) {
+      printf("Error! This should be the first node.\n");
+      exit(0);
+    }
+    layer->layerType = TIDL_DataLayer;
+    layer->numInBufs = -1;
+    layer->outData[0].dataId = GET_DATA_INDEX;
+    
+    // a TIDL input data layer needs to be added as input to this operator
+    // - maybe during initialization time. 
+    // - TF models have an operator "Placeholder" which is converted to input data layer,
+    //   but Relay IR doesn't have such an operator.     
+  }
 
+  // fill in output node names
+  if(inOutNodes->num_out_nodes > 0) {
+    // output data name is the name of this node 
+    sprintf(str, "%d", inOutNodes->this_node);
+    strcpy((char*)layer->outDataNames[0], str);
+    printf("Layer %d's output node 0 name: %s\n", inOutNodes->this_node, str);
+    layer->outConsumerLinked[0] = 0; // initialized to 0
+    for(i=1; i<layer->numOutBufs; i++)
+    {
+      char numberStr[10];
+      strcpy((char*)layer->outDataNames[i], str);
+      strcat((char*)layer->outDataNames[i], "_");
+      sprintf(numberStr, "%d", i);
+      strcat((char*)layer->outDataNames[i], numberStr);
+      printf("Layer %d's output node %d name: %s\n", inOutNodes->this_node, i, layer->outDataNames[i]);
+      layer->outConsumerLinked[i] = 0; // initialized to 0
+    }
+    layer->outConsumerCnt[0] = inOutNodes->num_out_nodes;
+  }
+  else {
+    printf("Number of output nodes is 0. This is the last node.\n");
+    layer->outConsumerCnt[0] = 0;   
+    // a TIDL output data layer needs to be added as output to this operator
+    // - probably should be done similarly to what TF import does, at the end of import
+  }
 
+  tidl_linkInputTensors(&orgTIDLNetStructure,  tidlImpState.layerIndex);
+  tidl_linkOutputTensors(&orgTIDLNetStructure, tidlImpState.layerIndex);
+
+  printf("Layer %d's numInBufs: %d\n", tidlImpState.layerIndex, orgTIDLNetStructure.TIDLPCLayers[tidlImpState.layerIndex].numInBufs);
   tidlImpState.layerIndex++;
   printf("Number of layers imported to TIDL: %d\n", tidlImpState.layerIndex);
 }
+
+int tidlImportOptimize()
+{
+  int32_t importStatus, i;
+
+  printf("----- Optimize TIDL -----\n");
+  printf("number of layers: %d\n", tidlImpState.layerIndex);
+  //for(i=0; i<tidlImpState.layerIndex; i++)
+  //{
+  //  printf("Layer %d, numInBufs = %d\n", i, orgTIDLNetStructure.TIDLPCLayers[i].numInBufs);
+  //}
+
+  importStatus = tidl_sortLayersInProcOrder(&orgTIDLNetStructure, &tempTIDLNetStructure, tidlImpState.layerIndex);
+  tidlImpState.layerIndex = orgTIDLNetStructure.numLayers;
+  if(importStatus != TIDL_IMPORT_NO_ERR)
+  {
+    printf("\nImport error: This model's topology is not supported.\n");
+    //numErrs++;
+    return -1;
+  }
+
+  tidl_fillInDataLayerShape(&orgTIDLNetStructure, &gParams, tidlImpState.layerIndex);
+  tidl_sortDataIds(&orgTIDLNetStructure, tidlImpState.layerIndex);
+  
+  printf("Updating out data shapes.\n");
+  //tidl_updateOutDataShape(&orgTIDLNetStructure, 0, tidlImpState.layerIndex, (sTIDL_tfOutRehapeMap_t *)&sTIDL_relayOutRehapeTable);
+
+}
+
+void tidlImportPad(int size, void *padTensor)
+{
+  sTIDL_LayerPC_t *layer;
+
+/*   int i;
+  int32_t *pad_tensor = (int32_t *)padTensor;
+  printf("Padding tensor: [");
+  for(i=0; i<size; i++)
+  {
+    printf("%d ", pad_tensor[i]);
+  }
+  printf("]\n");
+ */
+  TIDL_IMPORT_DBG_PRINT("----- Importing pad layer ----- \n");
+
+  layer = GET_LAYER_PTR;
+  layer->layerType = TIDL_PadLayer;
+  layer->outData[0].dataId = GET_DATA_INDEX;
+
+  memcpy((void*)layer->layerPCParams.padParams.padTensor, padTensor, size*sizeof(int));
+
+/*   printf("Padding tensor after import: [");
+  for(i=0; i<size; i++)
+  {
+    printf("%d ", layer->layerPCParams.padParams.padTensor[i]);
+  }
+  printf("]\n");
+ */
+  //return TIDL_IMPORT_NO_ERR;
+}
+
+void tidlImportAdd()
+{
+  sTIDL_LayerPC_t *layer;
+
+  TIDL_IMPORT_DBG_PRINT("----- Importing add layer ----- \n");
+
+  layer = GET_LAYER_PTR;
+  layer->layerType = TIDL_EltWiseLayer;
+  layer->layerParams.eltWiseParams.eltWiseType = TIDL_EltWiseSum;
+  layer->layerParams.eltWiseParams.numInData = 2;
+  layer->outData[0].dataId = GET_DATA_INDEX;
+  layer->numInBufs = 2;
+}
+
+void tidlImportBiasAdd(int numParams, char *dtype, void *biasParams)
+{
+  int i;
+  size_t size;
+  sTIDL_LayerPC_t *layer;
+
+  TIDL_IMPORT_DBG_PRINT("----- Importing biasAdd layer ----- \n");
+  layer = GET_LAYER_PTR;
+
+  if(strcmp(dtype, "float32") == 0) {
+    //printf("BiasAdd params are float32, number of params is %d\n", numParams);
+    //for(i=0;i<numParams;i++)
+    //{
+    //  float * params = (float *)biasParams;
+    //  printf("%f, ", params[i]);
+    //}
+    //printf("\n");
+    size = (size_t)numParams*sizeof(float);
+    layer->bias.ptr = (float *)my_malloc(size);
+    memcpy(layer->bias.ptr, biasParams, size);
+  }
+  else {
+    // No action is needed as Python wrapper already verifies supported data types
+  }
+
+  layer->layerType = TIDL_BiasLayer;
+  layer->outData[0].dataId = GET_DATA_INDEX;
+}
+
 
 ////////////////////// testing and prototyping code ////////////////////////////
 Conv2dParams test_conv2dParams;

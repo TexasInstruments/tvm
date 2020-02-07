@@ -46,8 +46,10 @@ from tvm.relay.op.annotation import tidlAnnotation
 
 import tidl_relay_import as tidl
 
-model_path = './mobileNet1/mobilenet_v1_1.0_224_frozen_opt.pb'
-out_node   = 'MobilenetV1/Predictions/Reshape'
+#model_path = './mobileNet1/mobilenet_v1_1.0_224_frozen_opt.pb'
+#out_node   = 'MobilenetV1/Predictions/Reshape'
+model_path = './mobileNet2/mobilenet_v2_1.0_224_frozen_opt.pb'
+out_node   = 'MobilenetV2/Predictions/Reshape'
 
 ######################################################################
 # Import model

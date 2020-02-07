@@ -37,7 +37,7 @@
 
 #include <stdint.h>
 //#include "dlpack.h"
-//#include "itidl_ti.h"
+#include "itidl_ti.h"
 
 #define TIDL_IMPORT_SUCCESS           1
 #define TIDL_IMPORT_FAILURE           0
@@ -50,27 +50,31 @@
 */
 typedef struct tidlImpConfig  
 {
-  int32_t  numParamBits;    /* Number of bits used to quantize the parameters (weights).
+  int  numParamBits;    /* Number of bits used to quantize the parameters (weights).
                                It can take values from 4 to 12. Default is 8. */
-  int32_t  quantRoundAdd;   /* quantRoundAdd/100 will be added when rounding a 
+  int  quantRoundAdd;   /* quantRoundAdd/100 will be added when rounding a 
                                floating point number to integer. It can take any 
                                value from 0 to 100. Default is 50.            */
-//  int32_t  inQuantFactor;   /* Input quantization factor. This parameter will be 
-//                               removed as it is hard coded for each framework 
-//                               (Caffe/TF/ONNX).                               */
-  int32_t  inElementType;   /* Flag to indicate whether input is signed or unsigned: 
+  int  inQuantFactor;   /* Input quantization factor. This parameter will be 
+                               removed as it is hard coded for each framework 
+                               (Caffe/TF/ONNX).                               */
+  int  inElementType;   /* Flag to indicate whether input is signed or unsigned: 
                                - 0: input is 8-bit unsigned 
                                - 1: input is 8-bit signed 
                                Default is 1.                                  */
-  int32_t  inNumChannels;   /* Number of channels of input data.
+  int  inNumChannels;   /* Number of channels of input data.
                                Default is -1. User must set it. Otherwise, error
                                will be returned.                              */
-  int32_t  inHeight;        /* Height of input data.
+  int  inHeight;        /* Height of input data.
                                Default is -1. User must set it. Otherwise, error
                                will be returned.                              */
-  int32_t  inWidth;         /* Width of input data.
+  int  inWidth;         /* Width of input data.
                                Default is -1. User must set it. Otherwise, error
                                will be returned.                              */
+    int  layersGroupId[TIDL_NUM_MAX_LAYERS];
+    int  conv2dKernelType[TIDL_NUM_MAX_LAYERS];
+    int  modelType;
+    int  quantizationStyle;
 } tidlImpConfig;
 
 /*
