@@ -1,4 +1,6 @@
 
+import subprocess
+
 import numpy as np
 from tvm import relay
 from tvm.relay.op.annotation import tidlAnnotation
@@ -7,8 +9,12 @@ from topi.util import get_const_tuple
 import ctypes
 
 
+# Load TIDL import C shared library
+_file = './tidl_relayImport.so'
+_tidl_mod = ctypes.CDLL(_file, mode=ctypes.RTLD_GLOBAL)
 
 class TIDLconfigParams(ctypes.Structure):
+    """ TIDL config parameters defined in ctypes for passing to TIDL C library """
     _fields_ = [('numParamBits', ctypes.c_int),  
                 ('quantRoundAdd', ctypes.c_int), 
                 ('inQuantFactor', ctypes.c_int), 
@@ -19,6 +25,7 @@ class TIDLconfigParams(ctypes.Structure):
 
 
 class Conv2dParams(ctypes.Structure):
+    """ Conv2d parameters defined in ctypes for passing to TIDL C library """
     _fields_ = [('num_in_channels', ctypes.c_int), 
                 ('num_out_channels', ctypes.c_int),
                 ('num_groups', ctypes.c_int),
@@ -30,7 +37,30 @@ class Conv2dParams(ctypes.Structure):
                 ('weights_array', ctypes.c_void_p),
                 ('weights_type', ctypes.c_char_p)]
 
+class BatchNormParams(ctypes.Structure):
+    """ BatchNorm parameters defined in ctypes for passing to TIDL C library """
+    _fields_ = [('num_params', ctypes.c_int), 
+                ('params_dtype', ctypes.c_char_p),
+                ('gama', ctypes.c_void_p),
+                ('beta', ctypes.c_void_p),
+                ('mean', ctypes.c_void_p),
+                ('var',  ctypes.c_void_p),
+                ('epsilon', ctypes.c_float),
+                ('center_enable', ctypes.c_int),
+                ('scale_enable', ctypes.c_int)]
+
+class PoolingParams(ctypes.Structure):
+    """ Pooling parameters defined in ctypes for passing to TIDL C library """
+    _fields_ = [('kernelH', ctypes.c_int), 
+                ('kernelW', ctypes.c_int), 
+                ('strideH', ctypes.c_int), 
+                ('strideW', ctypes.c_int), 
+                ('padH',    ctypes.c_int),
+                ('padW',    ctypes.c_int)]
+
+
 class InOutNodes(ctypes.Structure):
+    """ Input/output nodes defined in ctypes for passing to TIDL C library """
     _fields_ = [('this_node', ctypes.c_int),
                 ('num_in_nodes', ctypes.c_int), ('num_out_nodes',ctypes.c_int),
                 ('in_nodes', ctypes.c_void_p),  ('out_nodes',ctypes.c_void_p)]
@@ -113,7 +143,7 @@ def find_in_out_nodes(all_nodes, this_node):
     all_nodes : dictionary 
         Dictionary of all relay.expr.Call nodes of the graph 
     this_node : relay.expr.Call
-        A relay.expr.Call node whose output nodes are to be found by this function
+        A relay.expr.Call node whose input and output nodes are to be found
 
     Returns
     -------
@@ -174,6 +204,7 @@ def tidl_import_conv2d(all_nodes, this_node, params):
 
     Returns
     -------
+    True if import succeeds or False if import fails    
     """
 
     weight = this_node.args[1]
@@ -233,10 +264,14 @@ def tidl_import_conv2d(all_nodes, this_node, params):
         print('Weight type ' + weight_type + ' not supported')
         return False
 
-    conv2d_params.weights_array = ctypes.c_void_p(weights_to_tidl.ctypes.data)
+    weights_flatten = weights_to_tidl.flatten()
+    conv2d_params.weights_array = ctypes.c_void_p(weights_flatten.ctypes.data)
+
     # Invoke C lib functions to pass parameters to TIDL
+    _tidlImportConv2d = _tidl_mod.tidlImportConv2d
+    _tidlImportConv2d.argtypes = (ctypes.POINTER(Conv2dParams), ctypes.c_void_p) 
+    _tidlImportConv2d.restype  = None
     _tidlImportConv2d(conv2d_params, ctypes.POINTER(ctypes.c_int)())
-    #_tidlImportConv2d(conv2d_params)
 
     return True
 
@@ -261,6 +296,10 @@ def tidl_import_pad(node):
 
     # convert list to numpy array in order to pass to C library
     pad_array = np.asarray(pad_list, dtype=np.int32)
+
+    _tidlImportPad = _tidl_mod.tidlImportPad
+    _tidlImportPad.argtypes = (ctypes.c_int, ctypes.c_void_p)
+    _tidlImportPad.restype  = None
     _tidlImportPad(len(pad_array), ctypes.c_void_p(pad_array.ctypes.data))
 
 
@@ -276,12 +315,13 @@ def tidl_import_add(node, params):
     Parameters
     ----------
     node : relay.expr.Call
-        A relay.expr.Call node which is a pad operator
+        A relay.expr.Call node which is a add operator
     params : dict of str to tvm.NDArray
         The parameter dict to be used by relay
 
     Returns
     -------
+    True if import succeeds or False if import fails    
     """
 
     if isinstance(node.args[1], relay.expr.Var):
@@ -299,10 +339,17 @@ def tidl_import_add(node, params):
         bias_params_len = bias.checked_type.shape[0]
         bias_params = params[bias_params_name]
         bias_params_np = bias_params.asnumpy()
+
+        _tidlImportBiasAdd = _tidl_mod.tidlImportBiasAdd
+        _tidlImportBiasAdd.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
+        _tidlImportBiasAdd.restype  = None
         _tidlImportBiasAdd(bias_params_len, bias_params_dtype,
                            ctypes.c_void_p(bias_params_np.ctypes.data))
     elif isinstance(node.args[1], relay.expr.Call):
         print('This is an add operator')
+        _tidlImportAdd = _tidl_mod.tidlImportAdd
+        _tidlImportAdd.argtypes = None
+        _tidlImportAdd.restype  = None
         _tidlImportAdd()
     else:
         printf('Error in importing add operator')
@@ -310,6 +357,88 @@ def tidl_import_add(node, params):
 
     return True
 
+def tidl_import_batch_norm(node, params):
+    r""" Import batch_norm operator to TIDL
+        https://docs.tvm.ai/langref/relay_op.html#tvm.relay.nn.batch_norm
+        https://docs.tvm.ai/doxygen/structtvm_1_1relay_1_1BatchNormAttrs.html
+
+    Parameters
+    ----------
+    node : relay.expr.Call
+        A relay.expr.Call node which is a batch_norm operator
+    params : dict of str to tvm.NDArray
+        The parameter dict to be used by relay
+
+    Returns
+    -------
+    True if import succeeds or False if import fails    
+    """
+
+    bn_params = BatchNormParams()
+    if node.args[1].checked_type.dtype == 'float32':
+        bn_params.params_dtype = b'float32'
+    #elif node.args[1].checked_type.dtype == 'int8':
+    #    bn_params.params_dtype = b'int8'
+    else:
+        print('Unsupported data type of batch norm')
+        return False
+    bn_params.num_params = node.args[1].checked_type.shape[0]
+
+    gama = params[node.args[1].name_hint].asnumpy()
+    beta = params[node.args[2].name_hint].asnumpy()
+    mean = params[node.args[3].name_hint].asnumpy()
+    var  = params[node.args[4].name_hint].asnumpy()
+    #print('Batch norm parameters:')
+    #print(gama)
+    #print(beta)
+    #print(mean)
+    #print(var )
+    bn_params.gama = gama.ctypes.data
+    bn_params.beta = beta.ctypes.data
+    bn_params.mean = mean.ctypes.data
+    bn_params.var  = var.ctypes.data
+    bn_params.epsilon = node.attrs.epsilon
+    center = node.attrs.center
+    scale  = node.attrs.scale
+    bn_params.center_enable = int(center == True)
+    bn_params.scale_enable  = int(scale  == True)
+
+    _tidlImportBatchNorm = _tidl_mod.tidlImportBatchNorm
+    _tidlImportBatchNorm.argtypes = (ctypes.POINTER(BatchNormParams), ctypes.c_void_p)
+    _tidlImportBatchNorm.restype  = None
+    _tidlImportBatchNorm(bn_params, ctypes.POINTER(ctypes.c_int)())
+
+    return True
+
+def tidl_import_pooling(node, type):
+    r""" Import pooling operator to TIDL
+        https://docs.tvm.ai/langref/relay_op.html#tvm.relay.nn.avg_pool2d
+        https://docs.tvm.ai/doxygen/structtvm_1_1relay_1_1AvgPool2DAttrs.html
+        https://docs.tvm.ai/langref/relay_op.html#tvm.relay.nn.max_pool2d
+        https://docs.tvm.ai/doxygen/structtvm_1_1relay_1_1MaxPool2DAttrs.html
+
+    Parameters
+    ----------
+    node : relay.expr.Call
+        A relay.expr.Call node which is a pooling operator
+    type : Bytes literals 
+        A string indicating the type of the pooling operator
+
+    Returns
+    -------
+    """
+
+    pooling_params = PoolingParams()
+    (pooling_params.kernelH,pooling_params.kernelW) = node.attrs.pool_size
+    (pooling_params.strideH,pooling_params.strideW) = node.attrs.strides
+    (pooling_params.padH,pooling_params.padW) = node.attrs.padding
+
+    _tidlImportPooling = _tidl_mod.tidlImportPooling
+    _tidlImportPooling.argtypes = (ctypes.POINTER(PoolingParams), ctypes.c_char_p)
+    _tidlImportPooling.restype  = None
+    _tidlImportPooling(pooling_params, type)
+
+    return
 
 def tidl_import_init(all_nodes):
     r""" Initializing TIDL import
@@ -321,7 +450,15 @@ def tidl_import_init(all_nodes):
 
     Returns
     -------
+    True if initialization succeeds or False if initialization fails
     """
+
+    # Initializing config parameters: 
+    #    numParamBits  = 12
+    #    quantRoundAdd = 50
+    #    inQuantFactor = 128*255
+    # Other parameters depend on input dimension
+    config_params = TIDLconfigParams(12,50,32640,1,3,224,224)
 
     # Find first node of the graph and get input tensor shape
     for node in all_nodes:
@@ -343,10 +480,14 @@ def tidl_import_init(all_nodes):
 
     # Fill dimension parameters for TIDL based on input tensor shape and data layout
     if node.attrs.data_layout == "NCHW":
+        print('Data layout is NCHW')
+        layout = b'NCHW'
         config_params.inNumChannels = input_shape[1]
         config_params.inHeight      = input_shape[2]
         config_params.inWidth       = input_shape[3]
     elif node.attrs.data_layout == "NHWC":
+        print('Data layout is NHWC')
+        layout = b'NHWC'
         config_params.inNumChannels = input_shape[3]
         config_params.inHeight      = input_shape[1]
         config_params.inWidth       = input_shape[2]
@@ -354,21 +495,29 @@ def tidl_import_init(all_nodes):
         print('data layout ' + node.attrs.data_layout + ' is not supported')
         return False
 
-    # pass a NULL pointer - Python to C has to have 2 arguments (to figure out why)
-    _tidlImportInit(config_params, ctypes.POINTER(ctypes.c_int)())
+    # Invoking C library call to initialize TIDL import
+    _tidlImportInit = _tidl_mod.tidlImportInit
+    _tidlImportInit.argtypes = (ctypes.POINTER(TIDLconfigParams), ctypes.c_char_p)
+    _tidlImportInit.restype = None
+    _tidlImportInit(config_params, layout)
 
     return True
 
 def tidl_import_node(all_nodes, this_node, params):
-    r""" Importing each supported node to TIDL
+    r""" Importing a given node (operator) to TIDL
         # https://docs.tvm.ai/langref/relay_op.html#relay-core-tensor-operators
-        #--- to add:
-        #Operator add: True
-        #Operator clip: True
-        #Operator nn.batch_norm: True
-        #Operator nn.avg_pool2d: True
-        #Operator squeeze: True
-        #Operator reshape: True
+
+    Parameters
+    ----------
+    all_nodes : dictionary 
+        Dictionary of all relay.expr.Call nodes of the graph 
+    this_node : relay.expr.Call
+        A relay.expr.Call node which is to be imported
+    params : dict of str to tvm.NDArray
+        The parameter dict to be used by relay
+
+    Returns
+    True if import succeeds or False if import fails    
     """
 
     print('----- Node ' + str(all_nodes[this_node]) + ', ' + this_node.op.name + '-----')
@@ -376,74 +525,140 @@ def tidl_import_node(all_nodes, this_node, params):
     status = True
     if this_node.op.name == 'nn.conv2d':
         status = tidl_import_conv2d(all_nodes, this_node, params)
-    elif this_node.op.name == "nn.pad":
+    elif this_node.op.name == 'nn.pad':
         status = tidl_import_pad(this_node)
-    elif this_node.op.name == "add":
+    elif this_node.op.name == 'add':
         status = tidl_import_add(this_node, params)
-
+    elif this_node.op.name == 'clip':
+        _tidlImportRelu = _tidl_mod.tidlImportRelu
+        _tidlImportRelu.argtype = (ctypes.c_char_p)
+        _tidlImportRelu.restype  = None
+        _tidlImportRelu(b'Relu6')
+    elif this_node.op.name == 'nn.batch_norm':
+        status = tidl_import_batch_norm(this_node, params)
+    elif this_node.op.name == 'nn.avg_pool2d':
+        status = tidl_import_pooling(this_node, b'avg_pool2d')
+    elif this_node.op.name == 'squeeze':
+        _tidlImportSqueeze = _tidl_mod.tidlImportSqueeze
+        _tidlImportSqueeze.argtype = None
+        _tidlImportSqueeze.restype = None
+        _tidlImportSqueeze()
+    elif this_node.op.name == 'reshape':
+        _tidlImportReshape = _tidl_mod.tidlImportReshape
+        _tidlImportReshape.argtype = None
+        _tidlImportReshape.restype = None
+        _tidlImportReshape()
+    elif this_node.op.name == 'nn.softmax':
+        _tidlImportSoftmax = _tidl_mod.tidlImportSoftmax
+        _tidlImportSoftmax.argtype = None
+        _tidlImportSoftmax.restype = None
+        _tidlImportSoftmax()
 
     #else:
     #    status = False
 
     if status == False:
-        return status
+        return False
 
     # Common for all nodes:
     # fill tensor names, update consumer counts, link input/output tensors
     in_out_nodes = find_in_out_nodes(all_nodes, this_node)
-    _tidlImportLinkNodes(in_out_nodes, config_params)
+
+    _tidlImportLinkNodes = _tidl_mod.tidlImportLinkNodes
+    _tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
+    _tidlImportLinkNodes.restype = None
+    _tidlImportLinkNodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)())
 
     return True
 
-def relay_ir_import(mod, params):
+def relay_ir_import(mod, params, subgraph_id):
+    r""" Relay IR import to TIDL 
 
+    Parameters
+    ----------
+    mod : tvm.relay.Module 
+        Relay IR graph
+    params : dict of str to tvm.NDArray
+        The parameter dict to be used by relay
+
+    Returns
+    -------
+    True if import succeeds or False if import fails    
+    """
+
+    # Traverse Relay IR graph and generate a dictionary of all nodes
     all_nodes = {}
     relay.analysis.post_order_visit(mod['main'], lambda node: tidlAnnotation.traverse_expr(node, all_nodes)) 
 
+    # Initialize TIDL import
     if tidl_import_init(all_nodes) == False:
         return False
 
+    # Scan through all relay.expr.Call nodes and import each to TICL
     for node in all_nodes:
         if isinstance(node, relay.expr.Call):
             result = tidl_import_node(all_nodes, node, params)
             if result == False:
-                return result
+                return False
 
-    if _tidlImportOptimize() == -1:
+    # Invoke TIDL optimization of the imported graph
+    _tidlImportOptimize = _tidl_mod.tidlImportOptimize
+    _tidlImportOptimize.argtype = ctypes.c_int
+    _tidlImportOptimize.restype = ctypes.c_int
+    if _tidlImportOptimize(subgraph_id) == -1:
         return False
 
     return True
 
-_file = './tidl_relayImport.so'
-_tidl_mod = ctypes.CDLL(_file, mode=ctypes.RTLD_GLOBAL)
+def tidl_calib(calib_tool, calib_raw_image, subgraph_id):
+    r""" TIDL calibration after importing Relay IR
+    Parameters
+    ----------
+    calib_tool: str
+        Calibration tool file name
+    calib_raw_image: str
+        Calibration raw image file name
+    subgraph_id: int
+        Subgraph id of the imported subgraph
 
-config_params = TIDLconfigParams(12,50,255,1,3,224,224)
+    Returns
+    -------
+    True if calibration succeeds or False if calibration fails    
+    """
 
-_tidlImportInit = _tidl_mod.tidlImportInit
-_tidlImportInit.argtypes = (ctypes.POINTER(TIDLconfigParams), ctypes.c_void_p)
-#_tidlImportInit.argtype = (ctypes.POINTER(TIDLconfigParams))
-_tidlImportInit.restype = None
+    # Prepare for calibration
+    output_net_file = 'tidl_subgraph' + str(subgraph_id) + '_net.bin'
+    output_tmp_file = './tempDir/precalib_net.bin'
+    proc = subprocess.Popen(['rm', '-rf', 'tempDir'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(['mkdir', 'tempDir'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(['cp', output_net_file, output_tmp_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-_tidlImportConv2d = _tidl_mod.tidlImportConv2d
-_tidlImportConv2d.argtypes = (ctypes.POINTER(Conv2dParams), ctypes.c_void_p) 
-_tidlImportConv2d.restype  = None
+    calib_config_file = './tempDir/configFilesList.txt'
+    with open(calib_config_file, 'w') as config_file:
+        config_file.write('1 ./tempDir/quant_stats_config.txt\n')
+        config_file.write('0\n')
 
-_tidlImportPad = _tidl_mod.tidlImportPad
-_tidlImportPad.argtypes = (ctypes.c_int, ctypes.c_void_p)
-_tidlImportPad.restype  = None
+    quant_config_file = './tempDir/quant_stats_config.txt'
+    with open(quant_config_file, 'w') as quant_file:
+        quant_file.write('rawImage    = 1\n')
+        quant_file.write('numFrames   = 1\n')
+        quant_file.write('preProcType = 0\n')
+        quant_file.write('inData      = {}\n'.format(calib_raw_image))
+        quant_file.write('outData     = {}\n'.format('./tempDir/stats_tool_out.bin'))
+        quant_file.write('traceDumpBaseName  = {}\n'.format('./tempDir/trace_dump_'))
+        quant_file.write('updateNetWithStats = 1\n')
+        quant_file.write('outputNetBinFile   = {}\n'.format(output_net_file))
+        params_file =  'tidl_subgraph' + str(subgraph_id) + '_params.bin'
+        quant_file.write('paramsBinFile      = {}\n'.format(params_file))
+        quant_file.write('netBinFile         = {}\n'.format(output_tmp_file))
 
-_tidlImportAdd = _tidl_mod.tidlImportAdd
-_tidlImportAdd.argtypes = None
-_tidlImportAdd.restype  = None
-
-_tidlImportBiasAdd = _tidl_mod.tidlImportBiasAdd
-_tidlImportBiasAdd.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p)
-_tidlImportBiasAdd.restype  = None
-
-_tidlImportLinkNodes = _tidl_mod.tidlImportLinkNodes
-_tidlImportLinkNodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.POINTER(TIDLconfigParams))
-_tidlImportLinkNodes.restype = None
-
-_tidlImportOptimize = _tidl_mod.tidlImportOptimize
-_tidlImportOptimize.argtypes = None
-_tidlImportOptimize.restype  = ctypes.c_int
+    # Invoke TIDL emulation to calibrate
+    proc = subprocess.Popen([calib_tool, calib_config_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    o, e = proc.communicate()
+    console_out = o.decode('ascii')
+    error = e.decode('ascii')
+    print(console_out)
+    if console_out.find('error')==-1 and console_out.find('ERROR')==-1 and error == '':
+        return True
+    else:
+        return False

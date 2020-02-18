@@ -24,6 +24,10 @@ For us to begin with, tensorflow python module is required to be installed.
 Please refer to https://www.tensorflow.org/install
 """
 
+import os
+import sys
+import argparse
+
 # tvm, relay
 import tvm
 from tvm import relay
@@ -43,13 +47,29 @@ except ImportError:
 import tvm.relay.testing.tf as tf_testing
 
 from tvm.relay.op.annotation import tidlAnnotation
-
 import tidl_relay_import as tidl
+import tidl_utils as utils
 
-#model_path = './mobileNet1/mobilenet_v1_1.0_224_frozen_opt.pb'
-#out_node   = 'MobilenetV1/Predictions/Reshape'
-model_path = './mobileNet2/mobilenet_v2_1.0_224_frozen_opt.pb'
-out_node   = 'MobilenetV2/Predictions/Reshape'
+parser = argparse.ArgumentParser()
+parser.add_argument("modelName", help="Model name")
+
+try:
+    args = parser.parse_args()
+except SystemExit:
+    quit()
+
+if args.modelName == 'mobileNet1':
+    model_path = './mobileNet1/mobilenet_v1_1.0_224_frozen_opt.pb'
+    #out_node   = 'MobilenetV1/Predictions/Reshape'
+    out_node   = 'MobilenetV1/Predictions/Softmax'
+    model_input_shape = (224,224,3)
+elif args.modelName == 'mobileNet2':
+    model_path = './mobileNet2/mobilenet_v2_1.0_224_frozen_opt.pb'
+    #out_node   = 'MobilenetV2/Predictions/Reshape'
+    out_node   = 'MobilenetV2/Predictions/Softmax'
+    model_input_shape = (224,224,3)
+else: 
+    print('Model not supported!')
 
 ######################################################################
 # Import model
@@ -81,9 +101,9 @@ mod, params = relay.frontend.from_tensorflow(graph_def,
                                              shape=shape_dict)
 
 print("=========Tensorflow protobuf imported to relay frontend========")
-#print(mod.astext(show_meta_data=False))
+print(mod.astext(show_meta_data=False))
 
-# TIDL operator annotation 
+# TIDL annotation pass:
 #    - mark each operator either supported (True) or unsupported (False) by TIDL
 op_annotations = tidlAnnotation.tidl_annotation(mod)
 
@@ -93,14 +113,35 @@ for node in op_annotations:
     print(f'Operator {node.op.name}: {op_annotations[node]}')
     graph_supported_by_tidl = graph_supported_by_tidl and op_annotations[node]
 
-# Import whole graph to TIDL if it can offload to TIDL
+# TIDL import pass: 
+#    - import graph to TIDL 
 if graph_supported_by_tidl:
+    # import whole graph to TIDL before subgraph partitioning is integrated
+    subgraph_id = 0
     print(model_path + ' can be offloaded to TIDL.')
     print('============== importing this model to TIDL ================')
-    if tidl.relay_ir_import(mod, params) == False:
+    if tidl.relay_ir_import(mod, params, subgraph_id) == False:
         print('Importing this model to TIDL failed!')
     else:
+        # TIDL calibration pass:
+        #     
+        if os.getenv("TIDL_PLSDK") is None:
+          plsdk = os.getenv('HOME') + "/ti/processor-sdk-linux-am57xx-evm-06.02.00.81-GA"
+        else: 
+          plsdk = os.getenv('TIDL_PLSDK')
+        
+        plsdk_devkit = plsdk + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+        print("PLSDK DEVKIT path set to: " + plsdk_devkit)
+        
+        tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
+        calibration_image = 'airshow.jpg'
+        raw_image = 'raw_calib_image.bin'
+        
+        utils.tf_image_preprocess(calibration_image, raw_image, model_input_shape)
+        
+        tidl.tidl_calib(tidl_calib_tool, raw_image, subgraph_id)
         print('Importing this model to TIDL succeeded!')
+
 else:
     print(model_path + ' can not be offloaded to TIDL.')
 

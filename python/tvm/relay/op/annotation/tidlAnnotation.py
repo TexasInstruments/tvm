@@ -40,6 +40,19 @@ from topi.util import get_const_tuple
 
 from tvm.relay.expr_functor import ExprVisitor
 
+class RelayGraphParams:
+    def __init__(self):
+        self.data_layout = 'UNDEFINED'
+
+    def SetDataLayout(self, layout):
+        self.data_layout = layout
+
+    def GetDataLayout(self):
+        return self.data_layout
+
+    def DataLayoutIsSet(self):
+        return(self.data_layout != 'UNDEFINED')
+
 def traverse_expr(node, node_dict):
     if node in node_dict:
         return
@@ -132,6 +145,9 @@ def tidl_node_validation(node_dict, call_node):
     #print("===== OP: " + call_node.op.name + " =====")
     data = call_node.args[0]  # call_node is tvm.relay.expr.Call
 
+    if hasattr(call_node.attrs, 'data_layout') and (not graph_params.DataLayoutIsSet()):
+        graph_params.data_layout = call_node.attrs.data_layout
+
     # Check the op to decide if it is supported by TIDL
     if call_node.op.name == "add":
         return True
@@ -157,7 +173,17 @@ def tidl_node_validation(node_dict, call_node):
         return (supported)
 
     elif call_node.op.name == "nn.batch_norm":
-        return True
+        if call_node.args[1].checked_type.dtype != 'float32':
+            supported = False
+        elif graph_params.data_layout == 'NCHW' and call_node.attrs.axis != 1:
+        #only axis along channel is supported
+        #attributes include parameters that are optional and having default values in operator arguments
+            supported = False
+        elif graph_params.data_layout == 'NHWC' and call_node.attrs.axis != 3:
+            supported = False
+        else:
+            supported = True
+        return supported
 
     elif call_node.op.name == "nn.bias_add":
         return True
@@ -176,6 +202,8 @@ def tidl_node_validation(node_dict, call_node):
         # There is an example how to get the attributes of conv2d in Relay:
         # https://github.com/dmlc/tvm/blob/master/python/tvm/relay/op/nn/_nn.py#L144
         weight = call_node.args[1]
+        if weight.checked_type.dtype != 'float32':
+            return False
         data_shape    = get_const_tuple(data.checked_type.shape)
         weight_shape  = get_const_tuple(weight.checked_type.shape)
         strides       = get_const_tuple(call_node.attrs.strides)
@@ -353,3 +381,5 @@ def tidl_annotation(mod):
             op_annotations[node] = tidl_node_validation(node_dict, node)
 
     return op_annotations
+
+graph_params = RelayGraphParams()
