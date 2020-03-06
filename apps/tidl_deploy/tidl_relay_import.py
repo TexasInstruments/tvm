@@ -7,6 +7,7 @@ from tvm.relay.op.annotation import tidlAnnotation
 import topi
 from topi.util import get_const_tuple
 import ctypes
+import os
 
 
 # Load TIDL import C shared library
@@ -653,12 +654,20 @@ def tidl_calib(calib_tool, calib_raw_image, subgraph_id):
         quant_file.write('netBinFile         = {}\n'.format(output_tmp_file))
 
     # Invoke TIDL emulation to calibrate
-    proc = subprocess.Popen([calib_tool, calib_config_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    o, e = proc.communicate()
-    console_out = o.decode('ascii')
-    error = e.decode('ascii')
-    print(console_out)
+    try:
+        proc = subprocess.Popen([calib_tool, calib_config_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        o, e = proc.communicate()
+        console_out = o.decode('ascii')
+        error = e.decode('ascii')
+        print(console_out)
+    except:
+        print("TIDL calibration crashed")
+        return False, None
+
     if console_out.find('error')==-1 and console_out.find('ERROR')==-1 and error == '':
-        return True
+        print("TIDL calibration succeeded")
+        search_for_last_node_dim = os.popen("lastnode=`ls -1 ./tempDir/trace_dump*.y | cut -d'_' -f3 | sort -n | tail -1`; ls -1 ./tempDir/trace_dump_${lastnode}_*.y | cut -d'_' -f4 | cut -d'.' -f1")
+        last_node_dim = search_for_last_node_dim.read().rstrip()
+        return True, last_node_dim
     else:
-        return False
+        return False, None

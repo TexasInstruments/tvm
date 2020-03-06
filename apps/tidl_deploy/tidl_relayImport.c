@@ -590,6 +590,7 @@ void tidlImportLinkNodes(InOutNodes *inOutNodes, void *ptr_unused)
   }
   else {
     printf("Number of output nodes is 0. This is the last node.\n");
+    layer->numOutBufs = -1;
     layer->outConsumerCnt[0] = 0;   
     // a TIDL output data layer needs to be added as output to this operator
     // - probably should be done similarly to what TF import does, at the end of import

@@ -312,6 +312,16 @@ def tidl_node_validation(node_dict, call_node):
         if reshape_after_transpose and transpose_after_reshape:
             supported = True
 
+        # If this is the last node of the graph, and input and output shape are 
+        # the same, this operator can be supported by TIDL
+        if len(outCallNodes) ==0:
+            node_is_identity = True
+            for idx in range(len(data.checked_type.shape)):
+                if int(data.checked_type.shape[idx]) != int(call_node.attrs.newshape[idx]):
+                    node_is_identity = False
+            if node_is_identity == True:
+                supported = True
+
         return (supported)
 
     elif call_node.op.name == "slice_like":

@@ -63,13 +63,18 @@ import argparse
 import tvm
 import os
 import sys
+from shutil import copyfile
 import numpy as np
 import tensorflow as tf
 from tvm.contrib import graph_runtime as runtime
 from tvm import relay
-from tidl_import import tidl_check_model
+#from tidl_import import tidl_check_model
+import tidl_relay_import as tidl_import
+from tvm.relay.op.annotation import tidlAnnotation
+import tidl_utils
 from tvm.contrib import cc
 from pathlib import Path
+from tvm.relay.testing import tf as tf_testing
 
 parser = argparse.ArgumentParser()
 parser.add_argument("modelName", help="Model name")
@@ -94,51 +99,51 @@ conv2d_kernel_type = None
 customModel = False
 
 if args.modelName == "mobileNet1":
-  model      = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
-  input_node = "input"
-  out_node   = 'MobilenetV1/Predictions/Reshape_1'
-  model_input_shape = (224,224,3)
+    model      = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
+    input_node = "input"
+    out_node   = 'MobilenetV1/Predictions/Reshape_1'
+    model_input_shape = (224,224,3)
 elif args.modelName == "mobileNet2":
-  model = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
-  input_node = "input"
-  out_node   = 'MobilenetV2/Predictions/Reshape_1'
-  model_input_shape = (224,224,3)
+    model = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
+    input_node = "input"
+    out_node   = 'MobilenetV2/Predictions/Reshape_1'
+    model_input_shape = (224,224,3)
 elif args.modelName == "mobileNet1tflite":
-  model      = "./mobileNet1tflite/mobilenet_v1_1.0_224.tflite"
-  input_node = "input"
-  out_node   = 'MobilenetV1/Predictions/Reshape_1'
-  model_input_shape = (224,224,3)
+    model      = "./mobileNet1tflite/mobilenet_v1_1.0_224.tflite"
+    input_node = "input"
+    out_node   = 'MobilenetV1/Predictions/Reshape_1'
+    model_input_shape = (224,224,3)
 elif args.modelName == "mobileNet2tflite":
-  model      = "./mobileNet2tflite/mobilenet_v2_1.0_224.tflite"
-  input_node = "input"
-  out_node   = 'MobilenetV2/Predictions/Reshape_1'
-  model_input_shape = (224,224,3)
+    model      = "./mobileNet2tflite/mobilenet_v2_1.0_224.tflite"
+    input_node = "input"
+    out_node   = 'MobilenetV2/Predictions/Reshape_1'
+    model_input_shape = (224,224,3)
 elif args.modelName == "resNet18v1Onnx":
-  model      = "./resNet18v1Onnx/resnet18v1.onnx"
-  input_node = "data"
-  out_node   = 'resnetv15_dense0_fwd'
-  model_input_shape = (224,224,3)
+    model      = "./resNet18v1Onnx/resnet18v1.onnx"
+    input_node = "data"
+    out_node   = 'resnetv15_dense0_fwd'
+    model_input_shape = (224,224,3)
 elif args.modelName == "squeezeNetOnnx":
-  model      = "./squeezeNetOnnx/squeezenet1.1.onnx"
-  input_node = "data"
-  out_node   = 'squeezenet0_flatten0_reshape0'
-  model_input_shape = (224,224,3)
+    model      = "./squeezeNetOnnx/squeezenet1.1.onnx"
+    input_node = "data"
+    out_node   = 'squeezenet0_flatten0_reshape0'
+    model_input_shape = (224,224,3)
 else:
-  model = args.modelName
-  print("Custom Model expected:" + args.modelName)
-  input_node = args.input_node
-  out_node   = args.output_node
-  model_input_shape = tuple(args.input_shape)
-  print(model)
-  print(input_node)
-  print(out_node)
-  print(str(model_input_shape))
-  customModel = True
+    model = args.modelName
+    print("Custom Model expected:" + args.modelName)
+    input_node = args.input_node
+    out_node   = args.output_node
+    model_input_shape = tuple(args.input_shape)
+    print(model)
+    print(input_node)
+    print(out_node)
+    print(str(model_input_shape))
+    customModel = True
 
 if customModel:
-  artifacts_folder = "./output4/custom"
+    artifacts_folder = "./output4/custom"
 else:
-  artifacts_folder = "./output4/" + args.modelName
+    artifacts_folder = "./output4/" + args.modelName
 
 if not os.path.exists(artifacts_folder):
    #Create outputfolder
@@ -147,24 +152,23 @@ else:
    #Remove all filder from output folder
    filelist = [ f for f in os.listdir(artifacts_folder)]
    for f in filelist:
-      os.remove(os.path.join(artifacts_folder, f)) 
+       os.remove(os.path.join(artifacts_folder, f)) 
 
 image = args.calibration_image
 
 data_shape_input = list(model_input_shape)
 if forced_dim_expansion:
-  data_shape_input.insert(0,batch_size)
+    data_shape_input.insert(0,batch_size)
 
 data_shape_input = tuple(data_shape_input) # Prepend batch size
 print(data_shape_input)
 
-#target = "llvm"
 target = "llvm -target=armv7l-linux-gnueabihf"
 
 if os.getenv("TIDL_PLSDK") is None:
-  plsdk_devkit = os.getenv('HOME') + "/ti-processor-sdk-linux-am57xx-evm-06.02.00.75" + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+    plsdk_devkit = os.getenv('HOME') + "/ti-processor-sdk-linux-am57xx-evm-06.02.00.81" + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
 else: 
-  plsdk_devkit = os.getenv('TIDL_PLSDK') + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
+    plsdk_devkit = os.getenv('TIDL_PLSDK') + "/linux-devkit/sysroots/x86_64-arago-linux/usr/bin/"
 print("PLSDK path set to:" + plsdk_devkit)
 
 tidl_calib_tool  = plsdk_devkit + "eve_test_dl_algo_ref.out"
@@ -173,82 +177,125 @@ arm_gcc          = plsdk_devkit + "arm-linux-gnueabihf-g++"
 
 model_path = Path(model)
 if not model_path.is_file():
-  print('Error: model file ' + model + ' does NOT exist!')
-  quit()
-
-if not args.forced_arm_offload:
-  tidl_offload, last_node_dim = tidl_check_model(model, image, 'tidl_subgraph', model_input_shape,
-                                  tidl_import_tool, tidl_calib_tool, artifacts_folder, conv2d_kernel_type)
-else:
-  tidl_offload = False
-
-if args.forced_tidl_offload and not tidl_offload:
-  print("This model can do only TIDL offload, but it failed")
-  quit()
-
-if args.forced_arm_offload and not args.forced_tidl_offload:
-  tidl_offload = False
-  print("FORCING ARM EXECUTION")
-
-if tidl_offload:
-  print("Offload this model to TIDL")
-  output_dim = last_node_dim.split('x')
-  if(int(output_dim[1]) != 1):
-    print(int(output_dim[1]) + 2)
-    print("Base on trace in tempDir folder, last node is not 1D vector! Instead it is:" + last_node_dim)
+    print('Error: model file ' + model + ' does NOT exist!')
     quit()
 
-  if(args.num_labels == 0):
-    num_labels = int(output_dim[0])
-  else:
-    num_labels = args.num_labels
+################################################################################
+# Import the graph to Relay
+################################################################################
+if model.endswith('.pb'):
+    layout = None
+    with tf.gfile.GFile(model, 'rb') as f:
+        # Import tensorflow graph definition to relay frontend.
+        graph_def = tf.GraphDef()
+        graph_def.ParseFromString(f.read())
+        graph = tf.import_graph_def(graph_def, name='')
+        graph_def = tf_testing.ProcessGraphDefParam(graph_def)
+        
+        # Add shapes to the graph.
+        with tf.Session() as sess:
+            graph_def = tf_testing.AddShapesToGraphDef(sess, out_node)
 
-  print("num_labels set to " + str(num_labels))
-  #x = relay.var(x, shape=data_shape_input)
-  x = relay.var(input_node, shape=data_shape_input)
-  q = relay.TidlInference(x, num_labels)
-  func = relay.Function([x], q)
-  net = relay.Module.from_expr(func)
-  print(net)
-  ######################################################################
-  graph, lib, params = relay.build_module.build(net, target=target)
+        shape_dict = {input_node : data_shape_input}
+        print("Inut node shape dict:" + str(shape_dict))
+        mod, params = relay.frontend.from_tensorflow(graph_def,
+                                                     layout=layout,
+                                                     shape=shape_dict, outputs=None)
+        print("Tensorflow protobuf imported to relay frontend.")
+        #print(mod.astext(show_meta_data=False))
+else:
+    print("Models other than Tensorflow to be supported!")
+    quit()
 
-else: 
-  from tvm.relay.testing import tf as tf_testing
-  print("Run this model on ARM")
-  #layout = 'NHWC'
-  layout = None
-  with tf.gfile.GFile(model, 'rb') as f:
-    graph_def = tf.GraphDef()
-    graph_def.ParseFromString(f.read())
-    graph = tf.import_graph_def(graph_def, name='')
-    graph_def = tf_testing.ProcessGraphDefParam(graph_def)
+################################################################################
+# Compile the model to run on TIDL if it can supported by TIDL
+################################################################################
+if not args.forced_arm_offload:
+    # TIDL annotation pass:
+    #    - mark each operator either supported (True) or unsupported (False) by TIDL
+    op_annotations = tidlAnnotation.tidl_annotation(mod)
+    
+    # Check if whole graph can offload to TIDL (no graph partitioning for now)
+    tidl_offload = True
+    for node in op_annotations:
+        print(f'Operator {node.op.name}: {op_annotations[node]}')
+        if op_annotations[node] == False:
+            tidl_offload = False
+            break
+else:
+    tidl_offload = False
 
-    # Add shapes to the graph.
-    with tf.Session() as sess:
-        graph_def = tf_testing.AddShapesToGraphDef(sess, out_node)
-    ######################################################################
-    # Import the graph to Relay
-    # -------------------------
-    # Import tensorflow graph definition to relay frontend.
-    #
-    # Results:
-    #   sym: relay expr for given tensorflow protobuf.
-    #   params: params converted from tensorflow params (tensor protobuf).
-    shape_dict = {input_node : data_shape_input}
-    print("Inut node shape dict:" + str(shape_dict))
-    mod, params = relay.frontend.from_tensorflow(graph_def,
-                                                 layout=layout,
-                                                 shape=shape_dict, outputs=None)
+if args.forced_tidl_offload and not tidl_offload:
+    print("This model can do only TIDL offload, but it is not supported by TIDL!")
+    quit()
 
-    print("Tensorflow protobuf imported to relay frontend.")
-    with relay.build_config(opt_level=3):
-       graph, lib, params = relay.build(mod, target=target, params=params)
+if args.forced_arm_offload and not args.forced_tidl_offload:
+    tidl_offload = False
+    print("FORCING ARM EXECUTION")
 
-
-#print(params)
-print("...Start writting converted model:")
 tmp_folder = os.getcwd() + "/" + artifacts_folder + "/"
+
+if tidl_offload:
+    print("Offload this model to TIDL")
+    # TIDL import pass: 
+    #    - import graph to TIDL 
+    # import whole graph to TIDL before subgraph partitioning is integrated
+    subgraph_id = 0
+    print('============== importing this model to TIDL ================')
+    if tidl_import.relay_ir_import(mod, params, subgraph_id) == False:
+        print('Importing this model to TIDL failed!')
+        tidl_offload_status = False
+    else:
+        # TIDL calibration pass:
+        raw_image = 'raw_calib_image.bin'
+        tidl_utils.tf_image_preprocess(image, raw_image, model_input_shape)
+        tidl_calib_status, last_node_dim = tidl_import.tidl_calib(tidl_calib_tool, raw_image, subgraph_id)
+    
+        if tidl_calib_status == False:
+            print('TIDL calibration for this model failed!')
+            tidl_offload_status = False
+        else:
+            output_dim = last_node_dim.split('x')
+            if(int(output_dim[1]) != 1):
+                print(int(output_dim[1]) + 2)
+                print("Base on trace in tempDir folder, last node is not 1D vector! Instead it is:" + last_node_dim)
+                tidl_offload_status = False
+            else:        
+                if(args.num_labels == 0):
+                    num_labels = int(output_dim[0])
+                else:
+                    num_labels = args.num_labels
+  
+                print("num_labels set to " + str(num_labels))
+                x = relay.var(input_node, shape=data_shape_input)
+                q = relay.TidlInference(x, num_labels)
+                func = relay.Function([x], q)
+                net = relay.Module.from_expr(func)
+                print(net)
+  
+                graph, lib, params = relay.build_module.build(net, target=target)
+  
+                # copy TIDL .bin files to destination folder
+                output_net_file = 'tidl_subgraph' + str(subgraph_id) + '_net.bin'
+                output_params_file = 'tidl_subgraph' + str(subgraph_id) + '_params.bin'
+                copyfile(output_net_file, os.path.join(tmp_folder, output_net_file))
+                copyfile(output_params_file, os.path.join(tmp_folder, output_params_file))
+  
+                tidl_offload_status = True
+
+################################################################################
+# Compile the model to run on ARM
+################################################################################
+if not tidl_offload or tidl_offload_status == False:
+    print("Run this model on ARM")
+
+    with relay.build_config(opt_level=3):
+        graph, lib, params = relay.build(mod, target=target, params=params)
+
+################################################################################
+# Save model compilation artifacts
+################################################################################
+print("...Start writting converted model:")
 path_lib = tmp_folder + "deploy_lib.so"
 path_graph = tmp_folder + "deploy_graph.json"
 path_params = tmp_folder + "deploy_param.params"

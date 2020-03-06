@@ -544,6 +544,8 @@ int32_t tidl_mergePadLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t la
   int32_t i1, i2, i3, i4,i;
   int32_t status = 0;
   int32_t padW, padH;
+  int32_t padL = 0, padT = 0;
+
   for (i1 = 0; i1 < layerIndex; i1++)
   {
     if (pOrgTIDLNetStructure->TIDLPCLayers[i1].layerType == TIDL_PadLayer)
@@ -568,18 +570,29 @@ int32_t tidl_mergePadLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t la
 
       if (gloab_data_format == TIDL_DATA_FORMAT_NHWC)
       {
-        padW =  pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 0];
+        //padW =  pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 0];
               //+ pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 1];
-        padH =  pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[1 * 2 + 0];
+        //padH =  pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[1 * 2 + 0];
               //+ pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[1 * 2 + 1];
+        padL = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 0];
+        padT = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[1 * 2 + 0];
+        padW = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 1];
+        padH = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[1 * 2 + 1];
       }
       else
       {
-        padW = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[3 * 2 + 0];
+        //padW = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[3 * 2 + 0];
               //+ pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[3 * 2 + 1];
-        padH = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 0];
+        //padH = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 0];
               //+ pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 1];
+        padL = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[3 * 2 + 0];
+        padT = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 0];
+        padW = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[3 * 2 + 1];
+        padH = pOrgTIDLNetStructure->TIDLPCLayers[i1].layerPCParams.padParams.padTensor[2 * 2 + 1];
       }
+
+      padW = padW < padL ? padL : padW;
+      padH = padH < padT ? padT : padH;
 
       printf("Merging padding with conv2d: %d, %d, %d, %d, %d, %d, %d, %d\n", 
              pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0],
@@ -596,20 +609,21 @@ int32_t tidl_mergePadLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_t la
       printf("\n");
       printf("Out consumer counts: %d, %d\n", pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0], TIDLPCLayersIn->outConsumerCnt[0]);
       if ((TIDLPCLayersOut->layerType == TIDL_ConvolutionLayer) &&
-        (pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0] == 1) /*&&
-        (TIDLPCLayersIn->outConsumerCnt[0] == 1) &&
+        (pOrgTIDLNetStructure->TIDLPCLayers[i1].outConsumerCnt[0] == 1) &&
+        /*(TIDLPCLayersIn->outConsumerCnt[0] == 1) &&
         (TIDLPCLayersOut->layerParams.convParams.strideW > 1) && 
-        (TIDLPCLayersOut->layerParams.convParams.strideH > 1) &&
+        (TIDLPCLayersOut->layerParams.convParams.strideH > 1) &&*/
         (((TIDLPCLayersOut->layerParams.convParams.kernelW)/2) == padW) &&
-        (((TIDLPCLayersOut->layerParams.convParams.kernelH)/2) == padH)*/)
+        (((TIDLPCLayersOut->layerParams.convParams.kernelH)/2) == padH))
       {
         TIDLPCLayersIn->numMacs += pOrgTIDLNetStructure->TIDLPCLayers[i1].numMacs;
 
-        //TIDLPCLayersOut->layerParams.convParams.padW = padW;
-        //TIDLPCLayersOut->layerParams.convParams.padH = padH;
-        TIDLPCLayersOut->layerParams.convParams.padW = ((TIDLPCLayersOut->layerParams.convParams.kernelW - 1)*TIDLPCLayersOut->layerParams.convParams.dilationW) / 2;
-        TIDLPCLayersOut->layerParams.convParams.padH = ((TIDLPCLayersOut->layerParams.convParams.kernelH - 1)*TIDLPCLayersOut->layerParams.convParams.dilationH) / 2;
-        TIDLPCLayersOut->strideOffsetMethod = TIDL_strideOffsetTopLeft;
+        TIDLPCLayersOut->layerParams.convParams.padW = padW;
+        TIDLPCLayersOut->layerParams.convParams.padH = padH;
+        //TIDLPCLayersOut->layerParams.convParams.padW = ((TIDLPCLayersOut->layerParams.convParams.kernelW - 1)*TIDLPCLayersOut->layerParams.convParams.dilationW) / 2;
+        //TIDLPCLayersOut->layerParams.convParams.padH = ((TIDLPCLayersOut->layerParams.convParams.kernelH - 1)*TIDLPCLayersOut->layerParams.convParams.dilationH) / 2;
+        //TIDLPCLayersOut->strideOffsetMethod = TIDL_strideOffsetTopLeft;
+        //TIDLPCLayersOut->strideOffsetMethod = TIDL_strideOffsetCenter;
 
         TIDLPCLayersOut->inData[0] = pOrgTIDLNetStructure->TIDLPCLayers[i1].inData[0];
         strcpy((char *)TIDLPCLayersOut->inDataNames[0], (char *)pOrgTIDLNetStructure->TIDLPCLayers[i1].inDataNames[0]);
@@ -829,7 +843,13 @@ int32_t tidl_mergeReshapeLayer(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, int32_
           tidl_updateOutDataShape(pOrgTIDLNetStructure, outIdx, layerIndex, sTIDL_outRehapeTable);
         }
       }
-      else {
+      else if (pOrgTIDLNetStructure->TIDLPCLayers[i1].numOutBufs == -1) 
+      {
+        //printf("This reshape layer is the last layer, simply remove it.\n");
+        pOrgTIDLNetStructure->TIDLPCLayers[i1].numInBufs = -1;
+      }
+      else
+      {
         printf("TIDL limitation: Reshape layer cannot be merged with layers other than InnerProduct or AveragePooling layer!\n");
         return TIDL_IMPORT_ERR_INPUT_LAYER_NOT_FOUND;
       }
@@ -1325,14 +1345,14 @@ int32_t tidl_copyPCNetToDeviceNet(sTIDL_OrgNetwork_t  *pOrgTIDLNetStructure, sTI
       tIDLNetStructure->TIDLLayers[tiLayerIndex].numInBufs = pOrgTIDLNetStructure->TIDLPCLayers[i].numInBufs;
       tIDLNetStructure->TIDLLayers[tiLayerIndex].numOutBufs = pOrgTIDLNetStructure->TIDLPCLayers[i].numOutBufs;
       tIDLNetStructure->TIDLLayers[tiLayerIndex].weightsElementSizeInBits = pOrgTIDLNetStructure->TIDLPCLayers[i].weightsElementSizeInBits;
-      if ((gParams.modelType == 2) || (gParams.modelType == 0))
-      {
-        tIDLNetStructure->TIDLLayers[tiLayerIndex].strideOffsetMethod = TIDL_strideOffsetTopLeft;
-      }
-      else
-      {
+      //if ((gParams.modelType == 2) || (gParams.modelType == 0))
+      //{
+      //  tIDLNetStructure->TIDLLayers[tiLayerIndex].strideOffsetMethod = TIDL_strideOffsetTopLeft;
+      //}
+      //else
+      //{
         tIDLNetStructure->TIDLLayers[tiLayerIndex].strideOffsetMethod = pOrgTIDLNetStructure->TIDLPCLayers[i].strideOffsetMethod;
-      }
+      //}
 
       if (tIDLNetStructure->TIDLLayers[tiLayerIndex].layerType == TIDL_DataLayer)
       {
