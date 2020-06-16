@@ -17,8 +17,8 @@
  */
 
 /*!
- * \file runtime/contrib/tidl/tidl_runtime.h
- * \brief TIDLModule is the runtime module for TIDL backend.
+ * \file runtime/contrib/tidl/runtime_j6.h
+ * \brief TIDLJ6Module is the runtime module for TIDL backend.
  */
 
 #ifndef TVM_RUNTIME_CONTRIB_TIDL_TIDL_RUNTIME_H_
@@ -33,15 +33,15 @@ namespace tvm {
 namespace runtime {
 
 /*!
- * \brief Create a TIDLModule.
+ * \brief Create a TIDLJ6Module.
  * \param total_subgraphs Total number of subgraphs
  * \param num_inputs  Map of subgraph name to number of inputs
  * \param num_outputs Map of subgraph name to number of outputs
- * \return TIDLModule created from subgraphs.
+ * \return TIDLJ6Module created from subgraphs.
  */
-Module TIDLModuleCreate(int total_subgraphs, 
-                        const std::unordered_map<std::string, int>& num_inputs,
-                        const std::unordered_map<std::string, int>& num_outputs);
+Module TIDLJ6ModuleCreate(int total_subgraphs, 
+                          const std::unordered_map<std::string, int>& num_inputs,
+                          const std::unordered_map<std::string, int>& num_outputs);
 }  // namespace runtime
 }  // namespace tvm
 

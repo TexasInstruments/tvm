@@ -19,7 +19,7 @@
 
 /*!
  * \file runtime/contrib/tidl/tidl_runtime.cc
- * \brief TIDLModule is the runtime module for TIDL backend.
+ * \brief TIDLJ6Module is the runtime module for TIDL backend.
  */
 
 #include <stdlib.h>
@@ -38,7 +38,7 @@
 #include "../../file_util.h"
 #include <time.h>
 
-#include "tidl_runtime.h"
+#include "runtime_j6.h"
 
 //#define TVM_RUNTIME_DBG_TIDL_TIMER
 #ifdef TVM_RUNTIME_DBG_TIDL_TIMER
@@ -96,11 +96,11 @@ namespace tvm {
 namespace runtime {
 
 /*! \brief A module for TIDL runtime. */
-class TIDLModule : public runtime::ModuleNode {
+class TIDLJ6Module : public runtime::ModuleNode {
  public:
-  explicit TIDLModule(int total_subgraphs, 
-                      const std::unordered_map<std::string, int>& num_inputs,
-                      const std::unordered_map<std::string, int>& num_outputs) {
+  explicit TIDLJ6Module(int total_subgraphs, 
+                        const std::unordered_map<std::string, int>& num_inputs,
+                        const std::unordered_map<std::string, int>& num_outputs) {
     this->total_subgraphs_ = total_subgraphs;
     this->num_inputs_  = num_inputs;
     this->num_outputs_ = num_outputs;
@@ -218,7 +218,7 @@ class TIDLModule : public runtime::ModuleNode {
     filep.read(&graph_info[0], size);
     FromJSON(graph_info, total_subgraphs, num_inputs, num_outputs);
 
-    return TIDLModuleCreate(total_subgraphs, num_inputs, num_outputs);
+    return TIDLJ6ModuleCreate(total_subgraphs, num_inputs, num_outputs);
   }
 
   static Module LoadFromBinary(void* strm) {
@@ -229,7 +229,7 @@ class TIDLModule : public runtime::ModuleNode {
     std::string graph_info;
     stream->Read(&graph_info);
     FromJSON(graph_info, total_subgraphs, num_inputs, num_outputs);
-    return TIDLModuleCreate(total_subgraphs, num_inputs, num_outputs);
+    return TIDLJ6ModuleCreate(total_subgraphs, num_inputs, num_outputs);
   }
 
  private:
@@ -240,20 +240,20 @@ class TIDLModule : public runtime::ModuleNode {
   tidl_subgraph_t tidl_subgraph;
 };
 
-Module TIDLModuleCreate(int total_subgraphs, 
-                        const std::unordered_map<std::string, int>& num_inputs,
-                        const std::unordered_map<std::string, int>& num_outputs) {
-  auto n = make_object<TIDLModule>(total_subgraphs, num_inputs, num_outputs);
+Module TIDLJ6ModuleCreate(int total_subgraphs, 
+                          const std::unordered_map<std::string, int>& num_inputs,
+                          const std::unordered_map<std::string, int>& num_outputs) {
+  auto n = make_object<TIDLJ6Module>(total_subgraphs, num_inputs, num_outputs);
   return Module(n);
 }
 
-TVM_REGISTER_GLOBAL("runtime.module.loadfile_tidl")
+TVM_REGISTER_GLOBAL("runtime.module.loadfile_tidlj6")
 .set_body([](TVMArgs args, TVMRetValue* rv) {
-  *rv = TIDLModule::LoadFromFile(args[0]);
+  *rv = TIDLJ6Module::LoadFromFile(args[0]);
 });
 
-TVM_REGISTER_GLOBAL("runtime.module.loadbinary_tidl")
-.set_body_typed(TIDLModule::LoadFromBinary);
+TVM_REGISTER_GLOBAL("runtime.module.loadbinary_tidlj6")
+.set_body_typed(TIDLJ6Module::LoadFromBinary);
 
 }  // namespace runtime
 }  // namespace tvm

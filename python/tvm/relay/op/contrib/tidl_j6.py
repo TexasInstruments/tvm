@@ -23,7 +23,7 @@ from tvm import relay
 from tvm.relay.frontend.common import infer_shape
 from tvm.relay.frontend.common import infer_type
 
-target = "target.tidl"
+target = "target.tidlj6"
 
 def _merge_sequential_ops(mod):
     """Fuse sequential ops for op registration. Ops: vision.multibox_prior, nn.reshape, squeeze, transpose
@@ -168,120 +168,120 @@ def _merge_sequential_ops(mod):
         return pad_out
 
     pattern_table = [
-        ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
-        ('tidl.transpose_reshape', _transpose_reshape_pattern()),
-        ('tidl.tanspose_batch_reshape', _transpose_batch_reshape_pattern()),
-        ('tidl.multibox_prior_concat', _multibox_prior_concat_pattern()),
-        ('tidl.mutlibox_prior_nms', _multibox_prior_nms_pattern()),
-        ('tidl.reshape_avgpool', _reshape_avg_pool_pattern()),
-        ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern()),
-        ('tidl.reshape_dense', _reshape_dense_pattern()),
-        ('tidl.reshape_softmax', _reshape_softmax_pattern()),
-        ('tidl.reshape_transpose', _reshape_transpose_pattern()),
-        ('tidl.conv2d_relu', _conv2d_relu_pattern()),
-        ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern()),
-        ('tidl.bn_relu', _bn_relu_pattern()),
-        ('tidl.dense_relu', _dense_relu_pattern()),
-        ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
-        ('tidl.conv2d_bias', _conv2d_bias_pattern()),
-        ('tidl.dense_bias', _dense_bias_pattern()),
-        ('tidl.conv2d_pad', _conv2d_pad_pattern()),
+        ('tidlj6.squeeze_reshape', _squeeze_reshape_pattern()),
+        ('tidlj6.transpose_reshape', _transpose_reshape_pattern()),
+        ('tidlj6.tanspose_batch_reshape', _transpose_batch_reshape_pattern()),
+        ('tidlj6.multibox_prior_concat', _multibox_prior_concat_pattern()),
+        ('tidlj6.mutlibox_prior_nms', _multibox_prior_nms_pattern()),
+        ('tidlj6.reshape_avgpool', _reshape_avg_pool_pattern()),
+        ('tidlj6.reshape_globalavgpool', _reshape_global_avg_pool_pattern()),
+        ('tidlj6.reshape_dense', _reshape_dense_pattern()),
+        ('tidlj6.reshape_softmax', _reshape_softmax_pattern()),
+        ('tidlj6.reshape_transpose', _reshape_transpose_pattern()),
+        ('tidlj6.conv2d_relu', _conv2d_relu_pattern()),
+        ('tidlj6.conv2d_bias_relu', _conv2d_bias_relu_pattern()),
+        ('tidlj6.bn_relu', _bn_relu_pattern()),
+        ('tidlj6.dense_relu', _dense_relu_pattern()),
+        ('tidlj6.dense_bias_relu', _dense_bias_relu_pattern()),
+        ('tidlj6.conv2d_bias', _conv2d_bias_pattern()),
+        ('tidlj6.dense_bias', _dense_bias_pattern()),
+        ('tidlj6.conv2d_pad', _conv2d_pad_pattern()),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
 
-@reg.register("tidl.squeeze_reshape", "target.tidl")
+@reg.register("tidlj6.squeeze_reshape", "target.tidlj6")
 def _tidl_squeeze_reshape_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.transpose_reshape", "target.tidl")
+@reg.register("tidlj6.transpose_reshape", "target.tidlj6")
 def _tidl_transpose_reshape_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.transpose_batch_reshape", "target.tidl")
+@reg.register("tidlj6.transpose_batch_reshape", "target.tidlj6")
 def _tidl_transpose_batch_reshape_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.multibox_prior_concat", "target.tidl")
+@reg.register("tidlj6.multibox_prior_concat", "target.tidlj6")
 def _tidl_multibox_prior_concat_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.mutlibox_prior_nms", "target.tidl")
+@reg.register("tidlj6.mutlibox_prior_nms", "target.tidlj6")
 def _tidl_mutlibox_prior_nms_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.reshape_avgpool", "target.tidl")
+@reg.register("tidlj6.reshape_avgpool", "target.tidlj6")
 def _tidl_reshape_avgpool_whitelist_fn(attrs, args):
     return _avg_pool_whitelist_fn(attrs, args)
 
-@reg.register("tidl.reshape_globalavgpool", "target.tidl")
+@reg.register("tidlj6.reshape_globalavgpool", "target.tidlj6")
 def _tidl_reshape_globalavgpool_whitelist_fn(attrs, args):
     return _global_avg_pool_whitelist_fn(attrs, args)
 
-@reg.register("tidl.reshape_dense", "target.tidl")
+@reg.register("tidlj6.reshape_dense", "target.tidlj6")
 def _tidl_reshape_dense_whitelist_fn(attrs, args):
     return _dense_whitelist_fn(attrs, args)
 
-@reg.register("tidl.reshape_squeeze", "target.tidl")
+@reg.register("tidlj6.reshape_squeeze", "target.tidlj6")
 def _tidl_reshape_squeeze_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.reshape_softmax", "target.tidl")
+@reg.register("tidlj6.reshape_softmax", "target.tidlj6")
 def _tidl_reshape_softmax_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.reshape_transpose", "target.tidl")
+@reg.register("tidlj6.reshape_transpose", "target.tidlj6")
 def _tidl_reshape_transpose_whitelist_fn(attrs, args):
     return True
 
-@reg.register("tidl.conv2d_relu", "target.tidl")
+@reg.register("tidlj6.conv2d_relu", "target.tidlj6")
 def _conv2d_relu_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
-@reg.register("tidl.conv2d_bias_relu", "target.tidl")
+@reg.register("tidlj6.conv2d_bias_relu", "target.tidlj6")
 def _conv2d_bias_relu_whitelist_fn(attrs, args):
     conv2d_op = args[0].args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
-@reg.register("tidl.bn_relu", "target.tidl")
+@reg.register("tidlj6.bn_relu", "target.tidlj6")
 def _bn_relu_whitelist_fn(attrs, args):
     bn_op = args[0]
     return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
 
-@reg.register("tidl.dense_relu", "target.tidl")
+@reg.register("tidlj6.dense_relu", "target.tidlj6")
 def _dense_relu_whitelist_fn(attrs, args):
     dense_op = args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
-@reg.register("tidl.dense_bias_relu", "target.tidl")
+@reg.register("tidlj6.dense_bias_relu", "target.tidlj6")
 def _dense_bias_relu_whitelist_fn(attrs, args):
     dense_op = args[0].args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
-@reg.register("tidl.conv2d_bias", "target.tidl")
+@reg.register("tidlj6.conv2d_bias", "target.tidlj6")
 def _conv2d_bias_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
-@reg.register("tidl.dense_bias", "target.tidl")
+@reg.register("tidlj6.dense_bias", "target.tidlj6")
 def _dense_bias_relu_whitelist_fn(attrs, args):
     dense_op = args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
-@reg.register("tidl.conv2d_pad", "target.tidl")
+@reg.register("tidlj6.conv2d_pad", "target.tidlj6")
 def _conv2d_pad_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     pad_supported = (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
     conv2d_supported = _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
     return (pad_supported and conv2d_supported)
 
-@reg.register("add", "target.tidl")
+@reg.register("add", "target.tidlj6")
 def _add_whitelist_fn(attrs, args):
     supported = True
     return supported
 
-@reg.register("nn.argmax", "target.tidl")
+@reg.register("nn.argmax", "target.tidlj6")
 def _argmax_whitelist_fn(attrs, args):
     keepdims = attrs.keepdims
     exclude = attrs.exclude
@@ -291,14 +291,14 @@ def _argmax_whitelist_fn(attrs, args):
     supported = (int(infer_shape(data)[1]) <= 15 and keepdims == 1 and axis == 1 and exclude == 0)
     return supported
 
-@reg.register("nn.avg_pool2d", "target.tidl")
+@reg.register("nn.avg_pool2d", "target.tidlj6")
 def _avg_pool_whitelist_fn(attrs, args):
     pool_size = get_const_tuple(attrs.pool_size)
     strides = get_const_tuple(attrs.strides)
     supported = (pool_size[0] <= 9 and pool_size[1] <= 9 and strides[0] <= 3 and strides[1] <=2)
     return supported
 
-@reg.register("nn.batch_flatten", "target.tidl")
+@reg.register("nn.batch_flatten", "target.tidlj6")
 def _batch_flatten_fn(attrs, args):
     data = args[0]
     if(len(infer_shape(data)) == 4):
@@ -307,7 +307,7 @@ def _batch_flatten_fn(attrs, args):
         supported = True
     return supported
 
-@reg.register("nn.batch_norm", "target.tidl")
+@reg.register("nn.batch_norm", "target.tidlj6")
 def _batch_norm_whitelist_fn(attrs, args):
     #These are the relay arguments... look up the operator to get the actual name...
     data1 = infer_type(args[1])
@@ -320,24 +320,24 @@ def _batch_norm_whitelist_fn(attrs, args):
 
     return supported
 
-@reg.register("nn.bias_add", "target.tidl")
+@reg.register("nn.bias_add", "target.tidlj6")
 def _bias_add_whitelist_fn(attrs, args):
     # Standalone bias_add is not supported.
     return False
 
-@reg.register("clip", "target.tidl")
+@reg.register("clip", "target.tidlj6")
 def _clip_whitelist_fn(attrs, args):
     a_min = attrs.a_min
     a_max = attrs.a_max
     supported = (a_min == 0 and a_max == 6)
     return supported
 
-@reg.register("concatenate", "target.tidl")
+@reg.register("concatenate", "target.tidlj6")
 def _concatenate_whitelist_fn(attrs, args):
     supported = (attrs.axis == 1) or (attrs.axis == 3)
     return supported
 
-@reg.register("nn.conv2d", "target.tidl")
+@reg.register("nn.conv2d", "target.tidlj6")
 def _conv2d_whitelist_fn(attrs, args):
     weight = infer_type(args[1])
     if weight.checked_type.dtype != 'float32':
@@ -358,7 +358,7 @@ def _conv2d_whitelist_fn(attrs, args):
 
     return supported
 
-@reg.register("nn.conv2d_transpose", "target.tidl")
+@reg.register("nn.conv2d_transpose", "target.tidlj6")
 def _conv2d_transpose_whitelist_fn(attrs, args):
     weight = args[1]
     weight_shape  = get_const_tuple(infer_shape(weight))
@@ -367,7 +367,7 @@ def _conv2d_transpose_whitelist_fn(attrs, args):
     supported = (weight_shape[0] == weight_shape[1]) and (weight_shape[0] == groups) and (strides[1] == 2)
     return supported
 
-@reg.register("nn.dense", "target.tidl")
+@reg.register("nn.dense", "target.tidlj6")
 def _dense_whitelist_fn(attrs, args):
     weight = args[1]
 
@@ -378,12 +378,12 @@ def _dense_whitelist_fn(attrs, args):
     supported = (w_in <= 65536) and (w_out <= 16384) and (w_in * w_out <= 67108864)
     return supported
 
-@reg.register("nn.dropout", "target.tidl")
+@reg.register("nn.dropout", "target.tidlj6")
 def _dropout_whitelist_fn(attrs, args):
     supported = True
     return supported
 
-@reg.register("nn.global_avg_pool2d", "target.tidl")
+@reg.register("nn.global_avg_pool2d", "target.tidlj6")
 def _global_avg_pool_whitelist_fn(attrs, args):
     shape = list(map(int, args[0].checked_type.shape))
     layout = attrs.layout
@@ -396,41 +396,41 @@ def _global_avg_pool_whitelist_fn(attrs, args):
     supported = height * width <= 4096
     return supported
 
-@reg.register("nn.max_pool2d", "target.tidl")
+@reg.register("nn.max_pool2d", "target.tidlj6")
 def _max_pool_whitelist_fn(attrs, args):
     pool_size = get_const_tuple(attrs.pool_size)
     strides   = get_const_tuple(attrs.strides)
     supported = (pool_size[0] <= 9) and (pool_size[1] <= 9) and (strides[0] <= 3) and (strides[1] <= 2)
     return supported
 
-@reg.register("multiply", "target.tidl")
+@reg.register("multiply", "target.tidlj6")
 def _multiply_whitelist_fn(attrs, args):
     #supported = True
     supported = False
     return supported
 
-@reg.register("nn.nms", "target.tidl")
+@reg.register("nn.nms", "target.tidlj6")
 def _nms_whitelist_fn(attrs, args):
     supported = True
     return supported
 
-@reg.register("nn.pad", "target.tidl")
+@reg.register("nn.pad", "target.tidlj6")
 def _pad_whitelist_fn(attrs, args):
     # Standalone pad is not supported.
     return False
 
-@reg.register("nn.relu", "target.tidl")
+@reg.register("nn.relu", "target.tidlj6")
 def _relu_whitelist_fn(attrs, args):
     # Standalone relu is not supported.
     return False
 
-@reg.register("nn.slice_like", "target.tidl")
+@reg.register("nn.slice_like", "target.tidlj6")
 def _slice_like_whitelist_fn(attrs, args):
     #supported = (attrs.axis == 1)
     supported = False
     return supported
 
-@reg.register("nn.softmax", "target.tidl")
+@reg.register("nn.softmax", "target.tidlj6")
 def _softmax_whitelist_fn(attrs, args):
     supported = (attrs.axis != 2)
     return supported

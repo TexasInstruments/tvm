@@ -112,12 +112,15 @@ def model_compile(model_name, mod_orig, params,
 
     if force_arm_only is True:
         mod = mod_orig
+        tidlEnabled = False
     else:
-        mod = tidl.EnableTIDL(mod_orig, params, num_tidl_subgraphs, 
-                              data_layout, input_node, input_data, 
-                              artifacts_folder, tidl_calib_tool)
+        mod = tidl.EnableTIDLJ6(mod_orig, params, num_tidl_subgraphs, 
+                                data_layout, input_node, input_data, 
+                                artifacts_folder, tidl_calib_tool)
+        tidlEnabled = True
         if mod == None:  # TIDL cannot be enabled - no offload to TIDL
             mod = mod_orig
+            tidlEnabled = False
 
     graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     path_lib    = os.path.join(artifacts_folder, "deploy_lib.so")
@@ -128,6 +131,8 @@ def model_compile(model_name, mod_orig, params,
       fo.write(graph)
     with open(path_params, "wb") as fo:
       fo.write(relay.save_param_dict(params))
+
+    return tidlEnabled
 
 def test_tidl_tf(model_name):
     dtype = "float32"
@@ -236,7 +241,7 @@ def test_tidl_gluoncv_ssd(model_name):
     #    np.savetxt("graph_out_"+str(i)+".txt", results[i].flatten(), fmt='%10.5f')
 
     #======================== Compile the model ========================
-    model_compile(model_name, ssd_mod, ssd_params, data_layout, input_name, input_data)
+    assert model_compile(model_name, ssd_mod, ssd_params, data_layout, input_name, input_data)
 
 def test_tidl_gluoncv_segmentation(model_name):
     input_name = "data"
@@ -379,7 +384,7 @@ if __name__ == '__main__':
                    'resnet18v2',
                    'squeezenet1.1'
                    ]
-    ssd_models = ['ssd_512_mobilenet1.0_coco',
+    ssd_models = [#'ssd_512_mobilenet1.0_coco',
                   'ssd_512_mobilenet1.0_voc',
                  ]
     seg_models = ['mask_rcnn_resnet18_v1b_coco',
@@ -395,8 +400,8 @@ if __name__ == '__main__':
 #        test_tidl_tf(tf_model)
 #    for onnx_model in onnx_models:
 #        test_tidl_onnx(onnx_model)
-#    for ssd_model in ssd_models:
-#        test_tidl_gluoncv_ssd(ssd_model)
+    for ssd_model in ssd_models:
+        test_tidl_gluoncv_ssd(ssd_model)
 #    for seg_model in seg_models:
 #        test_tidl_gluoncv_segmentation(seg_model)
 #    test_tidl_gluoncv_deeplab()

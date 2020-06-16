@@ -33,20 +33,20 @@
 #include <unordered_map>
 
 #include "../codegen_c/codegen_c.h"
-#include "../../../../runtime/contrib/tidl/tidl_runtime.h"
+#include "../../../../runtime/contrib/tidl/runtime_j6.h"
 
 namespace tvm {
 namespace relay {
 namespace contrib {
 
 /*!
- * \brief Generates a TIDLModule from a Relay expression. The generated TIDLModule
+ * \brief Generates a TIDLJ6Module from a Relay expression. The generated TIDLJ6Module
  * does not contain the TIDL representation, since the conversion from Relay to
- * TIDL representation needs to be done before codegen. The TIDLModule only
+ * TIDL representation needs to be done before codegen. The TIDLJ6Module only
  * contains total number of subgraphs, and number of inputs and outputs for each
  * subgraph. 
  */
-class TIDLModuleCodeGen : public CSourceModuleCodegenBase {
+class TIDLJ6ModuleCodeGen : public CSourceModuleCodegenBase {
  public:
   /*! 
    * \brief Get the number of inputs and number of outputs for a subgraph.
@@ -84,8 +84,8 @@ class TIDLModuleCodeGen : public CSourceModuleCodegenBase {
       LOG(FATAL)
           << "The input ref is expected to be a Relay function or module.";
     }
-    return runtime::TIDLModuleCreate(total_subgraphs, subgraph_num_inputs, 
-                                     subgraph_num_outputs);
+    return runtime::TIDLJ6ModuleCreate(total_subgraphs, subgraph_num_inputs, 
+                                       subgraph_num_outputs);
   }
 
  private:
@@ -99,12 +99,12 @@ class TIDLModuleCodeGen : public CSourceModuleCodegenBase {
  * and compile it into a TIDL runtime module.
  *
  */
-runtime::Module TIDLCompiler(const ObjectRef& ref) {
-  TIDLModuleCodeGen tidl;
+runtime::Module TIDLJ6Compiler(const ObjectRef& ref) {
+  TIDLJ6ModuleCodeGen tidl;
   return tidl.CreateCSourceModule(ref);
 }
 
-TVM_REGISTER_GLOBAL("relay.ext.tidl").set_body_typed(TIDLCompiler);
+TVM_REGISTER_GLOBAL("relay.ext.tidlj6").set_body_typed(TIDLJ6Compiler);
 
 }  // namespace contrib
 }  // namespace relay

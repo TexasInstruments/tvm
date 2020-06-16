@@ -17,7 +17,6 @@ from tvm.relay.function import Function
 from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name
 from tvm.contrib import graph_runtime
-from tvm.relay.op.contrib import tidl
 
 #TODO: get tidl_import_lib from upper level test code - test_tidl.py
 if os.getenv("TIDL_TOOLS_PATH") is None:
@@ -137,7 +136,7 @@ def find_in_nodes(all_nodes, this_node):
         elif isinstance(node, relay.expr.Tuple):
             input_nodes = input_nodes + find_in_nodes(all_nodes, node)
         elif isinstance(node, relay.expr.Var):
-            if "tidl_" in node.name_hint and "_i" in node.name_hint:
+            if "tidl" in node.name_hint and "_i" in node.name_hint:
                 # this is the input to the subgraph
                 input_nodes.append(-1)
         #else: ignore all other types of nodes: var, const, etc.
@@ -820,7 +819,7 @@ def tidl_import_tuple_node(all_nodes, node):
         # this is not the last node of the graph - ignore it
         return True
 
-def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder):
+def import_relay_ir(tidl_target, mod, params, subgraph_tensors, data_layout, tidl_calib_tool, artifacts_folder):
     r""" Relay IR import to TIDL 
 
     Parameters
@@ -844,7 +843,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
     tidl_subgraphs = []
     for node in all_nodes_main:
         if isinstance(node, relay.expr.GlobalVar):
-            if 'tidl' in node.name_hint:
+            if tidl_target in node.name_hint:
                 tidl_subgraphs.append(node.name_hint)
 
     if len(tidl_subgraphs) == 0:
@@ -854,7 +853,7 @@ def import_relay_ir(mod, params, subgraph_tensors, data_layout, tidl_calib_tool,
     # For each TIDL subgraph, import to TIDL and calibrate 
     for tidl_subgraph in tidl_subgraphs:
         # Extract subgraph id and input/output tensor names from subgraph name
-        subgraph_id = int(tidl_subgraph.replace('tidl_',''))
+        subgraph_id = int(tidl_subgraph.replace(tidl_target+'_',''))
         in_tensor_name  = tidl_subgraph + '_i'
         out_tensor_name = tidl_subgraph + '_o'
 
@@ -1048,7 +1047,7 @@ class VarReplacer(ExprMutator):
             return self.var_map[var]
         return super().visit_var(var)
 
-def UnpackComposites(mod, compiler="tidl"):
+def UnpackComposites(mod, compiler="tidlj6"):
     class Unpacker(ExprMutator):
         def __init__(self):
             ExprMutator.__init__(self)
@@ -1150,7 +1149,7 @@ class RemoveMultiplyByOne(ExprMutator):
                     return expr.args[1]
         return super().visit_call(expr)
 
-def generate_subgraph_tensors(mod, params, input_node, input_data):
+def generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data):
     """
     """
 
@@ -1158,7 +1157,7 @@ def generate_subgraph_tensors(mod, params, input_node, input_data):
     # executed on CPU and will give additional outputs for boundary tensors.
     mod_tvm = relay.transform.InferType()(mod)
     mod_tvm = relay.transform.Inline()(mod_tvm)
-    my_mutator = CalibrationGraphMutator("tidl")
+    my_mutator = CalibrationGraphMutator(tidl_target)
     mod_tvm["main"] = my_mutator.make_calibration_graph(mod_tvm["main"])
     #print("Calibration module:", mod_tvm)
     print("Input map:", my_mutator.name_map)
@@ -1252,7 +1251,7 @@ class SubgraphRemover(ExprMutator):
                 return subgraph_gv(*args)
         return super().visit_call(call)
 
-def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl"):
+def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidlj6"):
     subgraph_names_to_remove = []
     # Remove subgraphs with more than 1 input or tuple inputs.
     for subgraph in mod.get_global_vars():
@@ -1267,7 +1266,7 @@ def PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl"):
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
 
-def PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
+def PruneSubgraphs(mod, compiler="tidlj6", num_subgraphs_to_keep=4):
     subgraph_with_macs = []
     for subgraph in mod.get_global_vars():
         name = subgraph.name_hint
@@ -1285,9 +1284,12 @@ def PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4):
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
 
-def EnableTIDL(mod, params, num_tidl_subgraphs, 
-               data_layout, input_node, input_data, 
-               artifacts_folder, calib_tool):
+def EnableTIDLJ6(mod, params, num_tidl_subgraphs, 
+                 data_layout, input_node, input_data, 
+                 artifacts_folder, calib_tool):
+
+    import tvm.relay.op.contrib.tidl_j6 as tidl
+    tidl_target = "tidlj6"
 
     mod = relay.transform.RemoveUnusedFunctions()(mod)
     # Bind params so that weights will appear as constants instead of variables 
@@ -1306,7 +1308,7 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     print("---------- Merge Composite Functions ----------")
     mod = tidl._merge_sequential_ops(mod) 
     print("---------- Annotated Graph ----------")
-    mod = transform.AnnotateTarget("tidl")(mod)
+    mod = transform.AnnotateTarget(tidl_target)(mod)
     #print(mod.astext(show_meta_data=False))
     print("---------- Merge Compiler Regions ----------")
     mod = transform.MergeCompilerRegions()(mod)
@@ -1315,21 +1317,21 @@ def EnableTIDL(mod, params, num_tidl_subgraphs,
     mod = transform.PartitionGraph()(mod)
     #print(mod.astext(show_meta_data=False))
     print("---------- Unpack composite ops in the graph ----------")
-    mod = UnpackComposites(mod, "tidl")
+    mod = UnpackComposites(mod, compiler=tidl_target)
     #print(mod.astext(show_meta_data=False))
-    print('NUM TIDL SUBGRAPHS BEFORE PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
+    print('NUM TIDL SUBGRAPHS BEFORE PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith(tidl_target)]))
     print("---------- Prune Graph ----------")
-    mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler="tidl")
+    mod = PruneSubgraphsWithMoreThanOneInput(mod, compiler=tidl_target)
     #print(mod.astext(show_meta_data=False))
-    mod = PruneSubgraphs(mod, compiler="tidl", num_subgraphs_to_keep=num_tidl_subgraphs)
-    print('NUM TIDL SUBGRAPHS AFTER PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith("tidl")]))
+    mod = PruneSubgraphs(mod, compiler=tidl_target, num_subgraphs_to_keep=num_tidl_subgraphs)
+    print('NUM TIDL SUBGRAPHS AFTER PRUNING:', sum([1 for subgraph in mod.get_global_vars() if subgraph.name_hint.startswith(tidl_target)]))
     print(mod.astext(show_meta_data=False))
 
     #============= Generate subgraph boundary tensors ==============
-    subgraph_tensors = generate_subgraph_tensors(mod, params, input_node, input_data)
+    subgraph_tensors = generate_subgraph_tensors(tidl_target, mod, params, input_node, input_data)
 
     #======================== Import the graph to TIDL ========================
-    if import_relay_ir(mod, params, subgraph_tensors, data_layout, calib_tool, artifacts_folder) == True:
+    if import_relay_ir(tidl_target, mod, params, subgraph_tensors, data_layout, calib_tool, artifacts_folder) == True:
         print("Graph execution with TIDL.")
         return mod
     else:
