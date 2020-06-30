@@ -28,6 +28,8 @@
 
 #include <string>
 #include <unordered_map>
+#include <memory>
+#include <vector>
 
 namespace tvm {
 namespace runtime {
@@ -39,8 +41,29 @@ namespace runtime {
  * \param num_outputs Map of subgraph name to number of outputs
  * \return TIDLModule created from subgraphs.
  */
-Module TIDLModuleCreate(int total_subgraphs, const std::unordered_map<std::string, int>& num_inputs,
-                        const std::unordered_map<std::string, int>& num_outputs);
+Module TIDLJ6ModuleCreate(int total_subgraphs,
+                          const std::unordered_map<std::string, int>& num_inputs,
+                          const std::unordered_map<std::string, int>& num_outputs);
+
+// Class to pass information between the TIDL compiler and runtime module
+// classes. This is only used by J7 for now, but J6 could easily be refactored
+// to use the same approach.
+class TIDLSubgraphInfo {
+ public:
+  std::string net_data;
+  std::string params_data;
+  std::vector<std::string> input_names;
+  std::size_t num_outputs;
+
+  std::size_t NumInputs() const { return input_names.size(); }
+  std::size_t NumOutputs() const { return num_outputs; }
+
+  void Save(dmlc::JSONWriter* writer) const;
+  void Load(dmlc::JSONReader* reader);
+};
+
+Module TIDLJ7ModuleCreate(std::unordered_map<std::string, TIDLSubgraphInfo> infos);
+
 }  // namespace runtime
 }  // namespace tvm
 

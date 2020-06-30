@@ -73,6 +73,7 @@ tvm_option(USE_TFLITE "Build with tflite support" OFF)
 tvm_option(USE_TENSORFLOW_PATH "TensorFlow root path when use TFLite" none)
 tvm_option(USE_COREML "Build with coreml support" OFF)
 tvm_option(USE_TIDL "Build with TIDL" OFF)
+tvm_option(USE_TIDL_RT_PATH "Path to TIDL RT API" none)
 
 if(USE_CPP_RPC AND UNIX)
   message(FATAL_ERROR "USE_CPP_RPC is only supported with WIN32. Use the Makefile for non-Windows.")

@@ -100,7 +100,10 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
 
     #target = "llvm -target=armv7l-linux-gnueabihf" # for AM57x or J6 devices
     target = "llvm"                                 # for host
-    graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+
+    with tidl.build_config(artifacts_folder="tempDir", platform="j7"):
+        graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
     path_graph = os.path.join(tidl_artifacts_folder, "deploy_graph.json")
     path_params = os.path.join(tidl_artifacts_folder, "deploy_param.params")

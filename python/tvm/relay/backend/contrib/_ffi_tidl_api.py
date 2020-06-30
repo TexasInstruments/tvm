@@ -1,3 +1,4 @@
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,19 +15,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+"""TIDL APIs """
+import tvm._ffi
 
-if(USE_TIDL STREQUAL "ON")
-  message(STATUS "Build with contrib.tidl, path=" ${USE_TIDL_RT_PATH})
-  if (USE_TIDL_RT_PATH STREQUAL "none")
-    message("TIDL RT path not set, J7 runtime support will not be available")
-  else()
-    include_directories(${USE_TIDL_RT_PATH}/inc)
-  endif()
-
-  file(GLOB TIDL_RELAY_CONTRIB_SRC src/relay/backend/contrib/tidl/*.cc)
-  list(APPEND COMPILER_SRCS ${TIDL_RELAY_CONTRIB_SRC})
-
-  file(GLOB TIDL_CONTRIB_SRC src/runtime/contrib/tidl/*.cc)
-  list(APPEND RUNTIME_SRCS ${TIDL_CONTRIB_SRC})
-endif()
-
+tvm._ffi._init_api("tidl", __name__)

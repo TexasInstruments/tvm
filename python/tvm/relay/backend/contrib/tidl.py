@@ -39,6 +39,25 @@ from .tidl_reduce_subgraph_size import reduce_subgraph_size
 
 tidl_annotations_registered = False
 
+import tvm._ffi
+
+from . import _ffi_tidl_api
+
+_tidl_mod = None
+
+class RelayGraphParams:
+    def __init__(self):
+        self.data_layout = 'UNDEFINED'
+
+    def SetDataLayout(self, layout):
+        self.data_layout = layout
+
+    def GetDataLayout(self):
+        return self.data_layout
+
+    def DataLayoutIsSet(self):
+        return(self.data_layout != 'UNDEFINED')
+
 def traverse_expr(node, node_dict):
     if node in node_dict:
         return
@@ -527,7 +546,6 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_thres
     new_mod = tvm.IRModule()
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
-
 
 def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
                      input_scale, input_signed, output_scale, output_signed):
@@ -2147,3 +2165,27 @@ class TIDLCompiler:
             mod_final, status = mod_orig, 0           # No TIDL compilation
 
         return mod_final, status
+
+@tvm._ffi.register_object("tidl.TIDLContext")
+class TIDLContext(tvm.runtime.Object):
+    def __init__(self,
+                 artifacts_directory, platform):
+
+        self.__init_handle_by_constructor__(_ffi_tidl_api.TIDLContext, artifacts_directory, platform)
+
+    def __enter__(self):
+        _ffi_tidl_api.EnterTIDLContext(self)
+        return self
+
+    def __exit__(self, ptype, value, trace):
+        _ffi_tidl_api.ExitTIDLContext(self)
+
+    @staticmethod
+    def current():
+        """Return the current pass context."""
+        return _ffi_tidl_api.GetCurrentTIDLContext()
+
+def build_config(artifacts_folder, platform="j6"):
+    CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
+    return CreateTIDLContext(artifacts_folder, platform)
+
