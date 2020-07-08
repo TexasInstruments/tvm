@@ -31,12 +31,10 @@ from tvm import relay
 from tvm.relay.expr_functor import ExprMutator
 from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
-from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name
 from tvm.contrib import graph_runtime
 import tvm.relay.op.contrib.tidl as tidl_annotation
 from .tidl_reduce_subgraph_size import reduce_subgraph_size
-
 
 def traverse_expr(node, node_dict):
     if node in node_dict:
@@ -181,14 +179,8 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix):
     return in_out_nodes
 
 def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
-    r""" Obtain input/output tensor for a given subgraph
+    r""" Obtain input/output tensor for a given subgraph"""
 
-    Parameters
-    ----------
-
-    Returns
-    -------
-    """
     tensor = []
     for key, value in subgraph_tensors.items():
         if key.find(tensor_name_prefix) != -1:
@@ -210,18 +202,19 @@ def tensor_quant_flatten(input_tensor, data_layout):
     if data_layout == "NHWC" and len(input_tensor.shape) == 3:
         input_tensor = input_tensor.transpose(2, 0, 1)
 
+    max_value = max(abs(np.amin(input_tensor)), np.amax(input_tensor))
+    if max_value == 0:
+        max_value = 1.0  # arbitrary number if input tensor is all 0's
     if np.amin(input_tensor) >= 0:
         # quantize to Uint8
         sign = 0
-        scale = 255.0/np.amax(input_tensor)
-        quant_min = 0
-        quant_max = 255
+        scale = 255.0/max_value
+        quant_min, quant_max = 0, 255
     else:
         # quantize to Int8
         sign = 1
-        scale = 128.0/max(abs(np.amin(input_tensor)), np.amax(input_tensor))
-        quant_min = -128
-        quant_max = 127
+        scale = 128.0/max_value
+        quant_min, quant_max = -128, 127
 
     tensor_norm = np.multiply(input_tensor, scale)
     tensor_quant = np.rint(tensor_norm)
@@ -350,27 +343,6 @@ class RemoveMultiplyByOne(ExprMutator):
                 if data.shape == () and data.item() == 1.0:
                     return call.args[1]
         return super().visit_call(call)
-
-@transform.function_pass(opt_level=0)
-class RemoveDropoutPass:
-    """
-    Removes all nn.dropout from an expr.
-    """
-
-    class RemoveDropout(ExprMutator):
-        """
-        Removes all nn.dropout from an expr.
-        """
-        def visit_tuple_getitem(self, expr):
-            visit = super().visit_tuple_getitem(expr)
-            if visit.index != 0:
-                return visit
-            elif isinstance(visit.tuple_value, tvm.relay.expr.Call) and visit.tuple_value.op.name == "nn.dropout":
-                return visit.tuple_value.args[0]
-            return visit
-
-    def transform_function(self, func, mod, _):
-        return self.RemoveDropout().visit(func)
 
 def generate_subgraph_tensors(tidl_target, mod, params, graph_input):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
@@ -527,11 +499,11 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_thres
         num_macs = relay.analysis.get_total_mac_number(mod[name])
         subgraph_with_macs.append([name, num_macs])
     subgraph_with_macs = sorted(subgraph_with_macs, key=lambda x: int(x[1]))
-    subgraphs_to_remove = subgraph_with_macs[:-num_subgraphs_to_keep]
+    subgraphs_to_prune = subgraph_with_macs[:-num_subgraphs_to_keep]
     if min_mac_threshold:
         # Also remove all subgraphs under the minimum threshold.
-        subgraphs_to_remove += [[x[0], x[1]] for x in subgraph_with_macs if x[1] < min_mac_threshold]
-    subgraph_names_to_remove = {x[0] for x in subgraphs_to_remove}
+        subgraphs_to_prune += [[x[0], x[1]] for x in subgraph_with_macs if x[1] < min_mac_threshold]
+    subgraph_names_to_remove = {x[0] for x in subgraphs_to_prune}
     # Create new pruned module
     new_mod = tvm.IRModule()
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
@@ -1261,9 +1233,13 @@ class TIDLImport:
 
         Returns
         -------
-        True:  if TIDL import succeeds or if there are no subgraphs for TIDL offload
-        False: if TIDL import fails
+        1: if TIDL import succeeds
+        -1: if TIDL import fails
+        0: if there are no subgraphs for TIDL offload
         """
+
+        # Define return values
+        import_succeed, import_fail, no_import = 1, -1, 0
 
         # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
         all_nodes_main = {}
@@ -1276,8 +1252,7 @@ class TIDLImport:
                     tidl_subgraphs.append(node.name_hint)
 
         if len(tidl_subgraphs) == 0:
-            # There are no subgraphs for TIDL offload
-            return False
+            return no_import
 
         # For each TIDL subgraph, import to TIDL and calibrate
         for tidl_subgraph in tidl_subgraphs:
@@ -1289,10 +1264,10 @@ class TIDLImport:
             # Obtain input tensor from TVM graph execution
             input_fp = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name)
             if input_fp is None:
-                return False
+                return import_fail
             if len(input_fp) > 1:
                 print("Error - only 1 input tensor is supported for now!")
-                return False
+                return import_fail
 
             # Quantize input tensor into 8-bit integer (only support 1 input tensor)
             input_quant_vec, input_scale, input_signed = tensor_quant_flatten(input_fp[0],
@@ -1300,7 +1275,7 @@ class TIDLImport:
 
             # Initialize TIDL import
             if not self.tidl_import_init(input_scale, input_signed, input_fp[0].shape):
-                return False
+                return import_fail
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
             all_nodes_tidl = {}
@@ -1310,7 +1285,7 @@ class TIDLImport:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params)
                     if not result:
-                        return False
+                        return import_fail
 
             # Import expr.Tuple node after importing all expr.call nodes
             for node in all_nodes_tidl:
@@ -1319,7 +1294,7 @@ class TIDLImport:
                     result = self.tidl_import_tuple_node(all_nodes_tidl, node)
                     if not result:
                         print('Error importing output tuple node')
-                        return False
+                        return import_fail
 
             # Invoke TIDL optimization of the imported graph
             net_file = os.path.join(self.artifacts_folder,
@@ -1335,13 +1310,13 @@ class TIDLImport:
 
             if import_lib_optimize(net_fname, par_fname, subgraph_id) == 0:
                 print('TIDL import optimization failed')
-                return False
+                return import_fail
 
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool, input_quant_vec,
                                                       input_signed, net_file, par_file)
             if not status:
-                return False
+                return import_fail
 
             # Calculate scaling factor to convert output tensor to floating point
             # Obtain output tensor from TVM graph execution
@@ -1349,9 +1324,9 @@ class TIDLImport:
 
             # TODO: convert following lines into a function
             if output_fp is None:
-                return False
+                return import_fail
             if len(output_fp) != len(out_data_q):
-                return False
+                return import_fail
             output_signed = []
             output_scale = []
             for tensor in output_fp:
@@ -1364,7 +1339,7 @@ class TIDLImport:
             # Generate subgraph configuration file
             subgraph_cfg_gen(self.artifacts_folder, subgraph_id, self.data_layout,
                              input_scale, input_signed, output_scale, output_signed)
-        return True
+        return import_succeed
 
 
 class TIDLCompiler:
@@ -1441,26 +1416,24 @@ class TIDLCompiler:
         mod = relay.transform.FoldConstant()(mod)
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
 
-        #============= Find data layout and batch size =============
+        #============= Find data layout of the original graph =============
         data_layout = find_data_layout(mod)
-        input_data = list(graph_input.values())[0]
-        batch_size = input_data.shape[0]
 
         #============= Annotation and graph partition ==============
-        mod = RemoveDropoutPass()(mod)
         mod = tidl_annotation._merge_sequential_ops(mod)
-        mod = transform.AnnotateTarget(self.tidl_target)(mod)
-        mod = transform.MergeCompilerRegions()(mod)
-        mod = transform.PartitionGraph()(mod)
+        mod = relay.transform.AnnotateTarget(self.tidl_target)(mod)
+        mod = relay.transform.MergeCompilerRegions()(mod)
+        mod = relay.transform.PartitionGraph()(mod)
         mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
         mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
-                                   max_total_memory_mb=self.max_total_memory_mb/batch_size)
+                                   max_total_memory_mb=self.max_total_memory_mb)
         mod = unpack_composites(mod)
         mod = prune_subgraphs(mod, compiler=self.tidl_target,
                               num_subgraphs_to_keep=self.num_tidl_subgraphs,
                               min_mac_threshold=1)
         with tvm.transform.PassContext(opt_level=3):
-            mod = tvm.transform.Sequential([relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})])(mod)
+            convert_pass = [relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})]
+            mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs
 
         #============= Generate subgraph boundary tensors ==============
         subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input)
@@ -1473,17 +1446,20 @@ class TIDLCompiler:
                 import_lib = ctypes.CDLL(tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
                 tidl_import = TIDLImport(import_lib, tidl_calib_tool, self.artifacts_folder,
                                          self.tidl_target, data_layout)
-                import_success = tidl_import.import_relay_ir(mod, params, subgraph_tensors)
+                import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors)
                 _ctypes.dlclose(import_lib._handle)
-                if import_success:
+                if import_status == 1:
                     print("TIDL import of Relay IR graph succeeded.")
                     print("TIDL artifacts are stored at " + self.artifacts_folder)
                     mod_final, status = mod, 1        # TIDL Compilation success
-                else:
+                elif import_status == -1:
                     print("TIDL import of Relay IR graph failed.")
                     mod_final, status = mod_orig, -1  # TIDL Compilation failure
+                else:
+                    print("There are no subgraphs for TIDL offload.")
+                    mod_final, status = mod_orig, 0   # No TIDL compilation
             else:
-                print("TIDL tools do not exist. TIDL import skipped.")
+                print("TIDL import lib does not exist. TIDL import skipped.")
                 mod_final, status = mod_orig, 0       # No TIDL compilation
         else:
             print("TIDL tools path is not set. TIDL import skipped.")

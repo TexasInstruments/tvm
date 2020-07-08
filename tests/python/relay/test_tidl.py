@@ -17,32 +17,40 @@
 """Unit tests for TIDL compilation."""
 
 import os
+import sys
 import numpy as np
 import pytest
+import tensorflow as tf
+import onnx
+import torch
+import tflite.Model
 from tvm import relay
 from tvm.contrib.download import download_testdata
+from tvm.relay.testing import tf as tf_testing
 from tvm.relay.backend.contrib import tidl
 
-def get_compiler_path():
+def get_arm_compiler():
+    """ Get ARM compiler if it is available """
     arm_gcc_path = os.getenv("ARM_GCC_PATH")
     if arm_gcc_path is None:
         print("Environment variable ARM_GCC_PATH is not set! Model won't be compiled!")
-        return None
+        arm_compiler = None
     else:
         arm_gcc = os.path.join(arm_gcc_path, "arm-linux-gnueabihf-g++")
         if os.path.exists(arm_gcc):
-            return arm_gcc
+            arm_compiler = arm_gcc
         else:
             print("ARM GCC arm-linux-gnueabihf-g++ does not exist! Model won't be compiled!")
-            return None
+            arm_compiler = None
+    return arm_compiler
 
 def get_tidl_tools_path():
+    """ Get TIDL tools if they are available """
     tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
     if tidl_tools_path is None:
         print("Environment variable TIDL_TOOLS_PATH is not set! Model won't be compiled!")
-        return None
-    else:
-        return tidl_tools_path
+
+    return tidl_tools_path
 
 def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=1):
     """ Compile a model in Relay IR graph
@@ -68,13 +76,13 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
             0  - no compilation due to missing TIDL tools or GCC ARM tools
     """
 
-    tidl_artifacts_folder = "./artifacts_" + model_name
+    tidl_artifacts_folder = "./artifacts/" + model_name
     if os.path.isdir(tidl_artifacts_folder):
         filelist = [f for f in os.listdir(tidl_artifacts_folder)]
         for file in filelist:
             os.remove(os.path.join(tidl_artifacts_folder, file))
     else:
-        os.mkdir(tidl_artifacts_folder)
+        os.makedirs(tidl_artifacts_folder)
 
     tidl_compiler = tidl.TIDLCompiler("AM57", (6, 3),
                                       num_tidl_subgraphs=num_tidl_subgraphs,
@@ -82,7 +90,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
                                       tidl_tools_path=get_tidl_tools_path())
     mod, status = tidl_compiler.enable(mod_orig, params, model_input)
 
-    arm_gcc = get_compiler_path()
+    arm_gcc = get_arm_compiler()
     if arm_gcc is None:
         print("Skip build because ARM_GCC_PATH is not set")
         return 0  # No graph compilation
@@ -106,7 +114,182 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     print("Artifacts can be found at " + tidl_artifacts_folder)
     return status
 
-def gluoncv_compile_model(model_name, img_file, img_size=None, img_norm="ssd", batch_size=4):
+def get_input_nchw(input_shape):
+    """ Get input data in 'NCHW' layout """
+    batch_size = input_shape[0]
+    orig_image = np.load(os.path.join('./dog.npy'))  # "NCHW"
+    image_data = np.squeeze(orig_image, axis=0) # CHW
+    if orig_image.shape[2:4] != input_shape[2:4]:
+        try:
+            import cv2  # import OpenCV2 here instead of top to avoid CI error
+            image_data = image_data.transpose(2, 1, 0)  # WHC
+            image_resize = cv2.resize(image_data, dsize=(input_shape[3], input_shape[2]))
+            image_resize = image_resize.transpose(2, 1, 0)  # CHW
+        except ModuleNotFoundError:
+            print("Please install OpenCV2")
+            sys.exit()
+    else:
+        image_resize = image_data
+    # Normalize input data to (-1,1)
+    image_norm = image_resize/np.amax(np.abs(image_resize))
+    # Set batch_size of input data
+    input_data = np.concatenate([image_norm[np.newaxis, :, :]]*batch_size)
+    return input_data
+
+def test_tidl_onnx(batch_size=4):
+    """ Test TIDL compilation for ONNX models """
+    model_metadata = {
+        'resnet18v1': (224, 224, 'data'),
+        'resnet18v2': (224, 224, 'data'),
+        'resnet50': (224, 224, 'data'),
+        'squeezenet1.1': (224, 224, 'data'),
+        'resnet101v1': (224, 224, 'data'),
+    }
+    models = {
+        'resnet18v1': 'resnet18v1',
+        'resnet18v2': 'resnet18v2',
+        'resnet50': 'resnet50-v1-7',
+        'squeezenet1.1': 'squeezenet1.1',
+        'resnet101v1': 'resnet101v1',
+    }
+
+    for key, value in model_metadata.items():
+        model_file = 'onnx_models/' + models[key] + '.onnx'
+        print('testing model:', key, ' loading from:', model_file)
+        height, weight, input_node = value
+        input_shape = (batch_size, 3, height, weight)
+        # Get input data
+        input_data = get_input_nchw(input_shape)
+        # Load the model to Relay
+        onnx_model = onnx.load(model_file)
+        onnx_mod, onnx_params = relay.frontend.from_onnx(onnx_model, {input_node:input_shape})
+        # Compile the model for TIDL
+        model_name = 'onnx_' + key
+        model_compile(model_name, onnx_mod, onnx_params, {input_node:input_data})
+
+def get_tf_input(input_shape):
+    """ Get input data for Tensorflow models """
+    input_shape_nchw = (input_shape[0], input_shape[3], input_shape[1], input_shape[2])
+    input_data_nchw = get_input_nchw(input_shape_nchw)  # data in "NCHW" layout
+    input_data = input_data_nchw.transpose(0, 2, 3, 1)  # TF uses "NHWC" layout
+    return input_data
+
+def create_relay_graph_from_tf(model, input_name, input_shape, output_name):
+    """ Create Relay graph from Tensorflow model """
+    with tf.gfile.GFile(model, 'rb') as f:
+        # Import tensorflow graph definition to relay frontend.
+        graph_def = tf.GraphDef()
+        graph_def.ParseFromString(f.read())
+        tf.import_graph_def(graph_def, name='')
+        graph_def = tf_testing.ProcessGraphDefParam(graph_def)
+
+    # Add shapes to the graph.
+    with tf.Session() as sess:
+        graph_def = tf_testing.AddShapesToGraphDef(sess, output_name)
+
+    # Load the model to Relay
+    mod, params = relay.frontend.from_tensorflow(graph_def, layout="NHWC",
+                                                 shape={input_name:input_shape},
+                                                 outputs=None)
+    # Clear the default graph stack and reset the global default graph
+    tf.compat.v1.reset_default_graph()
+
+    return mod, params
+
+@pytest.mark.skip('skip pytest because models must be pre-downloaded')
+def test_tidl_tensorflow(batch_size=4):
+    """ Test TIDL compilation for Tensorflow models """
+    model_metadata = {
+        'mobilenet100_v1': (224, 224, 'input', 'MobilenetV1/Predictions/Softmax'),
+        'mobilenet100_v2': (224, 224, 'input', 'MobilenetV2/Predictions/Softmax'),
+        'inception_v1': (224, 224, 'input', 'softmax/Softmax'),
+        'inception_v3': (299, 299, 'input', 'InceptionV3/Predictions/Softmax'),
+        'mobilenet130_v2': (224, 224, 'Placeholder', 'mobilenet130v2/probs'),
+    }
+    models = {
+        'mobilenet100_v1': 'mobilenet_v1_1.0_224',
+        'mobilenet100_v2': 'mobilenet_v2_1.0_224',
+        'inception_v1': 'inception_v1',
+        'inception_v3': 'inception_v3',
+        'mobilenet130_v2': 'mobilenet_v2_130',
+    }
+
+    for key, value in model_metadata.items():
+        model_file = 'tf_slim_models/' + models[key] + '_frozen.pb'
+        print('testing model:', key, ' loading from:', model_file)
+        height, weight, input_name, output_name = value
+        input_shape = (batch_size, height, weight, 3)
+        # Get input data
+        input_data = get_tf_input(input_shape)
+        # Load the model to Relay
+        mod, params = create_relay_graph_from_tf(model_file, input_name, input_shape, output_name)
+        # Compile the model for TIDL
+        model_name = 'tf_slim_' + key
+        model_compile(model_name, mod, params, {input_name:input_data})
+
+@pytest.mark.skip('skip pytest because models must be pre-downloaded')
+def test_tidl_pytorch(batch_size=4):
+    """ Test TIDL compilation for Pytorch models """
+    model_metadata = {
+        'inception_v3': (299, 299, 'input'),
+        #'resnet152': (224, 224, 'input'),
+    }
+    models = {
+        'inception_v3': 'inception_v3',
+        'resnet152': 'resnet152',
+    }
+
+    for key, value in model_metadata.items():
+        model_file = 'pytorch_models/' + models[key] + '.pth'
+        print('testing model:', key, ' loading from:', model_file)
+        height, weight, input_name = value
+        input_shape = (batch_size, 3, height, weight)
+        # Load the model to Relay
+        torch_model = torch.jit.load(model_file, map_location='cpu').float().eval()
+        mod, params = relay.frontend.from_pytorch(torch_model, [(input_name, input_shape)])
+        # Get input data
+        input_data = get_input_nchw(input_shape)
+        # Compile the model for TIDL
+        model_name = 'pytorch_' + key
+        model_compile(model_name, mod, params, {input_name:input_data})
+
+@pytest.mark.skip('skip pytest because models must be pre-downloaded')
+def test_tidl_tflite(batch_size=4):
+    """ Test TIDL compilation for Tensorflow Lite models """
+    model_metadata = {
+        'mobilenet100_v1': (224, 224, 'input'),
+        'mobilenet100_v2': (224, 224, 'input'),
+        #'densenet': (224, 224, 'input'),
+        #'mnasnet': (224, 224, 'input'),
+        'resnet_v2_101': (299, 299, 'input'),
+    }
+    models = {
+        'mobilenet100_v1': 'mobilenet_v1_1.0_224',
+        'mobilenet100_v2': 'mobilenet_v2_1.0_224',
+        'densenet': 'densenet_2018_04_27',
+        'mnasnet': 'mnasnet_1.0_224',
+        'resnet_v2_101': 'resnet_v2_101_299',
+    }
+    for key, value in model_metadata.items():
+        model_file = 'tflite_models/' + models[key] + '.tflite'
+        print('testing model:', key, ' loading from:', model_file)
+        height, weight, input_name = value
+        input_shape = (batch_size, height, weight, 3)
+        # Load the model to Relay
+        with open(model_file, "rb") as f:
+            tflite_model_buf = f.read()
+        tflite_model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
+        mod, params = relay.frontend.from_tflite(tflite_model,
+                                                 shape_dict={input_name: input_shape},
+                                                 dtype_dict={input_name: "float32"})
+        # Get input data
+        input_data = get_tf_input(input_shape)
+        # Compile the model for TIDL
+        model_name = 'tflite_' + key
+        model_compile(model_name, mod, params, {input_name:input_data})
+
+def gluoncv_compile_model(model_name, img_file, batch_size, img_size=None, img_norm="ssd"):
+    """ Compile Gluon-CV models """
     try:
         from gluoncv import model_zoo, data
 
@@ -124,13 +307,14 @@ def gluoncv_compile_model(model_name, img_file, img_size=None, img_norm="ssd", b
         mod, params = relay.frontend.from_mxnet(model, {input_name:input_data.shape})
 
         #======================== Compile the model ========================
-        status = model_compile(model_name, mod, params, {input_name:input_data})
+        status = model_compile("gluon_"+model_name, mod, params, {input_name:input_data})
         assert status != -1, "TIDL compilation failed"   # For CI test
 
     except ModuleNotFoundError:
         print("gluoncv not installed. Skipping Gluon-CV model compilation.")
 
-def test_tidl_classification():
+def test_tidl_gluon_classification(batch_size=4):
+    """ Test TIDL compilation for Gluon-CV image classification models """
     classification_models = ['mobilenet1.0', 'mobilenetv2_1.0', 'resnet101_v1', 'densenet121']
     image_size = 224
 
@@ -140,9 +324,10 @@ def test_tidl_classification():
 
     for model_name in classification_models:
         #======================== Load and compile the model ========================
-        gluoncv_compile_model(model_name, img_file, img_size=image_size)
+        gluoncv_compile_model(model_name, img_file, batch_size, img_size=image_size)
 
-def test_tidl_object_detection():
+def test_tidl_gluon_object_detection(batch_size=4):
+    """ Test TIDL compilation for Gluon-CV object detection models """
     object_detection_models = ['ssd_512_mobilenet1.0_voc', 'yolo3_mobilenet1.0_coco']
     image_size = 512
 
@@ -153,10 +338,11 @@ def test_tidl_object_detection():
 
     for model_name in object_detection_models:
         #======================== Load and compile the model ========================
-        gluoncv_compile_model(model_name, img_file, img_size=image_size)
+        gluoncv_compile_model(model_name, img_file, batch_size, img_size=image_size)
 
 @pytest.mark.skip('skip because of incompatible gluoncv version')
-def test_tidl_segmentation():
+def test_tidl_gluon_segmentation(batch_size=1):
+    """ Test TIDL compilation for Gluon-CV segmentation models """
     model_name = 'mask_rcnn_resnet18_v1b_coco'
 
     #======================== Load testing image =======================
@@ -165,9 +351,13 @@ def test_tidl_segmentation():
                                  module='data')
 
     #======================== Load and compile the model ========================
-    gluoncv_compile_model(model_name, img_file, img_norm="rcnn")
+    gluoncv_compile_model(model_name, img_file, batch_size, img_norm="rcnn")
 
 if __name__ == '__main__':
-    test_tidl_classification()
-    test_tidl_object_detection()
-    test_tidl_segmentation()
+    test_tidl_tensorflow()
+    test_tidl_onnx()
+    test_tidl_pytorch()
+    test_tidl_tflite()
+    test_tidl_gluon_classification()
+    test_tidl_gluon_object_detection()
+    test_tidl_gluon_segmentation()
