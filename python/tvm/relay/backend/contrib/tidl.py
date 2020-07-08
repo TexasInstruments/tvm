@@ -560,7 +560,8 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outScaleF2Q   = {}\n".format(print_list(output_scale)))
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
-def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, params_file):
+def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file,
+                         params_file, platform="AM57"):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Prepare for calibration
@@ -576,6 +577,11 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, pa
         input_quant_vec.astype('int8').tofile(calib_raw_image)
     else:
         input_quant_vec.astype('uint8').tofile(calib_raw_image)
+
+    if platform == "J7":
+        import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
+        import_lib_postprocess()
+        return True, 123  ## TODO: do we need dataQ for J7?
 
     output_tmp_file = temp_folder + 'precalib_net.bin'
     shutil.copyfile(net_file, output_tmp_file)
@@ -706,11 +712,12 @@ class TIDLImport:
         Data layout, "NCHW" or "NHWC"
     """
     def __init__(self, import_lib, calib_tool, artifacts_folder,
-                 tidl_target="tidl", data_layout="NCHW"):
+                 tidl_target="tidl", tidl_platform="AM57", data_layout="NCHW"):
         self.import_lib = import_lib
         self.calib_tool = calib_tool
         self.artifacts_folder = artifacts_folder
         self.tidl_target = tidl_target
+        self.tidl_platform = tidl_platform
         self.data_layout = data_layout
 
     def tidl_import_conv2d(self, this_node, params):
@@ -1048,12 +1055,20 @@ class TIDLImport:
         if self.data_layout == "NCHW":
             layout = b'NCHW'
             (channel, height, width) = in_shape[1:4]
+            is_nchw = 1
         elif self.data_layout == "NHWC":
             layout = b'NHWC'
             (channel, height, width) = (in_shape[3], in_shape[1], in_shape[2])
+            is_nchw = 0
         else:
             print('data layout ' + self.data_layout + ' is not supported')
             return False
+
+        if self.tidl_platform == "J7":
+            import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
+            import_lib_init(input_scale, input_signed, channel, height, width,
+                            is_nchw)
+            return True
 
         in_quant_factor = int(round(input_scale*255))  # 255 is due to TIDL implementation
         config_params = TIDLconfigParams(12, 50, in_quant_factor, input_signed,
@@ -1083,6 +1098,20 @@ class TIDLImport:
         Returns
         True if import succeeds or False if import fails
         """
+
+        if self.tidl_platform == "J7":
+            import_lib_node = tvm.get_global_func("TIDL_relayImportNode")
+            if import_lib_node(this_node) != 0:
+                return False
+            in_out_nodes = find_in_out_nodes(all_nodes, this_node,
+                                             self.tidl_target)
+            import_lib_linknode = tvm.get_global_func(
+                                                    "TIDL_relayImportLinkNode")
+            if import_lib_linknode(ctypes.cast(ctypes.byref(in_out_nodes),
+                                               ctypes.c_void_p)) == 0:
+                return True
+            else:
+                return False
 
         status = True
         if this_node.op.name == 'nn.conv2d':
@@ -1302,19 +1331,30 @@ class TIDLImport:
             par_file = os.path.join(self.artifacts_folder,
                                     'tidl_subgraph'+str(subgraph_id)+'_params.bin')
 
-            import_lib_optimize = self.import_lib.tidlImportOptimize
-            import_lib_optimize.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int)
-            import_lib_optimize.restype = ctypes.c_int
-            net_fname = net_file.encode('utf-8')
-            par_fname = par_file.encode('utf-8')
+            if self.tidl_platform == "AM57":
+                import_lib_optimize = self.import_lib.tidlImportOptimize
+                import_lib_optimize.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int)
+                import_lib_optimize.restype = ctypes.c_int
+                net_fname = net_file.encode('utf-8')
+                par_fname = par_file.encode('utf-8')
 
-            if import_lib_optimize(net_fname, par_fname, subgraph_id) == 0:
-                print('TIDL import optimization failed')
-                return import_fail
+                if import_lib_optimize(net_fname, par_fname, subgraph_id) == 0:
+                    print('TIDL import optimization failed')
+                    return import_fail
+            else:  # == "J7"
+                import_lib_optimize = tvm.get_global_func(
+                                                       "TIDL_relayOptimizeNet")
+                import_lib_optimize()
 
             # Calibrate TIDL for the imported subgraph
-            status, out_data_q = subgraph_calibration(self.calib_tool, input_quant_vec,
-                                                      input_signed, net_file, par_file)
+            status, out_data_q = subgraph_calibration(self.calib_tool,
+                                     input_quant_vec, input_signed,
+                                     net_file, par_file, self.tidl_platform)
+            if self.tidl_platform == "J7":
+                if status:
+                    return import_succeed
+                else:
+                    return import_fail
             if not status:
                 return import_fail
 
@@ -1365,6 +1405,7 @@ class TIDLCompiler:
     """
 
     def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=448, **kwargs):
+        self.tidl_platform = platform
         if platform == "AM57" and version >= (6, 3):
             # Set default values for AM57 6.3
             self.tidl_target = "tidl"
@@ -1379,6 +1420,29 @@ class TIDLCompiler:
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
+            self.tidl_calib_tool = os.path.join(self.tidl_tools_path,
+                                                "eve_test_dl_algo_ref.out")
+            self.tidl_import_lib = os.path.join(self.tidl_tools_path,
+                                                "tidl_relayImport.so")
+        elif platform == "J7" and version >= (7, 0):
+            # Set default values for J7, PSDK 7.0 or newer
+            self.tidl_target = "tidl"
+            self.num_tidl_subgraphs = 1
+            self.artifacts_folder = None
+            self.tidl_tools_path = None
+            # Read arguments provided through regular args
+            self.max_num_layers = max_num_layers
+            self.max_total_memory_mb = max_total_memory_mb
+            # Read arguments provided through **kwargs
+            for key in ('num_tidl_subgraphs', 'artifacts_folder',
+                        'tidl_tools_path'):
+                if key in kwargs:
+                    setattr(self, key, kwargs[key])
+            assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
+            self.tidl_calib_tool = os.path.join(self.tidl_tools_path,
+                                                "PC_dsp_test_dl_algo.out")
+            self.tidl_import_lib = os.path.join(self.tidl_tools_path,
+                                                "tidl_model_import_relay.so")
         else:
             sys.exit("Unsupported TIDL platform or version!")
 
@@ -1440,12 +1504,14 @@ class TIDLCompiler:
 
         #================ Import the graph to TIDL =====================
         if self.tidl_tools_path is not None:
-            tidl_calib_tool = os.path.join(self.tidl_tools_path, "eve_test_dl_algo_ref.out")
-            tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_relayImport.so")
-            if os.path.exists(tidl_calib_tool) and os.path.exists(tidl_import_lib):
-                import_lib = ctypes.CDLL(tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
-                tidl_import = TIDLImport(import_lib, tidl_calib_tool, self.artifacts_folder,
-                                         self.tidl_target, data_layout)
+            if (os.path.exists(self.tidl_calib_tool) and
+                os.path.exists(self.tidl_import_lib)):
+                import_lib = ctypes.CDLL(self.tidl_import_lib,
+                                         mode=ctypes.RTLD_GLOBAL)
+                tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
+                                         self.artifacts_folder,
+                                         self.tidl_target, self.tidl_platform,
+                                         data_layout)
                 import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors)
                 _ctypes.dlclose(import_lib._handle)
                 if import_status == 1:
