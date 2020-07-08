@@ -80,11 +80,24 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(bias_out)
         return relu_out
 
+    #relu has to be preceded by conv2d and bias_add
+    def _conv2d_add_relu_pattern():
+        conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+        add_out = is_op('add')(conv2d_out, is_constant())
+        relu_out = is_op('nn.relu')(add_out)
+        return relu_out
+
     #bias_add has be preceded by conv2d
     def _conv2d_bias_pattern():
         conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
         return bias_out
+
+    #bias_add has be preceded by conv2d
+    def _conv2d_add_pattern():
+        conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+        add_out = is_op('add')(conv2d_out, is_constant())
+        return add_out
 
     #pad has be preceded by conv2d
     def _conv2d_pad_pattern():
@@ -104,6 +117,13 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(add_out)
         return relu_out
 
+    def _add_relu_checker(extract):
+        add = extract.args[0]
+        if any([isinstance(arg, tvm.relay.expr.Constant) for arg in add.args]):
+            # Can't add constant unless used like bias_add in a pattern such as "conv2d_add_relu".
+            return False
+        return True
+
     def _dense_relu_pattern():
         dense_out = is_op('nn.dense')(wildcard(), is_constant())
         relu_out = is_op('nn.relu')(dense_out)
@@ -116,11 +136,24 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(bias_out)
         return relu_out
 
+    #relu has to be preceded by dense and bias_add
+    def _dense_add_relu_pattern():
+        dense_out = is_op('nn.dense')(wildcard(), is_constant())
+        add_out = is_op('add')(dense_out, is_constant())
+        relu_out = is_op('nn.relu')(add_out)
+        return relu_out
+
     #bias_add has to be preceded by dense
     def _dense_bias_pattern():
         dense_out = is_op('nn.dense')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(dense_out, is_constant())
         return bias_out
+
+    #bias_add has to be preceded by dense
+    def _dense_add_pattern():
+        dense_out = is_op('nn.dense')(wildcard(), is_constant())
+        add_out = is_op('add')(dense_out, is_constant())
+        return add_out
 
     pattern_table = [
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
@@ -133,13 +166,17 @@ def _merge_sequential_ops(mod):
         ('tidl.reshape_softmax', _reshape_softmax_pattern()),
         ('tidl.conv2d_relu', _conv2d_relu_pattern()),
         ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern()),
+        ('tidl.conv2d_add_relu', _conv2d_add_relu_pattern()),
         ('tidl.conv2d_bias', _conv2d_bias_pattern()),
+        ('tidl.conv2d_add', _conv2d_add_pattern()),
         ('tidl.conv2d_pad', _conv2d_pad_pattern()),
         ('tidl.bn_relu', _bn_relu_pattern()),
-        ('tidl.add_relu', _add_relu_pattern()),
+        ('tidl.add_relu', _add_relu_pattern(), _add_relu_checker),
         ('tidl.dense_relu', _dense_relu_pattern()),
         ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
+        ('tidl.dense_add_relu', _dense_add_relu_pattern()),
         ('tidl.dense_bias', _dense_bias_pattern()),
+        ('tidl.dense_add', _dense_add_pattern()),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
@@ -183,6 +220,11 @@ def _conv2d_bias_relu_whitelist_fn(attrs, args):
     conv2d_op = args[0].args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
+@tvm.ir.register_op_attr("tidl.conv2d_add_relu", "target.tidl")
+def _conv2d_add_relu_whitelist_fn(attrs, args):
+    conv2d_op = args[0].args[0]
+    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+
 @tvm.ir.register_op_attr("tidl.bn_relu", "target.tidl")
 def _bn_relu_whitelist_fn(attrs, args):
     bn_op = args[0]
@@ -203,13 +245,28 @@ def _dense_bias_relu_whitelist_fn(attrs, args):
     dense_op = args[0].args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
+@tvm.ir.register_op_attr("tidl.dense_add_relu", "target.tidl")
+def _dense_add_relu_whitelist_fn(attrs, args):
+    dense_op = args[0].args[0]
+    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+
 @tvm.ir.register_op_attr("tidl.conv2d_bias", "target.tidl")
 def _conv2d_bias_whitelist_fn(attrs, args):
     conv2d_op = args[0]
     return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
+@tvm.ir.register_op_attr("tidl.conv2d_add", "target.tidl")
+def _conv2d_add_whitelist_fn(attrs, args):
+    conv2d_op = args[0]
+    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+
 @tvm.ir.register_op_attr("tidl.dense_bias", "target.tidl")
 def _dense_bias_whitelist_fn(attrs, args):
+    dense_op = args[0]
+    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+
+@tvm.ir.register_op_attr("tidl.dense_add", "target.tidl")
+def _dense_add_whitelist_fn(attrs, args):
     dense_op = args[0]
     return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
@@ -223,6 +280,9 @@ def _conv2d_pad_whitelist_fn(attrs, args):
 
 @tvm.ir.register_op_attr("add", "target.tidl")
 def _add_whitelist_fn(attrs, args):
+    if any([isinstance(arg, tvm.relay.expr.Constant) for arg in args]):
+        # Can't add constant unless used like bias_add in a pattern such as "conv2d_add_relu".
+        return False
     supported = True
     return supported
 
