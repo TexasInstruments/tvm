@@ -20,13 +20,8 @@ import os
 import sys
 import numpy as np
 import pytest
-import tensorflow as tf
-import onnx
-import torch
-import tflite.Model
 from tvm import relay
 from tvm.contrib.download import download_testdata
-from tvm.relay.testing import tf as tf_testing
 from tvm.relay.backend.contrib import tidl
 
 def get_arm_compiler():
@@ -136,8 +131,11 @@ def get_input_nchw(input_shape):
     input_data = np.concatenate([image_norm[np.newaxis, :, :]]*batch_size)
     return input_data
 
+@pytest.mark.skip('skip pytest because models must be pre-downloaded')
 def test_tidl_onnx(batch_size=4):
     """ Test TIDL compilation for ONNX models """
+    import onnx     # import ONNX here instead of top to avoid CI error
+
     model_metadata = {
         'resnet18v1': (224, 224, 'data'),
         'resnet18v2': (224, 224, 'data'),
@@ -176,6 +174,9 @@ def get_tf_input(input_shape):
 
 def create_relay_graph_from_tf(model, input_name, input_shape, output_name):
     """ Create Relay graph from Tensorflow model """
+    import tensorflow as tf     # import TF here instead of top to avoid CI error
+    from tvm.relay.testing import tf as tf_testing
+
     with tf.gfile.GFile(model, 'rb') as f:
         # Import tensorflow graph definition to relay frontend.
         graph_def = tf.GraphDef()
@@ -230,6 +231,8 @@ def test_tidl_tensorflow(batch_size=4):
 @pytest.mark.skip('skip pytest because models must be pre-downloaded')
 def test_tidl_pytorch(batch_size=4):
     """ Test TIDL compilation for Pytorch models """
+    import torch    # import Pytorch here instead of top to avoid CI error
+
     model_metadata = {
         'inception_v3': (299, 299, 'input'),
         #'resnet152': (224, 224, 'input'),
@@ -256,6 +259,8 @@ def test_tidl_pytorch(batch_size=4):
 @pytest.mark.skip('skip pytest because models must be pre-downloaded')
 def test_tidl_tflite(batch_size=4):
     """ Test TIDL compilation for Tensorflow Lite models """
+    import tflite.Model # import TFLite here instead of top to avoid CI error
+
     model_metadata = {
         'mobilenet100_v1': (224, 224, 'input'),
         'mobilenet100_v2': (224, 224, 'input'),
