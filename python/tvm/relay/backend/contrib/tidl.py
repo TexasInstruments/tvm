@@ -561,7 +561,7 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
 def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file,
-                         params_file, platform="AM57"):
+                         params_file, platform="AM57", tidl_tensor_bits=8):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Prepare for calibration
@@ -573,10 +573,16 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file,
     # Save quantized input vector to a file for calib tool to read
     # Saving as 'int8' or 'uint8' is the same
     calib_raw_image = temp_folder + 'calib_raw_data.bin'
-    if input_signed == 1:
-        input_quant_vec.astype('int8').tofile(calib_raw_image)
+    if tidl_tensor_bits == 8:
+        if input_signed == 1:
+            input_quant_vec.astype('int8').tofile(calib_raw_image)
+        else:
+            input_quant_vec.astype('uint8').tofile(calib_raw_image)
     else:
-        input_quant_vec.astype('uint8').tofile(calib_raw_image)
+        if input_signed == 1:
+            input_quant_vec.astype('int16').tofile(calib_raw_image)
+        else:
+            input_quant_vec.astype('uint16').tofile(calib_raw_image)
 
     if platform == "J7":
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
@@ -710,15 +716,19 @@ class TIDLImport:
         TIDL compilation target
     data_layout : string
         Data layout, "NCHW" or "NHWC"
+    tidl_tensor_bits : int
+        Number of bits for tidl tensors (and consequently params on J7)
     """
     def __init__(self, import_lib, calib_tool, artifacts_folder,
-                 tidl_target="tidl", tidl_platform="AM57", data_layout="NCHW"):
+                 tidl_target="tidl", tidl_platform="AM57", data_layout="NCHW",
+                 tidl_tensor_bits=8):
         self.import_lib = import_lib
         self.calib_tool = calib_tool
         self.artifacts_folder = artifacts_folder
         self.tidl_target = tidl_target
         self.tidl_platform = tidl_platform
         self.data_layout = data_layout
+        self.tidl_tensor_bits = tidl_tensor_bits
 
     def tidl_import_conv2d(self, this_node, params):
         r""" Import conv2d operator to TIDL
@@ -1067,7 +1077,7 @@ class TIDLImport:
         if self.tidl_platform == "J7":
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
             import_lib_init(input_scale, input_signed, channel, height, width,
-                            is_nchw)
+                            is_nchw, self.tidl_tensor_bits)
             return True
 
         in_quant_factor = int(round(input_scale*255))  # 255 is due to TIDL implementation
@@ -1349,7 +1359,8 @@ class TIDLImport:
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool,
                                      input_quant_vec, input_signed,
-                                     net_file, par_file, self.tidl_platform)
+                                     net_file, par_file, self.tidl_platform,
+                                     self.tidl_tensor_bits)
             if self.tidl_platform == "J7":
                 if status:
                     return import_succeed
@@ -1412,6 +1423,7 @@ class TIDLCompiler:
             self.num_tidl_subgraphs = 1
             self.artifacts_folder = None
             self.tidl_tools_path = None
+            self.tidl_tensor_bits = 8
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
@@ -1430,12 +1442,13 @@ class TIDLCompiler:
             self.num_tidl_subgraphs = 1
             self.artifacts_folder = None
             self.tidl_tools_path = None
+            self.tidl_tensor_bits = 16
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
             # Read arguments provided through **kwargs
             for key in ('num_tidl_subgraphs', 'artifacts_folder',
-                        'tidl_tools_path'):
+                        'tidl_tools_path', 'tidl_tensor_bits'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
@@ -1511,7 +1524,7 @@ class TIDLCompiler:
                 tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
                                          self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
-                                         data_layout)
+                                         data_layout, self.tidl_tensor_bits)
                 import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors)
                 _ctypes.dlclose(import_lib._handle)
                 if import_status == 1:

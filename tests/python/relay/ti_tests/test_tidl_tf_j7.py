@@ -84,7 +84,8 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     tidl_compiler = tidl.TIDLCompiler(tidl_platform, tidl_version,
                                       num_tidl_subgraphs=num_tidl_subgraphs,
                                       artifacts_folder=tidl_artifacts_folder,
-                                      tidl_tools_path=get_tidl_tools_path())
+                                      tidl_tools_path=get_tidl_tools_path(),
+                                      tidl_tensor_bits=16)
     mod, status = tidl_compiler.enable(mod_orig, params, model_input)
 
     #arm_gcc = get_compiler_path()
