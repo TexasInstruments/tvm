@@ -187,13 +187,14 @@ def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
             tensor.append(value)
     return tensor
 
-def tensor_quant_flatten(input_tensor, data_layout):
-    r""" Convert float32 n-d array to int8 or uint8 1-d array
+def tensor_quant_flatten(input_tensor, data_layout, tensor_bits):
+    r""" Convert float32 n-d array to int8/int16 or uint8/uint16 1-d array
 
     Parameters
     ----------
     input_tensor: float32 array
     data_layout: "NCHW" or "NHWC"
+    tensor_bits: 8 or 16
     """
 
     # only use 1 batch for calibration
@@ -205,16 +206,22 @@ def tensor_quant_flatten(input_tensor, data_layout):
     max_value = max(abs(np.amin(input_tensor)), np.amax(input_tensor))
     if max_value == 0:
         max_value = 1.0  # arbitrary number if input tensor is all 0's
+    abs_signed_max = 128.0
+    abs_unsigned_max = 255.0
+    if tensor_bits == 16:
+        abs_signed_max = 32768.0
+        abs_unsigned_max = 65535.0
+
     if np.amin(input_tensor) >= 0:
-        # quantize to Uint8
+        # quantize to Uint8 or Uint16
         sign = 0
-        scale = 255.0/max_value
-        quant_min, quant_max = 0, 255
+        scale = abs_unsigned_max/max_value
+        quant_min, quant_max = 0.0, abs_unsigned_max
     else:
-        # quantize to Int8
+        # quantize to Int8 or Int16
         sign = 1
-        scale = 128.0/max_value
-        quant_min, quant_max = -128, 127
+        scale = abs_signed_max/max_value
+        quant_min, quant_max = (- abs_signed_max), (abs_signed_max - 1.0)
 
     tensor_norm = np.multiply(input_tensor, scale)
     tensor_quant = np.rint(tensor_norm)
@@ -1309,8 +1316,8 @@ class TIDLImport:
                 return import_fail
 
             # Quantize input tensor into 8-bit integer (only support 1 input tensor)
-            input_quant_vec, input_scale, input_signed = tensor_quant_flatten(input_fp[0],
-                                                                              self.data_layout)
+            input_quant_vec, input_scale, input_signed = tensor_quant_flatten(
+                         input_fp[0], self.data_layout, self.tidl_tensor_bits)
 
             # Initialize TIDL import
             if not self.tidl_import_init(input_scale, input_signed, input_fp[0].shape):

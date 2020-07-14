@@ -180,8 +180,8 @@ def create_tf_relay_graph(model, input_node, input_shape, layout):
     if model == "MobileNetV1":
         #model    = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
         model    = "./mobileNet1/mobilenet_v1_1.0_224_final.pb"
-        #out_node = 'MobilenetV1/Predictions/Softmax'
-        out_node = 'MobilenetV1/MobilenetV1/Conv2d_0/Conv2D'
+        out_node = 'MobilenetV1/Predictions/Softmax'
+        #out_node = 'MobilenetV1/MobilenetV1/Conv2d_0/Conv2D'
         #out_node = 'MobilenetV1/MobilenetV1/Conv2d_0/BatchNorm/FusedBatchNorm'
         #out_node = 'MobilenetV1/MobilenetV1/Conv2d_0/Relu6'
     elif model == "MobileNetV2":
