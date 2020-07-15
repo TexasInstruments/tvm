@@ -178,14 +178,14 @@ def test_tidl_segmentation():
 def create_tf_relay_graph(model, input_node, input_shape, layout):
 
     if model == "MobileNetV1":
-        #model    = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
-        model    = "./mobileNet1/mobilenet_v1_1.0_224_final.pb"
+        model    = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
+        #model    = "./mobileNet1/mobilenet_v1_1.0_224_final.pb"
         out_node = 'MobilenetV1/Predictions/Softmax'
         #out_node = 'MobilenetV1/MobilenetV1/Conv2d_0/Conv2D'
-        #out_node = 'MobilenetV1/MobilenetV1/Conv2d_0/BatchNorm/FusedBatchNorm'
         #out_node = 'MobilenetV1/MobilenetV1/Conv2d_0/Relu6'
     elif model == "MobileNetV2":
         model    = "./mobileNet2/mobilenet_v2_1.0_224_frozen.pb"
+        #model    = "./mobileNet2/mobilenet_v2_1.0_224_final.pb"
         out_node = 'MobilenetV2/Predictions/Softmax'
     elif model == "InceptionV1":
         model    = "./inception1/inception_v1_fbn.pb"
@@ -215,9 +215,38 @@ def create_tf_relay_graph(model, input_node, input_shape, layout):
 
     return mod, params
 
-def test_tidl_tf_mobilenetv1():
+def create_tflite_relay_graph(model, input_node, input_shape, layout):
+    if model == "MobileNetV1":
+        model    = "./mobileNet1/mobilenet_v1_1.0_224.tflite"
+    elif model == "MobileNetV2":
+        model    = "./mobileNet2/mobilenet_v2_1.0_224.tflite"
+
+    # get TFLite model from buffer
+    tflite_model_buf = open(model, "rb").read()
+    try:
+        import tflite
+        tflite_model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
+    except AttributeError:
+        import tflite.Model
+        tflite_model = tflite.Model.Model.GetRootAsModel(tflite_model_buf, 0)
+
+    ##############################
+    # Load Neural Network in Relay
+    # ----------------------------
+
+    # TFLite input tensor name, shape and type
+    input_dtype = "float32"
+
+    # parse TFLite model and convert into Relay computation graph
+    mod, params = relay.frontend.from_tflite(tflite_model,
+                                         shape_dict={input_node: input_shape},
+                                         dtype_dict={input_node: input_dtype})
+    print("TensorflowLite model imported to Relay IR.")
+
+    return mod, params
+
+def test_tidl_tf_mobilenets(model_name, format="tf"):
     tidl_tools_path = get_tidl_tools_path()
-    model_name = "MobileNetV1"
     #dtype = "float32"
     data_layout = "NHWC"
     input_shape = (1, 224, 224, 3)
@@ -230,7 +259,11 @@ def test_tidl_tf_mobilenetv1():
     input_node = "input"
 
     #============= Create a Relay graph for MobileNet model ==============
-    tf_mod, tf_params = create_tf_relay_graph(model = model_name,
+    if format == "tflite":
+        create_relay_graph_func = create_tflite_relay_graph
+    else:
+        create_relay_graph_func = create_tf_relay_graph
+    tf_mod, tf_params = create_relay_graph_func(model = model_name,
                                               input_node  = input_node,
                                               input_shape = input_shape,
                                               layout = data_layout)
@@ -243,7 +276,10 @@ def test_tidl_tf_mobilenetv1():
     assert status != -1, "TIDL compilation failed"   # For CI test
 
 if __name__ == '__main__':
-    test_tidl_tf_mobilenetv1()
+    test_tidl_tf_mobilenets("MobileNetV1")
+    #test_tidl_tf_mobilenets("MobileNetV1", "tflite")
+    #test_tidl_tf_mobilenets("MobileNetV2")
+    #test_tidl_tf_mobilenets("MobileNetV2", "tflite")
     #test_tidl_classification()
     #test_tidl_object_detection()
     #test_tidl_segmentation()

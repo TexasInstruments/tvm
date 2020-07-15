@@ -1283,6 +1283,8 @@ class TIDLImport:
         -1: if TIDL import fails
         0: if there are no subgraphs for TIDL offload
         """
+        print("----- RelayIR Graph for importing to TIDL -----")
+        print(mod.astext(show_meta_data=False))
 
         # Define return values
         import_succeed, import_fail, no_import = 1, -1, 0
