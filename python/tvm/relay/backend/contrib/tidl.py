@@ -28,12 +28,13 @@ import numpy as np
 from topi.util import get_const_tuple
 import tvm
 from tvm import relay
+import tvm.ir
+from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple_get_item
 from tvm.relay.expr_functor import ExprMutator
 from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
-from tvm.relay.build_module import bind_params_by_name
 from tvm.contrib import graph_runtime
-import tvm.relay.op.contrib.tidl as tidl_annotation
+#import tvm.relay.op.contrib.tidl as tidl_annotation
 from .tidl_reduce_subgraph_size import reduce_subgraph_size
 
 def traverse_expr(node, node_dict):
@@ -1401,6 +1402,439 @@ class TIDLImport:
                              input_scale, input_signed, output_scale, output_signed)
         return import_succeed
 
+class TIDLAnnotation:
+    def __init__(self, platform, version, import_lib):
+        self.tidl_platform = platform
+        self.version = version
+        self.import_lib = import_lib
+
+    def register_whitelist_ops(self):
+        """ TIDL operators registration """
+        # Can't register annotations more than once.
+        if hasattr(self, "annotations_registered"):
+            return
+        self.annotations_registered = True
+        print(f"in TIDLAnnotation.register_whitelist_ops, platform={self.tidl_platform}")
+
+        # Register J7/J6 common operators which are always supported
+        self._register_supported_op("nn.dropout")
+
+        # Register J7/J6 common operators which are supported with same constraints
+        @tvm.ir.register_op_attr("add", "target.tidl")
+        def add_whitelist_fn(attrs, args):
+            # TODO: check if add is the same in J7
+            if any([isinstance(arg, tvm.relay.expr.Constant) for arg in args]):
+                # Can't add constant unless used like bias_add in a pattern like "conv2d_add_relu"
+                return False
+            return True
+
+        @tvm.ir.register_op_attr("clip", "target.tidl")
+        def clip_whitelist_fn(attrs, args):
+            # TODO: check if relu6 is the same in J7
+            a_min = attrs.a_min
+            a_max = attrs.a_max
+            return (a_min == 0 and a_max == 6)
+
+        @tvm.ir.register_op_attr("concatenate", "target.tidl")
+        def concatenate_whitelist_fn(attrs, args):
+            # TODO: check if concatenate is the same in J7
+            supported = (attrs.axis == 1) or (attrs.axis == 3)
+            return supported
+
+        # Register J7/J6 common operators which are supported with different constraints
+        self._register_constrained_op("nn.argmax")
+        self._register_constrained_op("nn.avg_pool2d")
+        self._register_constrained_op("nn.batch_norm")
+        self._register_constrained_op("nn.conv2d")
+        self._register_constrained_op("nn.dense")
+        self._register_constrained_op("nn.conv2d_transpose")
+        self._register_constrained_op("nn.global_avg_pool2d")
+        self._register_constrained_op("nn.max_pool2d")
+        self._register_constrained_op("nn.softmax")
+
+        # TODO: Register J7 specific operators
+        #if self.tidl_platform == 'J7':
+            #self._register_supported_op("nn.xyz")
+            #self._register_constrained_op("nn.xyz")
+
+        # Register J6 specific operators
+        #if self.tidl_platform == 'J6':
+            #self._register_supported_op("nn.xyz")
+            #self._register_constrained_op("nn.xyz")
+
+    def merge_sequential_ops(self, mod):
+        """Fuse sequential ops for op registration."""
+
+        # Squeeze has to be followed by reshape.
+        def _squeeze_reshape_pattern():
+            squeeze_out = is_op('squeeze')(wildcard())
+            reshape_out = is_op('reshape')(squeeze_out, wildcard())
+            return reshape_out
+
+        #tranpose has to be preceded and followed by reshape
+        def _transpose_reshape_pattern():
+            reshape_out1 = is_op('reshape')(wildcard(), wildcard())
+            transpose_out = is_op('transpose')(reshape_out1)
+            reshape_out2 = is_op('reshape')(transpose_out, wildcard())
+            return reshape_out2
+
+        #tranpose has to be followed by batch_flatten
+        def _transpose_batch_flatten_pattern():
+            transpose_out = is_op('transpose')(wildcard())
+            batch_flatten_out = is_op('nn.batch_flatten')(transpose_out)
+            return batch_flatten_out
+
+        #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense
+        def _reshape_avg_pool_pattern():
+            avg_pool_out = is_op('nn.avg_pool2d')(wildcard())
+            reshape_out = is_op('reshape')(avg_pool_out, wildcard())
+            return reshape_out
+        def _reshape_avg_pool_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.avg_pool2d', op.attrs, op.args)
+        def _reshape_global_avg_pool_pattern():
+            global_avg_pool_out = is_op('nn.global_avg_pool2d')(wildcard())
+            reshape_out = is_op('reshape')(global_avg_pool_out, wildcard())
+            return reshape_out
+        def _reshape_global_avg_pool_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.global_avg_pool2d', op.attrs, op.args)
+        def _reshape_dense_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            reshape_out = is_op('reshape')(dense_out, wildcard())
+            return reshape_out
+        def _reshape_dense_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+
+        #reshape has to be followed by softmax
+        def _reshape_softmax_pattern():
+            reshape_out = is_op('reshape')(wildcard(), wildcard())
+            softmax_out = is_op('nn.softmax')(reshape_out)
+            return softmax_out
+
+        #relu has to be preceded by conv2d
+        def _conv2d_relu_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            relu_out = is_op('nn.relu')(conv2d_out)
+            return relu_out
+        def _conv2d_relu_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
+
+        #relu has to be preceded by conv2d and bias_add
+        def _conv2d_bias_relu_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
+            relu_out = is_op('nn.relu')(bias_out)
+            return relu_out
+        def _conv2d_bias_relu_checker(extract):
+            op = extract.args[0].args[0]
+            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
+        def _conv2d_add_relu_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            add_out = is_op('add')(conv2d_out, is_constant())
+            relu_out = is_op('nn.relu')(add_out)
+            return relu_out
+        def _conv2d_add_relu_checker(extract):
+            op = extract.args[0].args[0]
+            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
+
+        #bias_add has be preceded by conv2d
+        def _conv2d_bias_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
+            return bias_out
+        def _conv2d_bias_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
+        def _conv2d_add_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            add_out = is_op('add')(conv2d_out, is_constant())
+            return add_out
+        def _conv2d_add_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
+
+        #pad has be preceded by conv2d
+        def _conv2d_pad_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            pad_out = is_op('nn.pad')(conv2d_out)
+            return pad_out
+        def _conv2d_pad_checker(extract):
+            pad_supported = (float(extract.attrs.pad_value) == 0.0 and \
+                            extract.attrs.pad_mode == 'constant')
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and pad_supported
+
+        #relu has to be preceded by batch_norm, add, dense
+        def _bn_relu_pattern():
+            bn_out = is_op('nn.batch_norm')(wildcard(), wildcard(), wildcard(), wildcard(),
+                                            wildcard())
+            tuple_get_item_node = is_tuple_get_item(bn_out, 0)
+            relu_out = is_op('nn.relu')(tuple_get_item_node)
+            return relu_out
+        def _bn_relu_checker(extract):
+            op = extract.args[0].tuple_value
+            return self.whitelist_check_func('nn.batch_norm', op.attrs, op.args)
+        def _add_relu_pattern():
+            add_out = is_op('add')(wildcard(), wildcard())
+            relu_out = is_op('nn.relu')(add_out)
+            return relu_out
+        def _add_relu_checker(extract):
+            add = extract.args[0]
+            if any([isinstance(arg, tvm.relay.expr.Constant) for arg in add.args]):
+                # Can't add constant unless used like bias_add in a pattern like "conv2d_add_relu".
+                return False
+            return True
+        def _dense_relu_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            relu_out = is_op('nn.relu')(dense_out)
+            return relu_out
+        def _dense_relu_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+
+        #relu has to be preceded by dense and bias_add
+        def _dense_bias_relu_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            bias_out = is_op('nn.bias_add')(dense_out, is_constant())
+            relu_out = is_op('nn.relu')(bias_out)
+            return relu_out
+        def _dense_bias_relu_checker(extract):
+            op = extract.args[0].args[0]
+            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+        def _dense_add_relu_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            add_out = is_op('add')(dense_out, is_constant())
+            relu_out = is_op('nn.relu')(add_out)
+            return relu_out
+        def _dense_add_relu_checker(extract):
+            op = extract.args[0].args[0]
+            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+
+        #bias_add has to be preceded by dense
+        def _dense_bias_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            bias_out = is_op('nn.bias_add')(dense_out, is_constant())
+            return bias_out
+        def _dense_bias_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+        def _dense_add_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            add_out = is_op('add')(dense_out, is_constant())
+            return add_out
+        def _dense_add_checker(extract):
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+
+        # common patterns required by J7 or J6
+        pattern_table = [
+            ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
+            ('tidl.reshape_avgpool', _reshape_avg_pool_pattern(), _reshape_avg_pool_checker),
+            ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
+                                           _reshape_global_avg_pool_checker),
+            ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
+            ('tidl.reshape_softmax', _reshape_softmax_pattern()),
+            ('tidl.conv2d_relu', _conv2d_relu_pattern(), _conv2d_relu_checker),
+            ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern(), _conv2d_bias_relu_checker),
+            ('tidl.conv2d_add_relu', _conv2d_add_relu_pattern(), _conv2d_add_relu_checker),
+            ('tidl.conv2d_bias', _conv2d_bias_pattern(), _conv2d_bias_checker),
+            ('tidl.conv2d_add', _conv2d_add_pattern(), _conv2d_add_checker),
+            ('tidl.conv2d_pad', _conv2d_pad_pattern(), _conv2d_pad_checker),
+            ('tidl.bn_relu', _bn_relu_pattern(), _bn_relu_checker),
+            ('tidl.add_relu', _add_relu_pattern(), _add_relu_checker),
+            ('tidl.dense_relu', _dense_relu_pattern(), _dense_relu_checker),
+            ('tidl.dense_bias_relu', _dense_bias_relu_pattern(), _dense_bias_relu_checker),
+            ('tidl.dense_add_relu', _dense_add_relu_pattern(), _dense_add_relu_checker),
+            ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
+            ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
+        ]
+        #if self.tidl_platform == 'J6':
+            # add additional patterns required by J6
+            #pattern_table.append([])
+
+        #if self.tidl_platform == 'J7':
+            # add additional patterns required by J7
+            #pattern_table.append([
+            #    ('tidl.transpose_reshape', _transpose_reshape_pattern()),
+            #    ('tidl.tanspose_batch_flatten', _transpose_batch_flatten_pattern()),
+            #])
+
+        return relay.transform.MergeComposite(pattern_table)(mod)
+
+    # Helper functions
+    def _register_supported_op(self, op_name):
+        @tvm.ir.register_op_attr(op_name, "target.tidl")
+        def _func_wrapper(attrs, args):
+            #if any([arg.checked_type.dtype != "float32" for arg in args]):
+            #    print("Only float32 inputs are supported for TensorRT.")
+            #    return False
+            return True
+        return _func_wrapper
+
+    #def _register_constrained_op(self, op_name, whitelist_func):
+    #    @tvm.ir.register_op_attr(op_name, "target.tidl")
+    #    def _func_wrapper(attrs, args):
+    #        return whitelist_func(attrs, args)
+    #    return _func_wrapper
+
+    def _register_constrained_op(self, op_name):
+        @tvm.ir.register_op_attr(op_name, "target.tidl")
+        def _func_wrapper(attrs, args):
+            return self.whitelist_check_func(op_name, attrs, args)
+        return _func_wrapper
+
+    #def _register_op_funcs(self, op_name, func_j7, func_j6):
+    #    @tvm.ir.register_op_attr(op_name, "target.tidl")
+    #    def _func_wrapper(attrs, args):
+    #        if self.tidl_platform == "J7":
+    #            func = func_j7
+    #        else:
+    #            func = func_j6
+    #        return func(attrs, args)
+    #    return _func_wrapper
+
+    # Whitelist functions for operators with different constraints for J7 and J6
+    def whitelist_check_func(self, op_name, attrs, args):
+        if self.tidl_platform == "J7":
+            return self.whitelist_fn_j7(op_name, attrs, args)
+        else:
+            return self.whitelist_fn_j6(op_name, attrs, args)
+
+    def whitelist_fn_j7(self, op_name, attrs, args):
+        if self.import_lib is None:
+            # For CI testing which doesn't have import library - still run TVM passes
+            return True
+        op = tvm.ir.Op.get(op_name)
+        callnode = tvm.relay.Call(op, args, attrs)
+        # Invoke TIDL import library call to check if this op can be supported
+        #whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
+        #return whitelist_fn(callnode)
+        return True  # for testing, to be replaced by whitelist_fn
+
+    def whitelist_fn_j6(self, op_name, attrs, args):
+        # Whitelist functions for J6 that are different from J7
+        def argmax_whitelist_fn(attrs, args):
+            keepdims = attrs.keepdims
+            exclude = attrs.exclude
+            axis = attrs.axis
+            data = args[0]
+            data_shape = data.checked_type.shape
+            supported = (int(data_shape[1]) <= 15 and keepdims == 1 and axis == 1 and exclude == 0)
+            return supported
+
+        def avg_pool_whitelist_fn(attrs, args):
+            pool_size = get_const_tuple(attrs.pool_size)
+            strides = get_const_tuple(attrs.strides)
+            supported = (pool_size[0] <= 9 and pool_size[1] <= 9 \
+                         and strides[0] <= 3 and strides[1] <= 2)
+            return supported
+
+        def batch_flatten_fn(attrs, args):
+            data = args[0]
+            data_shape = data.checked_type.shape
+            if len(data_shape) == 4:
+                supported = (int(data_shape[2]) <= 65535 and int(data_shape[3]) <= 65535)
+            else:
+                supported = True
+            return supported
+
+        def batch_norm_whitelist_fn(attrs, args):
+            data1 = args[1]
+            if data1.checked_type.dtype != 'float32':
+                supported = False
+            elif attrs.axis != 1 and attrs.axis != 3:
+                supported = False
+            else:
+                supported = True
+            return supported
+
+        def get_conv2d_num_channels(kernel_layout, weight_shape):
+            """ Get number of input and output channels of conv2d """
+            if kernel_layout == 'OIHW':
+                (num_in_channels, num_out_channels) = (weight_shape[1], weight_shape[0])
+            elif kernel_layout == 'HWIO':
+                (num_in_channels, num_out_channels) = (weight_shape[2], weight_shape[3])
+            else: # 'HWOI'
+                (num_in_channels, num_out_channels) = (weight_shape[3], weight_shape[2])
+            return (num_in_channels, num_out_channels)
+
+        def conv2d_whitelist_fn(attrs, args):
+            weight = args[1]
+            if weight.checked_type.dtype != 'float32':
+                return False
+            if attrs.kernel_layout not in ('OIHW', 'HWIO', 'HWOI'):
+                return False
+
+            weight_shape = weight.data.shape
+            strides = get_const_tuple(attrs.strides)
+            dilation = get_const_tuple(attrs.dilation)
+            kernel_size = get_const_tuple(attrs.kernel_size)
+            (dh, dw) = dilation
+            (kh, kw) = kernel_size
+            (num_in_chs, num_out_chs) = get_conv2d_num_channels(attrs.kernel_layout, weight_shape)
+            channel_supported = (num_in_chs <= 2048 and num_out_chs <= 2048)
+            stride_supported = (strides[0] <= 2 and strides[1] <= 2)
+            dilation_supported = (dh in (1, 2, 4)) and (dw in (1, 2, 4))
+            kernel_supported = (((kh-1)*dh+1) <= 9) and (((kw-1)*dw+1) <= 9)
+            groups_supported = (attrs.groups <= 1024)
+            supported = channel_supported and stride_supported and dilation_supported \
+                        and kernel_supported and groups_supported
+            return supported
+
+        def conv2d_transpose_whitelist_fn(attrs, args):
+            if attrs.kernel_layout not in ('OIHW', 'HWIO', 'HWOI'):
+                return False
+            weight = args[1]
+            weight_shape = weight.data.shape
+            strides = get_const_tuple(attrs.strides)
+            (num_in_chs, num_out_chs) = get_conv2d_num_channels(attrs.kernel_layout, weight_shape)
+            supported = (num_in_chs == num_out_chs) and (num_in_chs == attrs.groups) \
+                        and (strides[1] == 2)
+            return supported
+
+        def dense_whitelist_fn(attrs, args):
+            weight = args[1]
+            weight_shape = weight.data.shape
+            (w_in, w_out) = (weight_shape[1], weight_shape[0])
+            supported = (w_in <= 65536) and (w_out <= 16384) and (w_in * w_out <= 67108864)
+            return supported
+
+        def global_avg_pool_whitelist_fn(attrs, args):
+            shape = list(map(int, args[0].checked_type.shape))
+            layout = attrs.layout
+            if layout == "NCHW":
+                (height, width) = (shape[2], shape[3])
+            else: # "NHWC"
+                (height, width) = (shape[1], shape[2])
+            supported = height * width <= 4096
+            return supported
+
+        def max_pool_whitelist_fn(attrs, args):
+            pool_size = get_const_tuple(attrs.pool_size)
+            strides = get_const_tuple(attrs.strides)
+            supported = (pool_size[0] <= 9) and (pool_size[1] <= 9) and (strides[0] <= 3) \
+                        and (strides[1] <= 2)
+            return supported
+
+        def softmax_whitelist_fn(attrs, args):
+            supported = (attrs.axis != 2)
+            return supported
+
+        whitelist_funcs = {"nn.argmax": argmax_whitelist_fn,
+                           "nn.avg_pool2d": avg_pool_whitelist_fn,
+                           "nn.batch_flatten": batch_flatten_fn,
+                           "nn.batch_norm": batch_norm_whitelist_fn,
+                           "nn.conv2d": conv2d_whitelist_fn,
+                           "nn.conv2d_transpose": conv2d_transpose_whitelist_fn,
+                           "nn.dense": dense_whitelist_fn,
+                           "nn.global_avg_pool2d": global_avg_pool_whitelist_fn,
+                           "nn.max_pool2d": max_pool_whitelist_fn,
+                           "nn.softmax": softmax_whitelist_fn,
+                          }
+        return whitelist_funcs[op_name](attrs, args)
 
 class TIDLCompiler:
     """TIDL compiler module.
@@ -1426,6 +1860,7 @@ class TIDLCompiler:
 
     def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=448, **kwargs):
         self.tidl_platform = platform
+        self.version = version
         if platform == "AM57" and version >= (6, 3):
             # Set default values for AM57 6.3
             self.tidl_target = "tidl"
@@ -1496,20 +1931,37 @@ class TIDLCompiler:
                 0  - no compilation due to missing TIDL tools
         """
 
+        # Open TIDL import library
+        if os.path.exists(self.tidl_import_lib):
+            import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
+        else:
+            import_lib = None # Continue with graph annotation and partition for CI testing
+
+        # Register TIDL annotation functions
+        tidl_annotation = TIDLAnnotation(self.tidl_platform, self.version, import_lib)
+        tidl_annotation.register_whitelist_ops()
+
+        #============= Prepare graph for partitioning =============
         mod = relay.transform.RemoveUnusedFunctions()(mod_orig)
         # Bind params so that weights will appear as constants instead of variables
-        mod['main'] = bind_params_by_name(mod['main'], params)
+        mod['main'] = relay.build_module.bind_params_by_name(mod['main'], params)
         mod = relay.transform.FoldConstant()(mod)
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
+        #TODO: rebase neo-ai/tvm and uncomment next line (removing redundant outputs)
+        #mod = relay.transform.EliminateCommonSubexpr()(mod)
 
         #============= Find data layout of the original graph =============
         data_layout = find_data_layout(mod)
 
-        #============= Annotation and graph partition ==============
-        mod = tidl_annotation._merge_sequential_ops(mod)
+        #============= Graph annotation ==============
+        mod = tidl_annotation.merge_sequential_ops(mod)
         mod = relay.transform.AnnotateTarget(self.tidl_target)(mod)
+
+        #============= Graph partition ==============
         mod = relay.transform.MergeCompilerRegions()(mod)
         mod = relay.transform.PartitionGraph()(mod)
+        print("-----------initial partitioned graph-----------")
+        print(mod.astext(show_meta_data=False))
         mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
         mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
                                    max_total_memory_mb=self.max_total_memory_mb)
@@ -1521,15 +1973,15 @@ class TIDLCompiler:
             convert_pass = [relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})]
             mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs
 
+        print("-----------final partitioned graph-----------")
+        print(mod.astext(show_meta_data=False))
+
         #============= Generate subgraph boundary tensors ==============
         subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input)
 
         #================ Import the graph to TIDL =====================
         if self.tidl_tools_path is not None:
-            if (os.path.exists(self.tidl_calib_tool) and
-                os.path.exists(self.tidl_import_lib)):
-                import_lib = ctypes.CDLL(self.tidl_import_lib,
-                                         mode=ctypes.RTLD_GLOBAL)
+            if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
                 tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
                                          self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
