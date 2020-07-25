@@ -51,15 +51,27 @@ def _merge_sequential_ops(mod):
         reshape_out = is_op('reshape')(avg_pool_out, wildcard())
         return reshape_out
 
+    def _reshape_avg_pool_checker(extract):
+        avg_pool_op = extract.args[0]
+        return _avg_pool_whitelist_fn(avg_pool_op.attrs, avg_pool_op.args)
+
     def _reshape_global_avg_pool_pattern():
         global_avg_pool_out = is_op('nn.global_avg_pool2d')(wildcard())
         reshape_out = is_op('reshape')(global_avg_pool_out, wildcard())
         return reshape_out
 
+    def _reshape_global_avg_pool_checker(extract):
+        avg_pool_op = extract.args[0]
+        return _global_avg_pool_whitelist_fn(avg_pool_op.attrs, avg_pool_op.args)
+
     def _reshape_dense_pattern():
         dense_out = is_op('nn.dense')(wildcard(), is_constant())
         reshape_out = is_op('reshape')(dense_out, wildcard())
         return reshape_out
+
+    def _reshape_dense_checker(extract):
+        dense_op = extract.args[0]
+        return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
     #reshape has to be followed by softmax
     def _reshape_softmax_pattern():
@@ -73,12 +85,20 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(conv2d_out)
         return relu_out
 
+    def _conv2d_relu_checker(extract):
+        conv2d_op = extract.args[0]
+        return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+
     #relu has to be preceded by conv2d and bias_add
     def _conv2d_bias_relu_pattern():
         conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
         relu_out = is_op('nn.relu')(bias_out)
         return relu_out
+
+    def _conv2d_bias_relu_checker(extract):
+        conv2d_op = extract.args[0].args[0]
+        return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
     #relu has to be preceded by conv2d and bias_add
     def _conv2d_add_relu_pattern():
@@ -87,11 +107,19 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(add_out)
         return relu_out
 
+    def _conv2d_add_relu_checker(extract):
+        conv2d_op = extract.args[0].args[0]
+        return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+
     #bias_add has be preceded by conv2d
     def _conv2d_bias_pattern():
         conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
         return bias_out
+
+    def _conv2d_bias_checker(extract):
+        conv2d_op = extract.args[0]
+        return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
 
     #bias_add has be preceded by conv2d
     def _conv2d_add_pattern():
@@ -99,11 +127,21 @@ def _merge_sequential_ops(mod):
         add_out = is_op('add')(conv2d_out, is_constant())
         return add_out
 
+    def _conv2d_add_checker(extract):
+        conv2d_op = extract.args[0]
+        return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
+
     #pad has be preceded by conv2d
     def _conv2d_pad_pattern():
         conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
         pad_out = is_op('nn.pad')(conv2d_out)
         return pad_out
+
+    def _conv2d_pad_checker(extract):
+        pad_supported = (float(extract.attrs.pad_value) == 0.0 and \
+                         extract.attrs.pad_mode == 'constant')
+        conv2d_op = extract.args[0]
+        return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args) and pad_supported
 
     #relu has to be preceded by batch_norm, add, dense
     def _bn_relu_pattern():
@@ -111,6 +149,10 @@ def _merge_sequential_ops(mod):
         tuple_get_item_node = is_tuple_get_item(bn_out, 0)
         relu_out = is_op('nn.relu')(tuple_get_item_node)
         return relu_out
+
+    def _bn_relu_checker(extract):
+        bn_op = extract.args[0].tuple_value
+        return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
 
     def _add_relu_pattern():
         add_out = is_op('add')(wildcard(), wildcard())
@@ -129,12 +171,20 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(dense_out)
         return relu_out
 
+    def _dense_relu_checker(extract):
+        dense_op = extract.args[0]
+        return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+
     #relu has to be preceded by dense and bias_add
     def _dense_bias_relu_pattern():
         dense_out = is_op('nn.dense')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(dense_out, is_constant())
         relu_out = is_op('nn.relu')(bias_out)
         return relu_out
+
+    def _dense_bias_relu_checker(extract):
+        dense_op = extract.args[0].args[0]
+        return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
     #relu has to be preceded by dense and bias_add
     def _dense_add_relu_pattern():
@@ -143,11 +193,19 @@ def _merge_sequential_ops(mod):
         relu_out = is_op('nn.relu')(add_out)
         return relu_out
 
+    def _dense_add_relu_checker(extract):
+        dense_op = extract.args[0].args[0]
+        return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+
     #bias_add has to be preceded by dense
     def _dense_bias_pattern():
         dense_out = is_op('nn.dense')(wildcard(), is_constant())
         bias_out = is_op('nn.bias_add')(dense_out, is_constant())
         return bias_out
+
+    def _dense_bias_checker(extract):
+        dense_op = extract.args[0]
+        return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
 
     #bias_add has to be preceded by dense
     def _dense_add_pattern():
@@ -155,128 +213,36 @@ def _merge_sequential_ops(mod):
         add_out = is_op('add')(dense_out, is_constant())
         return add_out
 
+    def _dense_add_checker(extract):
+        dense_op = extract.args[0]
+        return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
+
     pattern_table = [
         ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
         #TODO: add import of op 'transpose' and uncomment 2 items below
         #('tidl.transpose_reshape', _transpose_reshape_pattern()),
         #('tidl.tanspose_batch_flatten', _transpose_batch_flatten_pattern()),
-        ('tidl.reshape_avgpool', _reshape_avg_pool_pattern()),
-        ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern()),
-        ('tidl.reshape_dense', _reshape_dense_pattern()),
+        ('tidl.reshape_avgpool', _reshape_avg_pool_pattern(), _reshape_avg_pool_checker),
+        ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
+         _reshape_global_avg_pool_checker),
+        ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
         ('tidl.reshape_softmax', _reshape_softmax_pattern()),
-        ('tidl.conv2d_relu', _conv2d_relu_pattern()),
-        ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern()),
-        ('tidl.conv2d_add_relu', _conv2d_add_relu_pattern()),
-        ('tidl.conv2d_bias', _conv2d_bias_pattern()),
-        ('tidl.conv2d_add', _conv2d_add_pattern()),
-        ('tidl.conv2d_pad', _conv2d_pad_pattern()),
-        ('tidl.bn_relu', _bn_relu_pattern()),
+        ('tidl.conv2d_relu', _conv2d_relu_pattern(), _conv2d_relu_checker),
+        ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern(), _conv2d_bias_relu_checker),
+        ('tidl.conv2d_add_relu', _conv2d_add_relu_pattern(), _conv2d_add_relu_checker),
+        ('tidl.conv2d_bias', _conv2d_bias_pattern(), _conv2d_bias_checker),
+        ('tidl.conv2d_add', _conv2d_add_pattern(), _conv2d_add_checker),
+        ('tidl.conv2d_pad', _conv2d_pad_pattern(), _conv2d_pad_checker),
+        ('tidl.bn_relu', _bn_relu_pattern(), _bn_relu_checker),
         ('tidl.add_relu', _add_relu_pattern(), _add_relu_checker),
-        ('tidl.dense_relu', _dense_relu_pattern()),
-        ('tidl.dense_bias_relu', _dense_bias_relu_pattern()),
-        ('tidl.dense_add_relu', _dense_add_relu_pattern()),
-        ('tidl.dense_bias', _dense_bias_pattern()),
-        ('tidl.dense_add', _dense_add_pattern()),
+        ('tidl.dense_relu', _dense_relu_pattern(), _dense_relu_checker),
+        ('tidl.dense_bias_relu', _dense_bias_relu_pattern(), _dense_bias_relu_checker),
+        ('tidl.dense_add_relu', _dense_add_relu_pattern(), _dense_add_relu_checker),
+        ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
+        ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
     ]
 
     return relay.transform.MergeComposite(pattern_table)(mod)
-
-@tvm.ir.register_op_attr("tidl.squeeze_reshape", "target.tidl")
-def _tidl_squeeze_reshape_whitelist_fn(attrs, args):
-    return True
-
-#TODO: add import of op 'transpose' and uncomment 2 functions below
-#@tvm.ir.register_op_attr("tidl.transpose_reshape", "target.tidl")
-#def _tidl_transpose_reshape_whitelist_fn(attrs, args):
-#    return True
-
-#@tvm.ir.register_op_attr("tidl.tanspose_batch_flatten", "target.tidl")
-#def _tidl_transpose_batch_flatten_whitelist_fn(attrs, args):
-#    return True
-
-@tvm.ir.register_op_attr("tidl.reshape_avgpool", "target.tidl")
-def _tidl_reshape_avgpool_whitelist_fn(attrs, args):
-    return _avg_pool_whitelist_fn(attrs, args)
-
-@tvm.ir.register_op_attr("tidl.reshape_globalavgpool", "target.tidl")
-def _tidl_reshape_globalavgpool_whitelist_fn(attrs, args):
-    return _global_avg_pool_whitelist_fn(attrs, args)
-
-@tvm.ir.register_op_attr("tidl.reshape_dense", "target.tidl")
-def _tidl_reshape_dense_whitelist_fn(attrs, args):
-    return _dense_whitelist_fn(attrs, args)
-
-@tvm.ir.register_op_attr("tidl.reshape_softmax", "target.tidl")
-def _tidl_reshape_softmax_whitelist_fn(attrs, args):
-    return True
-
-@tvm.ir.register_op_attr("tidl.conv2d_relu", "target.tidl")
-def _conv2d_relu_whitelist_fn(attrs, args):
-    conv2d_op = args[0]
-    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
-
-@tvm.ir.register_op_attr("tidl.conv2d_bias_relu", "target.tidl")
-def _conv2d_bias_relu_whitelist_fn(attrs, args):
-    conv2d_op = args[0].args[0]
-    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
-
-@tvm.ir.register_op_attr("tidl.conv2d_add_relu", "target.tidl")
-def _conv2d_add_relu_whitelist_fn(attrs, args):
-    conv2d_op = args[0].args[0]
-    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
-
-@tvm.ir.register_op_attr("tidl.bn_relu", "target.tidl")
-def _bn_relu_whitelist_fn(attrs, args):
-    bn_op = args[0]
-    return _batch_norm_whitelist_fn(bn_op.attrs, bn_op.args)
-
-@tvm.ir.register_op_attr("tidl.add_relu", "target.tidl")
-def _add_relu_whitelist_fn(attrs, args):
-    add_op = args[0]
-    return _add_whitelist_fn(add_op.attrs, add_op.args)
-
-@tvm.ir.register_op_attr("tidl.dense_relu", "target.tidl")
-def _dense_relu_whitelist_fn(attrs, args):
-    dense_op = args[0]
-    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
-
-@tvm.ir.register_op_attr("tidl.dense_bias_relu", "target.tidl")
-def _dense_bias_relu_whitelist_fn(attrs, args):
-    dense_op = args[0].args[0]
-    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
-
-@tvm.ir.register_op_attr("tidl.dense_add_relu", "target.tidl")
-def _dense_add_relu_whitelist_fn(attrs, args):
-    dense_op = args[0].args[0]
-    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
-
-@tvm.ir.register_op_attr("tidl.conv2d_bias", "target.tidl")
-def _conv2d_bias_whitelist_fn(attrs, args):
-    conv2d_op = args[0]
-    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
-
-@tvm.ir.register_op_attr("tidl.conv2d_add", "target.tidl")
-def _conv2d_add_whitelist_fn(attrs, args):
-    conv2d_op = args[0]
-    return _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
-
-@tvm.ir.register_op_attr("tidl.dense_bias", "target.tidl")
-def _dense_bias_whitelist_fn(attrs, args):
-    dense_op = args[0]
-    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
-
-@tvm.ir.register_op_attr("tidl.dense_add", "target.tidl")
-def _dense_add_whitelist_fn(attrs, args):
-    dense_op = args[0]
-    return _dense_whitelist_fn(dense_op.attrs, dense_op.args)
-
-@tvm.ir.register_op_attr("tidl.conv2d_pad", "target.tidl")
-def _conv2d_pad_whitelist_fn(attrs, args):
-    conv2d_op = args[0]
-    pad_supported = (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
-    conv2d_supported = _conv2d_whitelist_fn(conv2d_op.attrs, conv2d_op.args)
-    supported = pad_supported and conv2d_supported
-    return supported
 
 @tvm.ir.register_op_attr("add", "target.tidl")
 def _add_whitelist_fn(attrs, args):
