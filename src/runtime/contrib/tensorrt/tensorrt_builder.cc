@@ -100,6 +100,10 @@ GetOpConverters() {
 #if TRT_VERSION_GE(6, 0, 1)
   map->emplace("image.resize", std::make_shared<ResizeOpConverter>());
   map->emplace("nn.upsampling", std::make_shared<UpsamplingOpConverter>());
+  map->emplace("nn.conv3d", std::make_shared<Conv3DOpConverter>());
+  map->emplace("nn.max_pool3d", std::make_shared<Pooling3DOpConverter>());
+  map->emplace("nn.avg_pool3d", std::make_shared<Pooling3DOpConverter>());
+  map->emplace("nn.conv3d_transpose", std::make_shared<Conv3DTransposeOpConverter>());
 #endif
   return map;
 }
@@ -211,9 +215,13 @@ runtime::TrtEngineAndContext TensorRTBuilder::BuildEngine(
 nvinfer1::Weights TensorRTBuilder::GetDLTensorAsWeights(
     DLTensor* dptr, DLDeviceType src_device) {
   CHECK_EQ(dptr->ctx.device_type, src_device);
-  CHECK_EQ(static_cast<int>(dptr->dtype.code), kDLFloat);
+  CHECK(static_cast<int>(dptr->dtype.code) == kDLFloat ||
+        static_cast<int>(dptr->dtype.code) == kDLInt);
+  const auto trt_dtype = static_cast<int>(dptr->dtype.code) == kDLFloat
+                             ? nvinfer1::DataType::kFLOAT
+                             : nvinfer1::DataType::kINT32;
   const size_t weight_bytes = runtime::GetDataSize(*dptr);
-  nvinfer1::Weights weight{nvinfer1::DataType::kFLOAT, nullptr, 0};
+  nvinfer1::Weights weight{trt_dtype, nullptr, 0};
   size_t count = 1;
   for (tvm_index_t i = 0; i < dptr->ndim; ++i) {
     count *= dptr->shape[i];

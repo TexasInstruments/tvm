@@ -27,6 +27,7 @@
 #include <tvm/relay/expr.h>
 #include <tvm/relay/op.h>
 
+#include "../make_op.h"
 #include "../op_common.h"
 #include "../type_relations.h"
 
@@ -266,13 +267,15 @@ RELAY_REGISTER_UNARY_OP("copy")
 // relay.clip
 TVM_REGISTER_NODE_TYPE(ClipAttrs);
 
-TVM_REGISTER_GLOBAL("relay.op._make.clip").set_body_typed([](Expr a, double a_min, double a_max) {
+Expr MakeClip(Expr a, double a_min, double a_max) {
   auto attrs = make_object<ClipAttrs>();
   attrs->a_min = a_min;
   attrs->a_max = a_max;
   static const Op& op = Op::Get("clip");
   return Call(op, {a}, Attrs(attrs), {});
-});
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.clip").set_body_typed(MakeClip);
 
 RELAY_REGISTER_OP("clip")
     .describe(R"code(Clip tensor values.
@@ -395,20 +398,6 @@ RELAY_REGISTER_UNARY_OP("bitwise_not")
 
 // shape_of
 TVM_REGISTER_NODE_TYPE(ShapeOfAttrs);
-
-bool ShapeOfRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
-                const TypeReporter& reporter) {
-  CHECK_EQ(num_inputs, 1);
-  auto tt = types[0].as<TensorTypeNode>();
-  if (tt == nullptr) {
-    return false;
-  }
-  const auto* param = attrs.as<ShapeOfAttrs>();
-  CHECK(param != nullptr);
-  auto rank_shape = RankShape(tt->shape);
-  reporter->Assign(types[1], TensorType(rank_shape, param->dtype));
-  return true;
-}
 
 Array<te::Tensor> ShapeOfCompute(const Attrs& attrs, const Array<te::Tensor>& inputs,
                                  const Type& out_type) {
