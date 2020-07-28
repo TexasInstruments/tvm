@@ -37,6 +37,8 @@ from tvm.contrib import graph_runtime
 #import tvm.relay.op.contrib.tidl as tidl_annotation
 from .tidl_reduce_subgraph_size import reduce_subgraph_size
 
+tidl_annotations_registered = False
+
 def traverse_expr(node, node_dict):
     if node in node_dict:
         return
@@ -1410,11 +1412,11 @@ class TIDLAnnotation:
 
     def register_whitelist_ops(self):
         """ TIDL operators registration """
+
         # Can't register annotations more than once.
-        if hasattr(self, "annotations_registered"):
+        global tidl_annotations_registered
+        if tidl_annotations_registered:
             return
-        self.annotations_registered = True
-        print(f"in TIDLAnnotation.register_whitelist_ops, platform={self.tidl_platform}")
 
         # Register J7/J6 common operators which are always supported
         self._register_supported_op("nn.dropout")
@@ -1422,28 +1424,15 @@ class TIDLAnnotation:
         # Register J7/J6 common operators which are supported with same constraints
         @tvm.ir.register_op_attr("add", "target.tidl")
         def add_whitelist_fn(attrs, args):
-            # TODO: check if add is the same in J7
             if any([isinstance(arg, tvm.relay.expr.Constant) for arg in args]):
-                # Can't add constant unless used like bias_add in a pattern like "conv2d_add_relu"
+                # This is the same as "bias_add" which is not supported standalone.
                 return False
             return True
-
-        @tvm.ir.register_op_attr("clip", "target.tidl")
-        def clip_whitelist_fn(attrs, args):
-            # TODO: check if relu6 is the same in J7
-            a_min = attrs.a_min
-            a_max = attrs.a_max
-            return (a_min == 0 and a_max == 6)
-
-        @tvm.ir.register_op_attr("concatenate", "target.tidl")
-        def concatenate_whitelist_fn(attrs, args):
-            # TODO: check if concatenate is the same in J7
-            supported = (attrs.axis == 1) or (attrs.axis == 3)
-            return supported
 
         # Register J7/J6 common operators which are supported with different constraints
         self._register_constrained_op("nn.argmax")
         self._register_constrained_op("nn.avg_pool2d")
+        self._register_constrained_op("nn.batch_flatten")
         self._register_constrained_op("nn.batch_norm")
         self._register_constrained_op("nn.conv2d")
         self._register_constrained_op("nn.dense")
@@ -1452,15 +1441,37 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.max_pool2d")
         self._register_constrained_op("nn.softmax")
 
-        # TODO: Register J7 specific operators
-        #if self.tidl_platform == 'J7':
-            #self._register_supported_op("nn.xyz")
-            #self._register_constrained_op("nn.xyz")
+        # Register J7 specific operators, or those supported standalone by J7 but not J6,
+        # or those for which there are no whitelist functions.
+        if self.tidl_platform == 'J7':
+            self._register_supported_op("concatenate")
+            self._register_supported_op("clip")
+            self._register_supported_op("leaky_relu")
+            self._register_supported_op("prelu")
+            self._register_supported_op("relu")
+            self._register_supported_op("split")
+            self._register_supported_op("strided_slice")
+            self._register_supported_op("maximum")          # 'maximum' mapped to clip layer
+            self._register_supported_op("minimum")          # 'minimum' mapped to clip layer
+            self._register_constrained_op("mean")           # 'mean' mapped to pooling layer
+            self._register_constrained_op("image.resize")
+            self._register_constrained_op("nn.upsampling")
+            self._register_constrained_op("nn.upsampling3d")
 
-        # Register J6 specific operators
-        #if self.tidl_platform == 'J6':
-            #self._register_supported_op("nn.xyz")
-            #self._register_constrained_op("nn.xyz")
+        # Register operators that are J6 specific or have constraints only for J6
+        if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
+            @tvm.ir.register_op_attr("clip", "target.tidl")
+            def clip_whitelist_fn(attrs, args):
+                a_min = attrs.a_min
+                a_max = attrs.a_max
+                return (a_min == 0 and a_max == 6)
+
+            @tvm.ir.register_op_attr("concatenate", "target.tidl")
+            def concatenate_whitelist_fn(attrs, args):
+                supported = (attrs.axis == 1) or (attrs.axis == 3)
+                return supported
+
+        tidl_annotations_registered = True
 
     def merge_sequential_ops(self, mod):
         """Fuse sequential ops for op registration."""
@@ -1471,18 +1482,12 @@ class TIDLAnnotation:
             reshape_out = is_op('reshape')(squeeze_out, wildcard())
             return reshape_out
 
-        #tranpose has to be preceded and followed by reshape
+        #transpose has to be preceded and followed by reshape
         def _transpose_reshape_pattern():
             reshape_out1 = is_op('reshape')(wildcard(), wildcard())
             transpose_out = is_op('transpose')(reshape_out1)
             reshape_out2 = is_op('reshape')(transpose_out, wildcard())
             return reshape_out2
-
-        #tranpose has to be followed by batch_flatten
-        def _transpose_batch_flatten_pattern():
-            transpose_out = is_op('transpose')(wildcard())
-            batch_flatten_out = is_op('nn.batch_flatten')(transpose_out)
-            return batch_flatten_out
 
         #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense
         def _reshape_avg_pool_pattern():
@@ -1630,92 +1635,84 @@ class TIDLAnnotation:
             return self.whitelist_check_func('nn.dense', op.attrs, op.args)
 
         # common patterns required by J7 or J6
-        pattern_table = [
+        pattern_table_common = [
             ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
             ('tidl.reshape_avgpool', _reshape_avg_pool_pattern(), _reshape_avg_pool_checker),
             ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
                                            _reshape_global_avg_pool_checker),
             ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
             ('tidl.reshape_softmax', _reshape_softmax_pattern()),
-            ('tidl.conv2d_relu', _conv2d_relu_pattern(), _conv2d_relu_checker),
-            ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern(), _conv2d_bias_relu_checker),
-            ('tidl.conv2d_add_relu', _conv2d_add_relu_pattern(), _conv2d_add_relu_checker),
             ('tidl.conv2d_bias', _conv2d_bias_pattern(), _conv2d_bias_checker),
             ('tidl.conv2d_add', _conv2d_add_pattern(), _conv2d_add_checker),
             ('tidl.conv2d_pad', _conv2d_pad_pattern(), _conv2d_pad_checker),
+            ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
+            ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
+        ]
+        # additional patterns required by J6
+        pattern_table_j6 = [
+            ('tidl.conv2d_relu', _conv2d_relu_pattern(), _conv2d_relu_checker),
+            ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern(), _conv2d_bias_relu_checker),
+            ('tidl.conv2d_add_relu', _conv2d_add_relu_pattern(), _conv2d_add_relu_checker),
             ('tidl.bn_relu', _bn_relu_pattern(), _bn_relu_checker),
             ('tidl.add_relu', _add_relu_pattern(), _add_relu_checker),
             ('tidl.dense_relu', _dense_relu_pattern(), _dense_relu_checker),
             ('tidl.dense_bias_relu', _dense_bias_relu_pattern(), _dense_bias_relu_checker),
             ('tidl.dense_add_relu', _dense_add_relu_pattern(), _dense_add_relu_checker),
-            ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
-            ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
         ]
-        #if self.tidl_platform == 'J6':
-            # add additional patterns required by J6
-            #pattern_table.append([])
 
-        #if self.tidl_platform == 'J7':
-            # add additional patterns required by J7
-            #pattern_table.append([
-            #    ('tidl.transpose_reshape', _transpose_reshape_pattern()),
-            #    ('tidl.tanspose_batch_flatten', _transpose_batch_flatten_pattern()),
-            #])
+        # additional patterns required by J7
+        pattern_table_j7 = [
+            ('tidl.transpose_reshape', _transpose_reshape_pattern()),
+        ]
 
+        if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
+            # conv2d_bias_relu, dense_bias_relu, must precede conv2d_bias, dense_bias, etc.
+            pattern_table = pattern_table_j6 + pattern_table_common
+        else:
+            pattern_table = pattern_table_j7 + pattern_table_common
         return relay.transform.MergeComposite(pattern_table)(mod)
 
     # Helper functions
     def _register_supported_op(self, op_name):
+        """ Helper function to register an op that is supported without any constraints """
         @tvm.ir.register_op_attr(op_name, "target.tidl")
         def _func_wrapper(attrs, args):
+            #TODO: add data type check
             #if any([arg.checked_type.dtype != "float32" for arg in args]):
-            #    print("Only float32 inputs are supported for TensorRT.")
             #    return False
             return True
         return _func_wrapper
 
-    #def _register_constrained_op(self, op_name, whitelist_func):
-    #    @tvm.ir.register_op_attr(op_name, "target.tidl")
-    #    def _func_wrapper(attrs, args):
-    #        return whitelist_func(attrs, args)
-    #    return _func_wrapper
-
     def _register_constrained_op(self, op_name):
+        """ Helper function to register an op that is supported with some constraints """
         @tvm.ir.register_op_attr(op_name, "target.tidl")
         def _func_wrapper(attrs, args):
             return self.whitelist_check_func(op_name, attrs, args)
         return _func_wrapper
 
-    #def _register_op_funcs(self, op_name, func_j7, func_j6):
-    #    @tvm.ir.register_op_attr(op_name, "target.tidl")
-    #    def _func_wrapper(attrs, args):
-    #        if self.tidl_platform == "J7":
-    #            func = func_j7
-    #        else:
-    #            func = func_j6
-    #        return func(attrs, args)
-    #    return _func_wrapper
-
-    # Whitelist functions for operators with different constraints for J7 and J6
     def whitelist_check_func(self, op_name, attrs, args):
+        """ Whitelist check function for operators with different constraints for J7 and J6 """
         if self.tidl_platform == "J7":
             return self.whitelist_fn_j7(op_name, attrs, args)
         else:
             return self.whitelist_fn_j6(op_name, attrs, args)
 
     def whitelist_fn_j7(self, op_name, attrs, args):
+        """ Whitelisting function for J7: constraint checking is delegated to the import library """
         if self.import_lib is None:
             # For CI testing which doesn't have import library - still run TVM passes
             return True
+        # Invoke TIDL import library call to check if this op can be supported
         op = tvm.ir.Op.get(op_name)
         callnode = tvm.relay.Call(op, args, attrs)
-        # Invoke TIDL import library call to check if this op can be supported
-        #whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
-        #return whitelist_fn(callnode)
-        return True  # for testing, to be replaced by whitelist_fn
+        #print("Invoking TIDL Relay Import whitelisting function...")
+        whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
+        #return whitelist_fn(callnode) # bypass whitelisting function for now
+        return True
 
     def whitelist_fn_j6(self, op_name, attrs, args):
-        # Whitelist functions for J6 that are different from J7
+        """ Whitelisting function for J6: checking operator attributes against constraints """
+
         def argmax_whitelist_fn(attrs, args):
             keepdims = attrs.keepdims
             exclude = attrs.exclude
@@ -1820,8 +1817,7 @@ class TIDLAnnotation:
             return supported
 
         def softmax_whitelist_fn(attrs, args):
-            supported = (attrs.axis != 2)
-            return supported
+            return (attrs.axis == -1)  # only support 1-D array softmax
 
         whitelist_funcs = {"nn.argmax": argmax_whitelist_fn,
                            "nn.avg_pool2d": avg_pool_whitelist_fn,
@@ -1834,6 +1830,7 @@ class TIDLAnnotation:
                            "nn.max_pool2d": max_pool_whitelist_fn,
                            "nn.softmax": softmax_whitelist_fn,
                           }
+        #print("Whitelisting " + op_name)
         return whitelist_funcs[op_name](attrs, args)
 
 class TIDLCompiler:
@@ -1934,6 +1931,9 @@ class TIDLCompiler:
         # Open TIDL import library
         if os.path.exists(self.tidl_import_lib):
             import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
+            if self.tidl_platform == "J7":
+                tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
+                tidl_relay_init(1.0, 1, 3, 224, 224, 1, self.tidl_tensor_bits) # dummy numbers
         else:
             import_lib = None # Continue with graph annotation and partition for CI testing
 
@@ -1947,8 +1947,10 @@ class TIDLCompiler:
         mod['main'] = relay.build_module.bind_params_by_name(mod['main'], params)
         mod = relay.transform.FoldConstant()(mod)
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
-        #TODO: rebase neo-ai/tvm and uncomment next line (removing redundant outputs)
-        #mod = relay.transform.EliminateCommonSubexpr()(mod)
+        # Removing redundant outputs
+        mod = relay.transform.EliminateCommonSubexpr()(mod)
+        #print("----------- original graph-----------")
+        #print(mod.astext(show_meta_data=False))
 
         #============= Find data layout of the original graph =============
         data_layout = find_data_layout(mod)
@@ -1956,12 +1958,14 @@ class TIDLCompiler:
         #============= Graph annotation ==============
         mod = tidl_annotation.merge_sequential_ops(mod)
         mod = relay.transform.AnnotateTarget(self.tidl_target)(mod)
+        #print("----------- annotated graph-----------")
+        #print(mod.astext(show_meta_data=False))
 
         #============= Graph partition ==============
         mod = relay.transform.MergeCompilerRegions()(mod)
         mod = relay.transform.PartitionGraph()(mod)
-        print("-----------initial partitioned graph-----------")
-        print(mod.astext(show_meta_data=False))
+        #print("-----------initial partitioned graph-----------")
+        #print(mod.astext(show_meta_data=False))
         mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
         mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
                                    max_total_memory_mb=self.max_total_memory_mb)
@@ -1973,8 +1977,8 @@ class TIDLCompiler:
             convert_pass = [relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})]
             mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs
 
-        print("-----------final partitioned graph-----------")
-        print(mod.astext(show_meta_data=False))
+        #print("-----------final partitioned graph-----------")
+        #print(mod.astext(show_meta_data=False))
 
         #============= Generate subgraph boundary tensors ==============
         subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input)
