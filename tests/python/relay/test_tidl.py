@@ -95,7 +95,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     else: # TIDL compilation failed or no TIDL compilation due to missing tools
         print("Graph execution without TIDL")
 
-    target = "llvm -target=armv7l-linux-gnueabihf" # for AM57x or J6 devices
+    target = "llvm -mtriple=armv7l-linux-gnueabihf" # for AM57x or J6 devices
     graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
     path_graph = os.path.join(tidl_artifacts_folder, "deploy_graph.json")
@@ -112,7 +112,8 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
 def get_input_nchw(input_shape):
     """ Get input data in 'NCHW' layout """
     batch_size = input_shape[0]
-    orig_image = np.load(os.path.join('./dog.npy'))  # "NCHW"
+    tidl_tools_path = get_tidl_tools_path()
+    orig_image = np.load(os.path.join(tidl_tools_path, 'dog.npy'))  # "NCHW"
     image_data = np.squeeze(orig_image, axis=0) # CHW
     if orig_image.shape[2:4] != input_shape[2:4]:
         try:

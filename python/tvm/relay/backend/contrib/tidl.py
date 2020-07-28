@@ -1479,34 +1479,34 @@ class TIDLAnnotation:
         # Squeeze has to be followed by reshape.
         def _squeeze_reshape_pattern():
             squeeze_out = is_op('squeeze')(wildcard())
-            reshape_out = is_op('reshape')(squeeze_out, wildcard())
+            reshape_out = is_op('reshape')(squeeze_out)
             return reshape_out
 
         #transpose has to be preceded and followed by reshape
         def _transpose_reshape_pattern():
-            reshape_out1 = is_op('reshape')(wildcard(), wildcard())
+            reshape_out1 = is_op('reshape')(wildcard())
             transpose_out = is_op('transpose')(reshape_out1)
-            reshape_out2 = is_op('reshape')(transpose_out, wildcard())
+            reshape_out2 = is_op('reshape')(transpose_out)
             return reshape_out2
 
         #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense
         def _reshape_avg_pool_pattern():
             avg_pool_out = is_op('nn.avg_pool2d')(wildcard())
-            reshape_out = is_op('reshape')(avg_pool_out, wildcard())
+            reshape_out = is_op('reshape')(avg_pool_out)
             return reshape_out
         def _reshape_avg_pool_checker(extract):
             op = extract.args[0]
             return self.whitelist_check_func('nn.avg_pool2d', op.attrs, op.args)
         def _reshape_global_avg_pool_pattern():
             global_avg_pool_out = is_op('nn.global_avg_pool2d')(wildcard())
-            reshape_out = is_op('reshape')(global_avg_pool_out, wildcard())
+            reshape_out = is_op('reshape')(global_avg_pool_out)
             return reshape_out
         def _reshape_global_avg_pool_checker(extract):
             op = extract.args[0]
             return self.whitelist_check_func('nn.global_avg_pool2d', op.attrs, op.args)
         def _reshape_dense_pattern():
             dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            reshape_out = is_op('reshape')(dense_out, wildcard())
+            reshape_out = is_op('reshape')(dense_out)
             return reshape_out
         def _reshape_dense_checker(extract):
             op = extract.args[0]
@@ -1514,7 +1514,7 @@ class TIDLAnnotation:
 
         #reshape has to be followed by softmax
         def _reshape_softmax_pattern():
-            reshape_out = is_op('reshape')(wildcard(), wildcard())
+            reshape_out = is_op('reshape')(wildcard())
             softmax_out = is_op('nn.softmax')(reshape_out)
             return softmax_out
 
