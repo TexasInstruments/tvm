@@ -1446,15 +1446,15 @@ class TIDLAnnotation:
         if self.tidl_platform == 'J7':
             self._register_supported_op("concatenate")
             self._register_supported_op("clip")
-            self._register_supported_op("leaky_relu")
-            self._register_supported_op("prelu")
-            self._register_supported_op("relu")
+            self._register_supported_op("maximum")
+            self._register_supported_op("minimum")
+            self._register_constrained_op("mean")           # 'mean' mapped to pooling layer
             self._register_supported_op("split")
             self._register_supported_op("strided_slice")
-            self._register_supported_op("maximum")          # 'maximum' mapped to clip layer
-            self._register_supported_op("minimum")          # 'minimum' mapped to clip layer
-            self._register_constrained_op("mean")           # 'mean' mapped to pooling layer
             self._register_constrained_op("image.resize")
+            self._register_supported_op("nn.leaky_relu")
+            self._register_supported_op("nn.prelu")
+            self._register_supported_op("nn.relu")
             self._register_constrained_op("nn.upsampling")
             self._register_constrained_op("nn.upsampling3d")
 
@@ -1706,7 +1706,7 @@ class TIDLAnnotation:
         op = tvm.ir.Op.get(op_name)
         callnode = tvm.relay.Call(op, args, attrs)
         #print("Invoking TIDL Relay Import whitelisting function...")
-        whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
+        #whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
         #return whitelist_fn(callnode) # bypass whitelisting function for now
         return True
 
