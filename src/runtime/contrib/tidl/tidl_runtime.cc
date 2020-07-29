@@ -217,6 +217,13 @@ class TIDLJ6Module : public runtime::ModuleNode {
   tidl_subgraph_t tidl_subgraph;
 };
 
+int32_t TIDLVprintf(const char * format, va_list arg)
+{
+  printf("TIDLVprintf format=%s\n", format);
+  printf(format, arg);
+  return 0;
+}
+
 class TIDLJ7Module : public runtime::ModuleNode {
  public:
 
@@ -241,10 +248,10 @@ class TIDLJ7Module : public runtime::ModuleNode {
     if(!tidl_handle) {
       // Load TIDL shared library
       dlerror();
-      tidl_handle = dlopen("libtidlj7_api.so", RTLD_NOW | RTLD_GLOBAL );
+      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
       const char *dlsym_error1 = dlerror();
       if (dlsym_error1) {
-        LOG(FATAL) << "Cannot open libtidlj7_api.so! " << dlsym_error1 << '\n';
+        LOG(FATAL) << "Cannot open libvx_tidl_rt.so! " << dlsym_error1 << '\n';
       }
 
       TIDLRT_create_   = LoadSymbol<decltype(TIDLRT_create_)>  ("TIDLRT_create");
@@ -299,6 +306,12 @@ class TIDLJ7Module : public runtime::ModuleNode {
 
     params.netPtr = (void *) info.net_data.data();
     params.ioBufDescPtr = (void *) info.params_data.data();
+printf("net_data size: %d\n", info.net_data.size());
+    params.net_capacity = info.net_data.size();
+printf("ioparams size: %d\n", info.params_data.size());
+    params.io_capacity  = info.params_data.size();
+    params.traceLogLevel = 1;
+    params.TIDLVprintf = TIDLVprintf;
 
     void* tidlrt_handle = nullptr;
     // I think 0 is a successful return code, but there is no documentation in
@@ -322,6 +335,7 @@ class TIDLJ7Module : public runtime::ModuleNode {
       std::vector<sTIDLRT_Tensor_t*> tidlrt_params = ConvertArgs(args, info);
       sTIDLRT_Tensor_t** inputs = &tidlrt_params[0];
       sTIDLRT_Tensor_t** outputs = &tidlrt_params[info.NumInputs()];
+printf("num_inputs: %d, num_outputs: %d\n", (int) info.NumInputs(), (int) (tidlrt_params.size() - info.NumInputs()));
 
       if (TIDLRT_invoke_(tidlrt_handle, inputs, outputs) != 0)
         LOG(FATAL) << "TIDLRT_invoke failed\n";
@@ -342,14 +356,17 @@ class TIDLJ7Module : public runtime::ModuleNode {
     });
   }
 
+
   // Convert arguments from TVM to sTIDLRT_Tensor_t objects
   std::vector<sTIDLRT_Tensor_t*> ConvertArgs(tvm::TVMArgs args, const TIDLSubgraphInfo& info) {
     std::vector<sTIDLRT_Tensor_t*> rt_args(args.size());
 
     for (int i = 0; i < args.size(); i++) {
+printf("Convert arg/tensor %d\n", i);
 
       // Allocate and initialize the tensor
       sTIDLRT_Tensor_t* rt_arg = new sTIDLRT_Tensor_t;
+      memset(rt_arg, 0, sizeof(sTIDLRT_Tensor_t));
       rt_args[i] = rt_arg;
       TIDLRT_setTensorDefault_(rt_arg);
 
@@ -361,14 +378,24 @@ class TIDLJ7Module : public runtime::ModuleNode {
 
           // Set tensor name. Only inputs have names so make sure we have a name to assign
           if (i < (int) info.input_names.size())
-            memcpy(rt_arg->name, info.input_names[i].c_str(),
-                   info.input_names[i].size());
+          {
+            int name_size = info.input_names[i].size();
+            if (name_size > TIDLRT_STRING_SIZE - 1)
+              name_size = TIDLRT_STRING_SIZE;
+            strncpy((char *) rt_arg->name, info.input_names[i].c_str(),
+                    name_size);
+            rt_arg->name[name_size] = '\0';
+printf("## name: %s\n", (char *) rt_arg->name);
+          }
 
           // Set element type
           rt_arg->elementType = GetTIDLRTElementType(tensor_arg->dtype);
+printf("## elementType: %d\n", rt_arg->elementType);
 
           // Set the number of dimensions
           rt_arg->numDim = tensor_arg->ndim;
+printf("## numDim: %d\n", rt_arg->numDim);
+
 
           if (rt_arg->numDim > TIDLRT_DIM_MAX) {
             LOG(FATAL) << "Number of dimensions (" << rt_arg->numDim
@@ -379,6 +406,9 @@ class TIDLJ7Module : public runtime::ModuleNode {
           }
 
           // Set the dimensions
+          int missing_dims = TIDLRT_DIM_MAX - rt_arg->numDim;
+          for (int s = 0; s < missing_dims; s++)
+            rt_arg->dimValues[s] = 1;
           for (int s = 0; s < rt_arg->numDim; s++) {
             int64_t shape = tensor_arg->shape[s];
 
@@ -388,25 +418,44 @@ class TIDLJ7Module : public runtime::ModuleNode {
             if (shape > std::numeric_limits<rt_dimValue_type>::max())
               LOG(FATAL) << "Tensor shape of " << shape << " is not supported in TIDL RT";
 
-            rt_arg->dimValues[s] = shape;
+            rt_arg->dimValues[missing_dims + s] = shape;
           }
 
+          for (int s = 0; s < TIDLRT_DIM_MAX; s++)
+printf("##  dimValues[%d]: %d\n", s, rt_arg->dimValues[s]);
+
           // Skip pitch for now
+          rt_arg->pitch[2] = rt_arg->dimValues[3];
+          rt_arg->pitch[1] = rt_arg->dimValues[2] * rt_arg->dimValues[3];
+          rt_arg->pitch[0] = rt_arg->dimValues[1] * rt_arg->dimValues[2] * rt_arg->dimValues[3];
+printf("##  pitch: %d %d %d\n", rt_arg->pitch[0], rt_arg->pitch[1], rt_arg->pitch[2]);
 
           // Skip pad values for now
+          rt_arg->padValues[0] = 
+          rt_arg->padValues[1] = 
+          rt_arg->padValues[2] = 
+          rt_arg->padValues[3] = 0;
+printf("##  padValues: %d %d %d %d\n", rt_arg->padValues[0],rt_arg->padValues[1],rt_arg->padValues[2],rt_arg->padValues[3]);
 
           // Set the data pointer
           rt_arg->ptr = tensor_arg->data;
+printf("## ptr: %p\n", rt_arg->ptr);
 
           // Assume the layout is NCHW. It is assumed that ConvertLayout("NCHW")
           // is called on the entire graph and only transpose or NCHW operators
           // are whitelisted as TIDL nodes. This assumption means TIDLRT does
           // not need to perform any layout conversions.
-          rt_arg->layout = TIDLRT_LT_NCHW;
+          //YUAN rt_arg->layout = TIDLRT_LT_NCHW;
+          rt_arg->layout = TIDLRT_LT_NHWC;
+printf("## layout: %d\n", rt_arg->layout);
 
           // Skip zeroPoint and scale since those are for quantized models.
+          rt_arg->scale = 1.0f;
+printf("## zeroPoint %d, scale: %f\n", rt_arg->zeroPoint, rt_arg->scale);
 
           // Not sure what to set memtype to.
+          rt_arg->memType = TIDLRT_MEM_USER_SPACE;
+printf("## memType: %d\n", rt_arg->memType);
 
           break;
         }

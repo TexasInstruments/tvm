@@ -43,21 +43,6 @@ import tvm._ffi
 
 from . import _ffi_tidl_api
 
-_tidl_mod = None
-
-class RelayGraphParams:
-    def __init__(self):
-        self.data_layout = 'UNDEFINED'
-
-    def SetDataLayout(self, layout):
-        self.data_layout = layout
-
-    def GetDataLayout(self):
-        return self.data_layout
-
-    def DataLayoutIsSet(self):
-        return(self.data_layout != 'UNDEFINED')
-
 def traverse_expr(node, node_dict):
     if node in node_dict:
         return
