@@ -20,6 +20,7 @@ import os
 import sys
 import numpy as np
 import pytest
+import tvm
 from tvm import relay
 from tvm.contrib.download import download_testdata
 from tvm.relay.backend.contrib import tidl
@@ -266,7 +267,7 @@ def test_tidl_tflite(batch_size=4):
         'mobilenet100_v1': (224, 224, 'input'),
         'mobilenet100_v2': (224, 224, 'input'),
         #'densenet': (224, 224, 'input'),
-        #'mnasnet': (224, 224, 'input'),
+        'mnasnet': (224, 224, 'input'),
         'resnet_v2_101': (299, 299, 'input'),
     }
     models = {
@@ -359,7 +360,28 @@ def test_tidl_gluon_segmentation(batch_size=1):
     #======================== Load and compile the model ========================
     gluoncv_compile_model(model_name, img_file, batch_size, img_norm="rcnn")
 
+def test_tidl_ops():
+    #============= Constructing a simple graph to test individual ops ==============
+    dtype = 'float32'
+    data_layout = 'NCHW'
+    input_shape = (1, 3, 224, 224) # NCHW
+    input_layout= 'NCHW'
+    input = relay.var('data', shape=(input_shape), dtype=dtype)
+    output1 = relay.nn.relu(input)
+    output2 = relay.clip(input, 0.0, 6.0)
+    output = relay.concatenate((output1, output2), axis=1)
+    func = relay.Function([input], output)
+    mod = tvm.IRModule.from_expr(func)
+    #print('---------- Original graph ----------')
+    #print(mod.astext(show_meta_data=False))
+
+    input_data = np.random.rand(1, 3, 224, 224) * 12.0 # "NCHW"
+    weights = tvm.nd.array(np.random.rand(32, 3, 224, 224))  # "OIHW"
+    params = {'weight1':weights}
+    model_compile("relu6", mod, params, {"data":input_data}, num_tidl_subgraphs=1)
+
 if __name__ == '__main__':
+    test_tidl_ops()
     test_tidl_tensorflow()
     test_tidl_onnx()
     test_tidl_pytorch()

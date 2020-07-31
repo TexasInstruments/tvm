@@ -1420,6 +1420,7 @@ class TIDLAnnotation:
 
         # Register J7/J6 common operators which are always supported
         self._register_supported_op("nn.dropout")
+        self._register_supported_op("nn.relu")
 
         # Register J7/J6 common operators which are supported with same constraints
         @tvm.ir.register_op_attr("add", "target.tidl")
@@ -1428,6 +1429,12 @@ class TIDLAnnotation:
                 # This is the same as "bias_add" which is not supported standalone.
                 return False
             return True
+
+        @tvm.ir.register_op_attr("concatenate", "target.tidl")
+        def concatenate_whitelist_fn(attrs, args):
+            # Only support concatenate across channel - TODO: add J7 whitelist function
+            supported = (attrs.axis == 1) or (attrs.axis == 3)
+            return supported
 
         # Register J7/J6 common operators which are supported with different constraints
         self._register_constrained_op("nn.argmax")
@@ -1444,32 +1451,22 @@ class TIDLAnnotation:
         # Register J7 specific operators, or those supported standalone by J7 but not J6,
         # or those for which there are no whitelist functions.
         if self.tidl_platform == 'J7':
-            self._register_supported_op("concatenate")
-            self._register_supported_op("clip")
             self._register_supported_op("maximum")
             self._register_supported_op("minimum")
             self._register_constrained_op("mean")           # 'mean' mapped to pooling layer
+            self._register_supported_op("multiply")
             self._register_supported_op("split")
             self._register_supported_op("strided_slice")
             self._register_constrained_op("image.resize")
+            # "clip" is supported with constraints in J7 but not unsupported standalone in J6
+            self._register_constrained_op("clip")
             self._register_supported_op("nn.leaky_relu")
             self._register_supported_op("nn.prelu")
-            self._register_supported_op("nn.relu")
             self._register_constrained_op("nn.upsampling")
             self._register_constrained_op("nn.upsampling3d")
 
         # Register operators that are J6 specific or have constraints only for J6
-        if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
-            @tvm.ir.register_op_attr("clip", "target.tidl")
-            def clip_whitelist_fn(attrs, args):
-                a_min = attrs.a_min
-                a_max = attrs.a_max
-                return (a_min == 0 and a_max == 6)
-
-            @tvm.ir.register_op_attr("concatenate", "target.tidl")
-            def concatenate_whitelist_fn(attrs, args):
-                supported = (attrs.axis == 1) or (attrs.axis == 3)
-                return supported
+        #if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
 
         tidl_annotations_registered = True
 
@@ -1518,33 +1515,6 @@ class TIDLAnnotation:
             softmax_out = is_op('nn.softmax')(reshape_out)
             return softmax_out
 
-        #relu has to be preceded by conv2d
-        def _conv2d_relu_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            relu_out = is_op('nn.relu')(conv2d_out)
-            return relu_out
-        def _conv2d_relu_checker(extract):
-            op = extract.args[0]
-            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
-
-        #relu has to be preceded by conv2d and bias_add
-        def _conv2d_bias_relu_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
-            relu_out = is_op('nn.relu')(bias_out)
-            return relu_out
-        def _conv2d_bias_relu_checker(extract):
-            op = extract.args[0].args[0]
-            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
-        def _conv2d_add_relu_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            add_out = is_op('add')(conv2d_out, is_constant())
-            relu_out = is_op('nn.relu')(add_out)
-            return relu_out
-        def _conv2d_add_relu_checker(extract):
-            op = extract.args[0].args[0]
-            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
-
         #bias_add has be preceded by conv2d
         def _conv2d_bias_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
@@ -1571,52 +1541,6 @@ class TIDLAnnotation:
                             extract.attrs.pad_mode == 'constant')
             op = extract.args[0]
             return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and pad_supported
-
-        #relu has to be preceded by batch_norm, add, dense
-        def _bn_relu_pattern():
-            bn_out = is_op('nn.batch_norm')(wildcard(), wildcard(), wildcard(), wildcard(),
-                                            wildcard())
-            tuple_get_item_node = is_tuple_get_item(bn_out, 0)
-            relu_out = is_op('nn.relu')(tuple_get_item_node)
-            return relu_out
-        def _bn_relu_checker(extract):
-            op = extract.args[0].tuple_value
-            return self.whitelist_check_func('nn.batch_norm', op.attrs, op.args)
-        def _add_relu_pattern():
-            add_out = is_op('add')(wildcard(), wildcard())
-            relu_out = is_op('nn.relu')(add_out)
-            return relu_out
-        def _add_relu_checker(extract):
-            add = extract.args[0]
-            if any([isinstance(arg, tvm.relay.expr.Constant) for arg in add.args]):
-                # Can't add constant unless used like bias_add in a pattern like "conv2d_add_relu".
-                return False
-            return True
-        def _dense_relu_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            relu_out = is_op('nn.relu')(dense_out)
-            return relu_out
-        def _dense_relu_checker(extract):
-            op = extract.args[0]
-            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
-
-        #relu has to be preceded by dense and bias_add
-        def _dense_bias_relu_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            bias_out = is_op('nn.bias_add')(dense_out, is_constant())
-            relu_out = is_op('nn.relu')(bias_out)
-            return relu_out
-        def _dense_bias_relu_checker(extract):
-            op = extract.args[0].args[0]
-            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
-        def _dense_add_relu_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            add_out = is_op('add')(dense_out, is_constant())
-            relu_out = is_op('nn.relu')(add_out)
-            return relu_out
-        def _dense_add_relu_checker(extract):
-            op = extract.args[0].args[0]
-            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
 
         #bias_add has to be preceded by dense
         def _dense_bias_pattern():
@@ -1648,16 +1572,110 @@ class TIDLAnnotation:
             ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
             ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
         ]
+
+        #relu6 has to be preceded by conv2d or (conv2d, bias_add)
+        def _relu6_check_fun(attrs): # clip(0, 6) is not supported standalone
+            supported = (float(attrs.a_min) == 0.0) and (float(attrs.a_max) == 6.0)
+            return supported
+
+        def _conv2d_relu6_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            relu6_out = is_op('clip')(conv2d_out)
+            return relu6_out
+
+        def _conv2d_relu6_checker(extract):
+            relu6_supported = _relu6_check_fun(extract.attrs)
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
+
+        def _conv2d_bias_relu6_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
+            relu6_out = is_op('clip')(bias_out)
+            return relu6_out
+
+        def _conv2d_bias_relu6_checker(extract):
+            relu6_supported = _relu6_check_fun(extract.attrs)
+            op = extract.args[0].args[0]
+            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
+
+        def _conv2d_add_relu6_pattern():
+            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
+            # 'add' must be 'bias_add' in (conv2d, add, relu6) pattern
+            bias_add_out = is_op('add')(conv2d_out, is_constant())
+            relu6_out = is_op('clip')(bias_add_out)
+            return relu6_out
+
+        def _conv2d_add_relu6_checker(extract):
+            return _conv2d_bias_relu6_checker(extract)
+
+        #relu6 has to be preceded by element-wise add, batch_norm, or dense
+        def _add_relu6_pattern():
+            # add must be element-wise add
+            add_out = is_op('add')(wildcard(), wildcard())
+            relu6_out = is_op('clip')(add_out)
+            return relu6_out
+
+        def _add_relu6_checker(extract):
+            relu6_supported = _relu6_check_fun(extract.attrs)
+            return relu6_supported
+
+        def _bn_relu6_pattern():
+            bn_out = is_op('nn.batch_norm')(wildcard(), wildcard(), wildcard(), wildcard(),
+                                            wildcard())
+            tuple_get_item_node = is_tuple_get_item(bn_out, 0)
+            relu6_out = is_op('clip')(tuple_get_item_node)
+            return relu6_out
+
+        def _bn_relu6_checker(extract):
+            relu6_supported = _relu6_check_fun(extract.attrs)
+            bn_op = extract.args[0].tuple_value
+            bn_supported = self.whitelist_check_func('nn.batch_norm', bn_op.attrs, bn_op.args)
+            return bn_supported and relu6_supported
+
+        def _dense_relu6_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            relu6_out = is_op('clip')(dense_out)
+            return relu6_out
+
+        def _dense_relu6_checker(extract):
+            relu6_supported = _relu6_check_fun(extract.attrs)
+            op = extract.args[0]
+            return self.whitelist_check_func('nn.dense', op.attrs, op.args) and relu6_supported
+
+        #relu6 can also be preceded by (dense, bias_add): 
+        #  (dense, bias_add, relu6) -> (dense, relu6) -> dense
+        def _dense_bias_relu6_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            bias_out = is_op('nn.bias_add')(dense_out, is_constant())
+            relu6_out = is_op('clip')(bias_out)
+            return relu6_out
+
+        def _dense_bias_relu6_checker(extract):
+            dense_op = extract.args[0].args[0]
+            relu6_supported = _relu6_check_fun(extract.attrs)
+            dense_supported = self.whitelist_check_func('nn.dense', dense_op.attrs, dense_op.args)
+            return relu6_supported and dense_supported
+
+        def _dense_add_relu6_pattern():
+            dense_out = is_op('nn.dense')(wildcard(), is_constant())
+            bias_add_out = is_op('add')(dense_out, is_constant())
+            relu6_out = is_op('clip')(bias_add_out)
+            return relu6_out
+
+        def _dense_add_relu6_checker(extract):
+            return _dense_bias_relu6_checker(extract)
+
         # additional patterns required by J6
         pattern_table_j6 = [
-            ('tidl.conv2d_relu', _conv2d_relu_pattern(), _conv2d_relu_checker),
-            ('tidl.conv2d_bias_relu', _conv2d_bias_relu_pattern(), _conv2d_bias_relu_checker),
-            ('tidl.conv2d_add_relu', _conv2d_add_relu_pattern(), _conv2d_add_relu_checker),
-            ('tidl.bn_relu', _bn_relu_pattern(), _bn_relu_checker),
-            ('tidl.add_relu', _add_relu_pattern(), _add_relu_checker),
-            ('tidl.dense_relu', _dense_relu_pattern(), _dense_relu_checker),
-            ('tidl.dense_bias_relu', _dense_bias_relu_pattern(), _dense_bias_relu_checker),
-            ('tidl.dense_add_relu', _dense_add_relu_pattern(), _dense_add_relu_checker),
+            ('tidl.conv2d_relu6', _conv2d_relu6_pattern(), _conv2d_relu6_checker),
+            ('tidl.conv2d_bias_relu6', _conv2d_bias_relu6_pattern(), _conv2d_bias_relu6_checker),
+            ('tidl.conv2d_add_relu6', _conv2d_add_relu6_pattern(), _conv2d_add_relu6_checker),
+            ('tidl.bn_relu6', _bn_relu6_pattern(), _bn_relu6_checker),
+            ('tidl.add_relu6', _add_relu6_pattern(), _add_relu6_checker),
+            ('tidl.dense_relu6', _dense_relu6_pattern(), _dense_relu6_checker),
+            ('tidl.dense_bias_relu6', _dense_bias_relu6_pattern(), _dense_bias_relu6_checker),
+            ('tidl.dense_add_relu6', _dense_add_relu6_pattern(), _dense_add_relu6_checker),
         ]
 
         # additional patterns required by J7
@@ -1666,7 +1684,8 @@ class TIDLAnnotation:
         ]
 
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
-            # conv2d_bias_relu, dense_bias_relu, must precede conv2d_bias, dense_bias, etc.
+            # conv2d_bias_relu6/conv2d_add_relu6 must precede conv2d_bias/conv2d_add in the table
+            # dense_bias_relu6/dense_add_relu6 must precede dense_bias/dense_add in the table
             pattern_table = pattern_table_j6 + pattern_table_common
         else:
             pattern_table = pattern_table_j7 + pattern_table_common
@@ -1699,6 +1718,11 @@ class TIDLAnnotation:
 
     def whitelist_fn_j7(self, op_name, attrs, args):
         """ Whitelisting function for J7: constraint checking is delegated to the import library """
+
+        # Check "clip" constraints here until checker function is implemented in import lib
+        if op_name == "clip":
+            return (attrs.a_min <= 0 and attrs.a_max > 0)
+
         if self.import_lib is None:
             # For CI testing which doesn't have import library - still run TVM passes
             return True
@@ -1706,9 +1730,8 @@ class TIDLAnnotation:
         op = tvm.ir.Op.get(op_name)
         callnode = tvm.relay.Call(op, args, attrs)
         #print("Invoking TIDL Relay Import whitelisting function...")
-        #whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
-        #return whitelist_fn(callnode) # bypass whitelisting function for now
-        return True
+        whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
+        return whitelist_fn(callnode)
 
     def whitelist_fn_j6(self, op_name, attrs, args):
         """ Whitelisting function for J6: checking operator attributes against constraints """
@@ -1928,12 +1951,16 @@ class TIDLCompiler:
                 0  - no compilation due to missing TIDL tools
         """
 
+        #============= Find data layout of the original graph =============
+        data_layout = find_data_layout(mod_orig)
+
         # Open TIDL import library
         if os.path.exists(self.tidl_import_lib):
             import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
             if self.tidl_platform == "J7":
                 tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
-                tidl_relay_init(1.0, 1, 3, 224, 224, 1, self.tidl_tensor_bits) # dummy numbers
+                is_nchw = data_layout == "NCHW"
+                tidl_relay_init(1.0, 1, 3, 224, 224, is_nchw, self.tidl_tensor_bits) # dummy numbers
         else:
             import_lib = None # Continue with graph annotation and partition for CI testing
 
@@ -1951,9 +1978,6 @@ class TIDLCompiler:
         mod = relay.transform.EliminateCommonSubexpr()(mod)
         #print("----------- original graph-----------")
         #print(mod.astext(show_meta_data=False))
-
-        #============= Find data layout of the original graph =============
-        data_layout = find_data_layout(mod)
 
         #============= Graph annotation ==============
         mod = tidl_annotation.merge_sequential_ops(mod)
