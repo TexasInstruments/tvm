@@ -23,7 +23,8 @@ import pytest
 import tvm
 from tvm import relay
 from tvm.contrib.download import download_testdata
-from tvm.relay.backend.contrib import tidl
+
+tidl_platform = "AM57"  # use command line argument, J7, to change
 
 def get_arm_compiler():
     """ Get ARM compiler if it is available """
@@ -71,6 +72,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
             -1 - compilation for TIDL offload failed - failure for CI testing
             0  - no compilation due to missing TIDL tools or GCC ARM tools
     """
+    from tvm.relay.backend.contrib import tidl
 
     tidl_artifacts_folder = "./artifacts/" + model_name
     if os.path.isdir(tidl_artifacts_folder):
@@ -80,28 +82,42 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     else:
         os.makedirs(tidl_artifacts_folder)
 
-    tidl_compiler = tidl.TIDLCompiler("AM57", (6, 3),
+    if tidl_platform == "AM57":
+        tidl_compiler = tidl.TIDLCompiler("AM57", (6, 3),
                                       num_tidl_subgraphs=num_tidl_subgraphs,
                                       artifacts_folder=tidl_artifacts_folder,
                                       tidl_tools_path=get_tidl_tools_path())
+    else:
+        tidl_compiler = tidl.TIDLCompiler("J7", (7, 0),
+                                      num_tidl_subgraphs=num_tidl_subgraphs,
+                                      artifacts_folder=tidl_artifacts_folder,
+                                      tidl_tools_path=get_tidl_tools_path(),
+                                      tidl_tensor_bits=16)
     mod, status = tidl_compiler.enable(mod_orig, params, model_input)
 
-    arm_gcc = get_arm_compiler()
-    if arm_gcc is None:
-        print("Skip build because ARM_GCC_PATH is not set")
-        return 0  # No graph compilation
+    if tidl_platform == "AM57":
+        arm_gcc = get_arm_compiler()
+        if arm_gcc is None:
+            print("Skip build because ARM_GCC_PATH is not set")
+            return 0  # No graph compilation
 
     if status == 1: # TIDL compilation succeeded
         print("Graph execution with TIDL")
     else: # TIDL compilation failed or no TIDL compilation due to missing tools
         print("Graph execution without TIDL")
 
-    target = "llvm -mtriple=armv7l-linux-gnueabihf" # for AM57x or J6 devices
+    if tidl_platform == "AM57":
+        target = "llvm -mtriple=armv7l-linux-gnueabihf" # for AM57x/J6 devices
+    else:
+        target = "llvm"                                 # testing on J7 host 
     graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
     path_graph = os.path.join(tidl_artifacts_folder, "deploy_graph.json")
     path_params = os.path.join(tidl_artifacts_folder, "deploy_param.params")
-    lib.export_library(path_lib, cc=arm_gcc)
+    if tidl_platform == "AM57":
+        lib.export_library(path_lib, cc=arm_gcc)
+    else:
+        lib.export_library(path_lib)
     with open(path_graph, "w") as fo:
         fo.write(graph)
     with open(path_params, "wb") as fo:
@@ -113,22 +129,21 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
 def get_input_nchw(input_shape):
     """ Get input data in 'NCHW' layout """
     batch_size = input_shape[0]
-    tidl_tools_path = get_tidl_tools_path()
-    orig_image = np.load(os.path.join(tidl_tools_path, 'dog.npy'))  # "NCHW"
-    image_data = np.squeeze(orig_image, axis=0) # CHW
-    if orig_image.shape[2:4] != input_shape[2:4]:
-        try:
-            import cv2  # import OpenCV2 here instead of top to avoid CI error
-            image_data = image_data.transpose(2, 1, 0)  # WHC
-            image_resize = cv2.resize(image_data, dsize=(input_shape[3], input_shape[2]))
-            image_resize = image_resize.transpose(2, 1, 0)  # CHW
-        except ModuleNotFoundError:
-            print("Please install OpenCV2")
-            sys.exit()
-    else:
-        image_resize = image_data
+    img_file = download_testdata(
+         'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true',
+         'cat.png', module='data')
+    from PIL import Image
+    orig_image = Image.open(img_file)  # HWC
+    resized_image = orig_image.resize((input_shape[2], input_shape[3]))
     # Normalize input data to (-1,1)
-    image_norm = image_resize/np.amax(np.abs(image_resize))
+    # preprocess image as described here:
+    # https://github.com/tensorflow/models/blob/edb6ed22a801665946c63d650ab9a0b23d98e1b1/research/slim/preprocessing/inception_preprocessing.py#L243
+    image_norm = np.asarray(resized_image).astype("float32")
+    image_norm[:, :, 0] = 2.0 / 255.0 * image_norm[:, :, 0] - 1
+    image_norm[:, :, 1] = 2.0 / 255.0 * image_norm[:, :, 1] - 1
+    image_norm[:, :, 2] = 2.0 / 255.0 * image_norm[:, :, 2] - 1
+
+    image_norm = image_norm.transpose(2, 0, 1)  # CHW
     # Set batch_size of input data
     input_data = np.concatenate([image_norm[np.newaxis, :, :]]*batch_size)
     return input_data
@@ -309,6 +324,7 @@ def gluoncv_compile_model(model_name, img_file, batch_size, img_size=None, img_n
         input_data = np.concatenate([input_data]*batch_size)
 
         #======================== Load the model ===========================
+        print('testing model: ', model_name, ' loading from gluoncv model_zoo')
         input_name = "data"
         model = model_zoo.get_model(model_name, pretrained=True)
         mod, params = relay.frontend.from_mxnet(model, {input_name:input_data.shape})
@@ -381,8 +397,13 @@ def test_tidl_ops():
     model_compile("relu6", mod, params, {"data":input_data}, num_tidl_subgraphs=1)
 
 if __name__ == '__main__':
-    test_tidl_ops()
+    if (len(sys.argv) > 1 and sys.argv[1] == "J7"):
+        tidl_platform = "J7"
+    print("test_tidl.py on platform " + tidl_platform)
+
+    # Need to load tensorflow before tidl to avoid protobuf version conflict
     test_tidl_tensorflow()
+    test_tidl_ops()
     test_tidl_onnx()
     test_tidl_pytorch()
     test_tidl_tflite()
