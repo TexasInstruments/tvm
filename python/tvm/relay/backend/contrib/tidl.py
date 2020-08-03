@@ -1531,16 +1531,41 @@ class TIDLAnnotation:
             op = extract.args[0]
             return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
 
-        #pad has be preceded by conv2d
-        def _conv2d_pad_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            pad_out = is_op('nn.pad')(conv2d_out)
-            return pad_out
-        def _conv2d_pad_checker(extract):
-            pad_supported = (float(extract.attrs.pad_value) == 0.0 and \
-                            extract.attrs.pad_mode == 'constant')
-            op = extract.args[0]
-            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and pad_supported
+        #pad has to precede conv2d, (conv2d, bias_add), or (conv2d, add)
+        def _pad_checker(pad_op):
+            pad_supported = (float(pad_op.attrs.pad_value) == 0.0 and \
+                             pad_op.attrs.pad_mode == 'constant')
+            return pad_supported
+
+        def _pad_conv2d_pattern():
+            pad_out = is_op('nn.pad')(wildcard())
+            conv2d_out = is_op('nn.conv2d')(pad_out, is_constant())
+            return conv2d_out
+
+        def _pad_conv2d_checker(extract):
+            pad_supported = _pad_checker(extract.args[0])
+            conv2d_supported = self.whitelist_check_func('nn.conv2d', extract.attrs, extract.args)
+            return conv2d_supported and pad_supported
+
+        def _pad_conv2d_bias_pattern():
+            pad_conv2d_out = _pad_conv2d_pattern()
+            bias_out = is_op('nn.bias_add')(pad_conv2d_out, is_constant())
+            return bias_out
+
+        def _pad_conv2d_bias_checker(extract):
+            pad_supported = _pad_checker(extract.args[0].args[0])
+            conv2d_bias_supported = _conv2d_bias_checker(extract)
+            return conv2d_bias_supported and pad_supported
+
+        def _pad_conv2d_add_pattern():
+            pad_conv2d_out = _pad_conv2d_pattern()
+            add_out = is_op('add')(pad_conv2d_out, is_constant())
+            return add_out
+
+        def _pad_conv2d_add_checker(extract):
+            pad_supported = _pad_checker(extract.args[0].args[0])
+            conv2d_add_supported = _conv2d_add_checker(extract)
+            return conv2d_add_supported and pad_supported
 
         #bias_add has to be preceded by dense
         def _dense_bias_pattern():
@@ -1566,9 +1591,11 @@ class TIDLAnnotation:
                                            _reshape_global_avg_pool_checker),
             ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
             ('tidl.reshape_softmax', _reshape_softmax_pattern()),
+            ('tidl.pad_conv2d_bias', _pad_conv2d_bias_pattern(), _pad_conv2d_bias_checker),
+            ('tidl.pad_conv2d_add', _pad_conv2d_add_pattern(), _pad_conv2d_add_checker),
             ('tidl.conv2d_bias', _conv2d_bias_pattern(), _conv2d_bias_checker),
             ('tidl.conv2d_add', _conv2d_add_pattern(), _conv2d_add_checker),
-            ('tidl.conv2d_pad', _conv2d_pad_pattern(), _conv2d_pad_checker),
+            ('tidl.pad_conv2d', _pad_conv2d_pattern(), _pad_conv2d_checker),
             ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
             ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
         ]
@@ -1666,16 +1693,49 @@ class TIDLAnnotation:
         def _dense_add_relu6_checker(extract):
             return _dense_bias_relu6_checker(extract)
 
+        def _pad_conv2d_relu6_pattern():
+            _pad_conv2d_out = _pad_conv2d_pattern()
+            relu6_out = is_op('clip')(_pad_conv2d_out)
+            return relu6_out
+
+        def _pad_conv2d_relu6_checker(extract):
+            pad_op = extract.args[0].args[0]
+            pad_supported = _pad_checker(pad_op)
+            return pad_supported and _conv2d_relu6_checker(extract)
+
+        def _pad_conv2d_bias_relu6_pattern():
+            _pad_conv2d_bias_out = _pad_conv2d_bias_pattern()
+            relu6_out = is_op('clip')(_pad_conv2d_bias_out)
+            return relu6_out
+
+        def _pad_conv2d_bias_relu6_checker(extract):
+            pad_op = extract.args[0].args[0].args[0]
+            pad_supported = _pad_checker(pad_op)
+            return pad_supported and _conv2d_bias_relu6_checker(extract)
+
+        def _pad_conv2d_add_relu6_pattern():
+            _pad_conv2d_add_out = _pad_conv2d_add_pattern()
+            relu6_out = is_op('clip')(_pad_conv2d_add_out)
+            return relu6_out
+
+        def _pad_conv2d_add_relu6_checker(extract):
+            pad_op = extract.args[0].args[0].args[0]
+            pad_supported = _pad_checker(pad_op)
+            return pad_supported and _conv2d_add_relu6_checker(extract)
+
         # additional patterns required by J6
         pattern_table_j6 = [
-            ('tidl.conv2d_relu6', _conv2d_relu6_pattern(), _conv2d_relu6_checker),
+            ('tidl.pad_conv2d_bias_relu6', _pad_conv2d_bias_relu6_pattern(), _pad_conv2d_bias_relu6_checker),
+            ('tidl.pad_conv2d_add_relu6', _pad_conv2d_add_relu6_pattern(), _pad_conv2d_add_relu6_checker),
+            ('tidl.pad_conv2d_relu6', _pad_conv2d_relu6_pattern(), _pad_conv2d_relu6_checker),
             ('tidl.conv2d_bias_relu6', _conv2d_bias_relu6_pattern(), _conv2d_bias_relu6_checker),
             ('tidl.conv2d_add_relu6', _conv2d_add_relu6_pattern(), _conv2d_add_relu6_checker),
-            ('tidl.bn_relu6', _bn_relu6_pattern(), _bn_relu6_checker),
-            ('tidl.add_relu6', _add_relu6_pattern(), _add_relu6_checker),
-            ('tidl.dense_relu6', _dense_relu6_pattern(), _dense_relu6_checker),
+            ('tidl.conv2d_relu6', _conv2d_relu6_pattern(), _conv2d_relu6_checker),
             ('tidl.dense_bias_relu6', _dense_bias_relu6_pattern(), _dense_bias_relu6_checker),
             ('tidl.dense_add_relu6', _dense_add_relu6_pattern(), _dense_add_relu6_checker),
+            ('tidl.dense_relu6', _dense_relu6_pattern(), _dense_relu6_checker),
+            ('tidl.add_relu6', _add_relu6_pattern(), _add_relu6_checker),
+            ('tidl.bn_relu6', _bn_relu6_pattern(), _bn_relu6_checker),
         ]
 
         # additional patterns required by J7
