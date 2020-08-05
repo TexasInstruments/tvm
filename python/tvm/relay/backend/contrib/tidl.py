@@ -1430,12 +1430,6 @@ class TIDLAnnotation:
                 return False
             return True
 
-        @tvm.ir.register_op_attr("concatenate", "target.tidl")
-        def concatenate_whitelist_fn(attrs, args):
-            # Only support concatenate across channel - TODO: add J7 whitelist function
-            supported = (attrs.axis == 1) or (attrs.axis == 3)
-            return supported
-
         # Register J7/J6 common operators which are supported with different constraints
         self._register_constrained_op("nn.argmax")
         self._register_constrained_op("nn.avg_pool2d")
@@ -1447,6 +1441,7 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.global_avg_pool2d")
         self._register_constrained_op("nn.max_pool2d")
         self._register_constrained_op("nn.softmax")
+        self._register_constrained_op("concatenate")
 
         # Register J7 specific operators, or those supported standalone by J7 but not J6,
         # or those for which there are no whitelist functions.
@@ -1600,6 +1595,7 @@ class TIDLAnnotation:
             ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
         ]
 
+        # additional patterns required by J6
         #relu6 has to be preceded by conv2d or (conv2d, bias_add)
         def _relu6_check_fun(attrs): # clip(0, 6) is not supported standalone
             supported = (float(attrs.a_min) == 0.0) and (float(attrs.a_max) == 6.0)
@@ -1739,8 +1735,20 @@ class TIDLAnnotation:
         ]
 
         # additional patterns required by J7
+        #pad can also precede avg_pool2d
+        def _pad_avg_pool_pattern():
+            pad_out = is_op('nn.pad')(wildcard())
+            avg_pool_out = is_op('nn.avg_pool2d')(pad_out)
+            return avg_pool_out
+
+        def _pad_avg_pool_checker(extract):
+            pad_supported = _pad_checker(extract.args[0])
+            pool_supported = self.whitelist_check_func('nn.avg_pool2d', extract.attrs, extract.args)
+            return pool_supported and pad_supported
+
         pattern_table_j7 = [
             ('tidl.transpose_reshape', _transpose_reshape_pattern()),
+            ('tidl.pad_avgpool', _pad_avg_pool_pattern(), _pad_avg_pool_checker),
         ]
 
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
@@ -1778,10 +1786,6 @@ class TIDLAnnotation:
 
     def whitelist_fn_j7(self, op_name, attrs, args):
         """ Whitelisting function for J7: constraint checking is delegated to the import library """
-
-        # Check "clip" constraints here until checker function is implemented in import lib
-        if op_name == "clip":
-            return (attrs.a_min <= 0 and attrs.a_max > 0)
 
         if self.import_lib is None:
             # For CI testing which doesn't have import library - still run TVM passes
@@ -1902,6 +1906,10 @@ class TIDLAnnotation:
         def softmax_whitelist_fn(attrs, args):
             return (attrs.axis == -1)  # only support 1-D array softmax
 
+        def concatenate_whitelist_fn(attrs, args):
+            # Only support concatenate across channel
+            return (attrs.axis == 1) or (attrs.axis == 3)
+
         whitelist_funcs = {"nn.argmax": argmax_whitelist_fn,
                            "nn.avg_pool2d": avg_pool_whitelist_fn,
                            "nn.batch_flatten": batch_flatten_fn,
@@ -1912,6 +1920,7 @@ class TIDLAnnotation:
                            "nn.global_avg_pool2d": global_avg_pool_whitelist_fn,
                            "nn.max_pool2d": max_pool_whitelist_fn,
                            "nn.softmax": softmax_whitelist_fn,
+                           "concatenate": concatenate_whitelist_fn,
                           }
         #print("Whitelisting " + op_name)
         return whitelist_funcs[op_name](attrs, args)
