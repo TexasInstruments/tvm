@@ -190,7 +190,7 @@ def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
             tensor.append(value)
     return tensor
 
-def tensor_quant_flatten(input_tensor, data_layout, tensor_bits):
+def tensor_quant_flatten(input_tensors, data_layout, tensor_bits):
     r""" Convert float32 n-d array to int8/int16 or uint8/uint16 1-d array
 
     Parameters
@@ -200,38 +200,47 @@ def tensor_quant_flatten(input_tensor, data_layout, tensor_bits):
     tensor_bits: 8 or 16
     """
 
-    # only use 1 batch for calibration
-    input_tensor = input_tensor[0, :]
-    # change layout to CxHxW to use numpy.flattern to change to 1-d array
-    if data_layout == "NHWC" and len(input_tensor.shape) == 3:
-        input_tensor = input_tensor.transpose(2, 0, 1)
+    quant_tensors = list()
+    quant_scales = list()
+    input_signs = list()
+    for i in range(len(input_tensors)):
+        input_tensor = input_tensors[i]
+        # only use 1 batch for calibration
+        input_tensor = input_tensor[0, :]
+        # change layout to CxHxW to use numpy.flattern to change to 1-d array
+        if data_layout == "NHWC" and len(input_tensor.shape) == 3:
+            input_tensor = input_tensor.transpose(2, 0, 1)
 
-    max_value = max(abs(np.amin(input_tensor)), np.amax(input_tensor))
-    if max_value == 0:
-        max_value = 1.0  # arbitrary number if input tensor is all 0's
-    abs_signed_max = 128.0
-    abs_unsigned_max = 255.0
-    if tensor_bits == 16:
-        abs_signed_max = 32768.0
-        abs_unsigned_max = 65535.0
+        max_value = max(abs(np.amin(input_tensor)), np.amax(input_tensor))
+        if max_value == 0:
+            max_value = 1.0  # arbitrary number if input tensor is all 0's
+        abs_signed_max = 128.0
+        abs_unsigned_max = 255.0
+        if tensor_bits == 16:
+            abs_signed_max = 32768.0
+            abs_unsigned_max = 65535.0
 
-    if np.amin(input_tensor) >= 0:
-        # quantize to Uint8 or Uint16
-        sign = 0
-        scale = abs_unsigned_max/max_value
-        quant_min, quant_max = 0.0, abs_unsigned_max
-    else:
-        # quantize to Int8 or Int16
-        sign = 1
-        scale = abs_signed_max/max_value
-        quant_min, quant_max = (- abs_signed_max), (abs_signed_max - 1.0)
+        if np.amin(input_tensor) >= 0:
+            # quantize to Uint8 or Uint16
+            sign = 0
+            scale = abs_unsigned_max/max_value
+            quant_min, quant_max = 0.0, abs_unsigned_max
+        else:
+            # quantize to Int8 or Int16
+            sign = 1
+            scale = abs_signed_max/max_value
+            quant_min, quant_max = (- abs_signed_max), (abs_signed_max - 1.0)
 
-    tensor_norm = np.multiply(input_tensor, scale)
-    tensor_quant = np.rint(tensor_norm)
-    tensor_quant = np.clip(tensor_quant, quant_min, quant_max)
-    output = tensor_quant.flatten()   # works only if tensor_quant is in "CxHxW" format
+        tensor_norm = np.multiply(input_tensor, scale)
+        tensor_quant = np.rint(tensor_norm)
+        tensor_quant = np.clip(tensor_quant, quant_min, quant_max)
+        output = tensor_quant.flatten()   # works only if tensor_quant is in "CxHxW" format
 
-    return output, scale, sign
+        quant_tensors.append(output)
+        quant_scales.append(scale)
+        input_signs.append(sign)
+
+    return quant_tensors, quant_scales, input_signs
 
 class VarReplacer(ExprMutator):
     """
@@ -583,16 +592,21 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file,
     # Save quantized input vector to a file for calib tool to read
     # Saving as 'int8' or 'uint8' is the same
     calib_raw_image = temp_folder + 'calib_raw_data.bin'
-    if tidl_tensor_bits == 8:
-        if input_signed == 1:
-            input_quant_vec.astype('int8').tofile(calib_raw_image)
+    open(calib_raw_image, "wb").close() # delete old file contents
+    fid = open(calib_raw_image, "ab")
+
+    for i in range(len(input_quant_vec)):
+        if tidl_tensor_bits == 8:
+            if input_signed == 1:
+                input_quant_vec[i].astype('int8').tofile(fid)
+            else:
+                input_quant_vec[i].astype('uint8').tofile(fid)
         else:
-            input_quant_vec.astype('uint8').tofile(calib_raw_image)
-    else:
-        if input_signed == 1:
-            input_quant_vec.astype('int16').tofile(calib_raw_image)
-        else:
-            input_quant_vec.astype('uint16').tofile(calib_raw_image)
+            if input_signed == 1:
+                input_quant_vec[i].astype('int16').tofile(fid)
+            else:
+                input_quant_vec[i].astype('uint16').tofile(fid)
+    fid.close()
 
     if platform == "J7":
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
@@ -711,6 +725,14 @@ class InOutNodes(ctypes.Structure):
     _fields_ = [('this_node', ctypes.c_int),
                 ('num_in_nodes', ctypes.c_int), ('num_out_nodes', ctypes.c_int),
                 ('in_nodes', ctypes.c_void_p), ('out_nodes', ctypes.c_void_p)]
+
+class TensorDescriptor(ctypes.Structure):
+    """ Input/output tensor descriptor for TIDL subgraphs """
+    _fields_ = [('input_scale', ctypes.c_double),
+                ('input_signed', ctypes.c_int),
+                ('channel', ctypes.c_int),
+                ('height', ctypes.c_int),
+                ('width', ctypes.c_int)]
 
 class TIDLImport:
     """TIDL import module.
@@ -1038,60 +1060,64 @@ class TIDLImport:
         import_lib_mul(mul_params, ctypes.POINTER(ctypes.c_int)())
         return True
 
-    def tidl_import_init(self, input_scale, input_signed, input_shape):
+    def tidl_import_init(self, input_scale, input_signed, input):
         r""" Initializing TIDL import
 
         Parameters
         ----------
-        input_scale: double
+        input_scale: list
             Scaling factor to convert floating point input to 8-bit quantized input
-        input_signed: int
+        input_signed: list
             Signed (1) or unsigned (0) of input
-        input_shape: tuple
-            Input shape (N,C,H,W) or (N,H,W,C)
+        input: list
+            Input tensors to TIDL subgraph
         Returns
         -------
         True if initialization succeeds or False if initialization fails
         """
 
-        if len(input_shape) == 2:
-            # input is a vector - expand (N,W) to (N,1,1,W) or (N,1,W,1)
-            if self.data_layout == "NCHW":
+        input_shapes = []
+        for i in range(len(input)):
+            input_shape = input[i].shape
+            if len(input_shape) == 2:
+                # input is a vector - expand (N,W) to (N,1,1,W)
                 in_shape = (input_shape[0], 1, 1, input_shape[1])
-            else:
-                in_shape = (input_shape[0], 1, input_shape[1], 1)
-        elif len(input_shape) == 3:
-            # expand (N,H,W) to (N,1,H,W) or (N,H,W,1)
-            if self.data_layout == "NCHW":
+            elif len(input_shape) == 3:
+                # expand (N,H,W) to (N,1,H,W)
                 in_shape = (input_shape[0], 1, input_shape[1], input_shape[2])
+            elif len(input_shape) == 4:
+                in_shape = input_shape
+                if self.data_layout == "NHWC":
+                    in_shape = (in_shape[0], in_shape[3], in_shape[1], in_shape[2])
             else:
-                in_shape = (input_shape[0], input_shape[1], input_shape[2], 1)
-        elif len(input_shape) == 4:
-            in_shape = input_shape
-        else:
-            print("Subgraph input_shape " + str(input_shape) + " is not supported")
-            return False
+                print("Subgraph input_shape " + str(input_shape) + " is not supported")
+                return False
+            input_shapes.append(in_shape)
 
         if self.data_layout == "NCHW":
             layout = b'NCHW'
-            (channel, height, width) = in_shape[1:4]
             is_nchw = 1
         elif self.data_layout == "NHWC":
             layout = b'NHWC'
-            (channel, height, width) = (in_shape[3], in_shape[1], in_shape[2])
             is_nchw = 0
         else:
             print('data layout ' + self.data_layout + ' is not supported')
             return False
 
         if self.tidl_platform == "J7":
+            descr = (TensorDescriptor * len(input))()
+            for i in range(len(input)):
+                descr[i].input_scale = input_scale[i]
+                descr[i].input_signed = input_signed[i]
+                (descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][1:4]
+            input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
-            import_lib_init(input_scale, input_signed, channel, height, width,
-                            is_nchw, self.tidl_tensor_bits)
+            import_lib_init(len(input), input_dscr_ptr, is_nchw, self.tidl_tensor_bits)
             return True
 
-        in_quant_factor = int(round(input_scale*255))  # 255 is due to TIDL implementation
-        config_params = TIDLconfigParams(12, 50, in_quant_factor, input_signed,
+        (channel, height, width) = input_shapes[0][1:4]
+        in_quant_factor = int(round(input_scale[0]*255))  # 255 is due to TIDL implementation
+        config_params = TIDLconfigParams(12, 50, in_quant_factor, input_signed[0],
                                          channel, height, width)
 
         # Invoking C library call to initialize TIDL import
@@ -1123,12 +1149,9 @@ class TIDLImport:
             import_lib_node = tvm.get_global_func("TIDL_relayImportNode")
             if import_lib_node(this_node) != 0:
                 return False
-            in_out_nodes = find_in_out_nodes(all_nodes, this_node,
-                                             self.tidl_target)
-            import_lib_linknode = tvm.get_global_func(
-                                                    "TIDL_relayImportLinkNode")
-            if import_lib_linknode(ctypes.cast(ctypes.byref(in_out_nodes),
-                                               ctypes.c_void_p)) == 0:
+            in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target)
+            import_lib_linknode = tvm.get_global_func("TIDL_relayImportLinkNode")
+            if import_lib_linknode(ctypes.cast(ctypes.byref(in_out_nodes), ctypes.c_void_p)) == 0:
                 return True
             else:
                 return False
@@ -1328,16 +1351,16 @@ class TIDLImport:
             input_fp = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name)
             if input_fp is None:
                 return import_fail
-            if len(input_fp) > 1:
-                print("Error - only 1 input tensor is supported for now!")
+            if self.tidl_platform == "AM57" and len(input_fp) > 1:
+                print("Error - only 1 input tensor is supported for AM57x (J6)!")
                 return import_fail
 
             # Quantize input tensor into 8-bit integer (only support 1 input tensor)
-            input_quant_vec, input_scale, input_signed = tensor_quant_flatten(
-                         input_fp[0], self.data_layout, self.tidl_tensor_bits)
+            input_quant_vec, input_scale, input_signed = \
+                            tensor_quant_flatten(input_fp, self.data_layout, self.tidl_tensor_bits)
 
             # Initialize TIDL import
-            if not self.tidl_import_init(input_scale, input_signed, input_fp[0].shape):
+            if not self.tidl_import_init(input_scale, input_signed, input_fp):
                 return import_fail
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
@@ -1393,7 +1416,7 @@ class TIDLImport:
             if not status:
                 return import_fail
 
-            # Calculate scaling factor to convert output tensor to floating point
+            # AM57x (J6) only: Calculate scaling factor to convert output tensor to floating point
             # Obtain output tensor from TVM graph execution
             output_fp = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
 
@@ -1413,7 +1436,7 @@ class TIDLImport:
 
             # Generate subgraph configuration file
             subgraph_cfg_gen(self.artifacts_folder, subgraph_id, self.data_layout,
-                             input_scale, input_signed, output_scale, output_signed)
+                             input_scale[0], input_signed[0], output_scale, output_signed)
         return import_succeed
 
 class TIDLAnnotation:
@@ -1465,7 +1488,7 @@ class TIDLAnnotation:
             self._register_supported_op("split")
             self._register_supported_op("strided_slice")
             self._register_constrained_op("image.resize")
-            # "clip" is supported with constraints in J7 but not unsupported standalone in J6
+            # "clip" is supported with constraints in J7 but unsupported standalone in J6
             self._register_constrained_op("clip")
             self._register_supported_op("nn.leaky_relu")
             self._register_supported_op("nn.prelu")
@@ -1515,6 +1538,13 @@ class TIDLAnnotation:
         def _reshape_dense_checker(extract):
             op = extract.args[0]
             return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+        def _reshape_mean_pattern():
+            mean_out = is_op('mean')(wildcard())
+            reshape_out = is_op('reshape')(mean_out)
+            return reshape_out
+        def _reshape_mean_checker(extract):
+            op = extract.args[0]
+            return True
 
         #reshape has to be followed by softmax
         def _reshape_softmax_pattern():
@@ -1597,6 +1627,7 @@ class TIDLAnnotation:
             ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
                                            _reshape_global_avg_pool_checker),
             ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
+            ('tidl.reshape_mean', _reshape_mean_pattern(), _reshape_mean_checker),
             ('tidl.reshape_softmax', _reshape_softmax_pattern()),
             ('tidl.pad_conv2d_bias', _pad_conv2d_bias_pattern(), _pad_conv2d_bias_checker),
             ('tidl.pad_conv2d_add', _pad_conv2d_add_pattern(), _pad_conv2d_add_checker),
@@ -1805,7 +1836,7 @@ class TIDLAnnotation:
         # Invoke TIDL import library call to check if this op can be supported
         op = tvm.ir.Op.get(op_name)
         callnode = tvm.relay.Call(op, args, attrs)
-        #print("Invoking TIDL Relay Import whitelisting function...")
+        #print(f"Invoking TIDL Relay Import whitelisting function for {op_name}")
         whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
         return whitelist_fn(callnode)
 
@@ -2041,7 +2072,7 @@ class TIDLCompiler:
             if self.tidl_platform == "J7":
                 tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
                 is_nchw = data_layout == "NCHW"
-                tidl_relay_init(1.0, 1, 3, 224, 224, is_nchw, self.tidl_tensor_bits) # dummy numbers
+                tidl_relay_init(is_nchw, self.tidl_tensor_bits)
         else:
             import_lib = None # Continue with graph annotation and partition for CI testing
 
@@ -2071,9 +2102,10 @@ class TIDLCompiler:
         mod = relay.transform.PartitionGraph()(mod)
         #print("-----------initial partitioned graph-----------")
         #print(mod.astext(show_meta_data=False))
-        mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
-        mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
-                                   max_total_memory_mb=self.max_total_memory_mb)
+        if self.tidl_platform == "AM57":
+            mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
+            mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
+                                       max_total_memory_mb=self.max_total_memory_mb)
         mod = unpack_composites(mod)
         mod = prune_subgraphs(mod, compiler=self.tidl_target,
                               num_subgraphs_to_keep=self.num_tidl_subgraphs,
