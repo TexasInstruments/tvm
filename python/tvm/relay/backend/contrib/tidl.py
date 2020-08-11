@@ -1235,9 +1235,13 @@ class TIDLImport:
                     nodes_for_this_data_layer = max_num_outputs_per_data_layer
                     this_is_the_last_one = False
 
-                import_lib_out_data = self.import_lib.tidlImportOutData
-                import_lib_out_data.argtype = ctypes.c_int
-                import_lib_out_data.restype = None
+                if self.tidl_platform == "AM57":
+                    import_lib_out_data = self.import_lib.tidlImportOutData
+                    import_lib_out_data.argtype = ctypes.c_int
+                    import_lib_out_data.restype = None
+                else:
+                    import_lib_out_data = tvm.get_global_func(
+                                                "TIDL_relayImportOutDataLayer")
                 import_lib_out_data(nodes_for_this_data_layer)
 
                 # prepare input/output nodes information for linking
@@ -1251,12 +1255,20 @@ class TIDLImport:
                 in_out_nodes.out_nodes = None
                 in_out_nodes.num_out_nodes = 0
 
-                import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
-                import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
-                import_lib_link_nodes.restype = ctypes.c_int
-                if import_lib_link_nodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
-                    status = False
-                    break
+                if self.tidl_platform == "AM57":
+                    import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
+                    import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
+                    import_lib_link_nodes.restype = ctypes.c_int
+                    if import_lib_link_nodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
+                        status = False
+                        break
+                else:
+                    import_lib_linknode = tvm.get_global_func(
+                                                    "TIDL_relayImportLinkNode")
+                    if import_lib_linknode(ctypes.cast(ctypes.byref(
+                                         in_out_nodes), ctypes.c_void_p)) != 0:
+                        status = False
+                        break
 
                 imported_nodes = imported_nodes + nodes_for_this_data_layer
                 new_node_ind = new_node_ind + 1
