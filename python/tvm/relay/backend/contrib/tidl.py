@@ -207,11 +207,10 @@ def tensor_quant_flatten(input_tensors, data_layout, tensor_bits):
     quant_tensors = list()
     quant_scales = list()
     input_signs = list()
-    for i in range(len(input_tensors)):
-        input_tensor = input_tensors[i]
+    for input_tensor in input_tensors:
         # only use 1 batch for calibration
         input_tensor = input_tensor[0, :]
-        # change layout to CxHxW to use numpy.flattern to change to 1-d array
+        # change layout to CxHxW to use numpy.flatten to change to 1-d array
         if data_layout == "NHWC" and len(input_tensor.shape) == 3:
             input_tensor = input_tensor.transpose(2, 0, 1)
 
@@ -367,7 +366,7 @@ class RemoveMultiplyByOne(ExprMutator):
                     return call.args[1]
         return super().visit_call(call)
 
-def generate_subgraph_tensors(tidl_target, mod, params, graph_input):
+def generate_subgraph_tensors(tidl_target, mod, params, graph_input, save_output=False):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
     """
 
@@ -396,8 +395,9 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input):
     for i, res in enumerate(results):
         if i in calib_mutator.name_map:
             subgraph_tensors[calib_mutator.name_map[i]] = res
-            file_name = calib_mutator.name_map[i] + ".txt"
-            np.savetxt(file_name, res.flatten(), fmt='%10.5f')
+            if save_output:
+                file_name = calib_mutator.name_map[i] + ".txt"
+                np.savetxt(file_name, res.flatten(), fmt='%10.5f')
 
     return subgraph_tensors
 
@@ -1358,7 +1358,7 @@ class TIDLImport:
                 print("Error - only 1 input tensor is supported for AM57x (J6)!")
                 return import_fail
 
-            # Quantize input tensor into 8-bit integer (only support 1 input tensor)
+            # Quantize input tensors
             input_quant_vec, input_scale, input_signed = \
                             tensor_quant_flatten(input_fp, self.data_layout, self.tidl_tensor_bits)
 
@@ -1469,7 +1469,7 @@ class TIDLAnnotation:
             return True
 
         # Register J7/J6 common operators which are supported with different constraints
-        self._register_constrained_op("nn.argmax")
+        self._register_constrained_op("argmax")
         self._register_constrained_op("nn.avg_pool2d")
         self._register_constrained_op("nn.batch_flatten")
         self._register_constrained_op("nn.batch_norm")
@@ -1480,13 +1480,13 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.max_pool2d")
         self._register_constrained_op("nn.softmax")
         self._register_constrained_op("concatenate")
+        self._register_constrained_op("mean")          # 'mean' mapped to avg_pooling layer
 
         # Register J7 specific operators, or those supported standalone by J7 but not J6,
         # or those for which there are no whitelist functions.
         if self.tidl_platform == 'J7':
             self._register_supported_op("maximum")
             self._register_supported_op("minimum")
-            self._register_constrained_op("mean")           # 'mean' mapped to pooling layer
             self._register_supported_op("multiply")
             self._register_supported_op("split")
             self._register_supported_op("strided_slice")
@@ -1499,7 +1499,8 @@ class TIDLAnnotation:
             self._register_constrained_op("nn.upsampling3d")
 
         # Register operators that are J6 specific or have constraints only for J6
-        #if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
+        if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
+            self._register_constrained_op("max")           # 'max' mapped to max_pooling layer
 
         tidl_annotations_registered = True
 
@@ -1519,7 +1520,7 @@ class TIDLAnnotation:
             reshape_out2 = is_op('reshape')(transpose_out)
             return reshape_out2
 
-        #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense
+        #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense, or mean
         def _reshape_avg_pool_pattern():
             avg_pool_out = is_op('nn.avg_pool2d')(wildcard())
             reshape_out = is_op('reshape')(avg_pool_out)
@@ -1547,7 +1548,7 @@ class TIDLAnnotation:
             return reshape_out
         def _reshape_mean_checker(extract):
             op = extract.args[0]
-            return True
+            return self.whitelist_check_func('mean', op.attrs, op.args)
 
         #reshape has to be followed by softmax
         def _reshape_softmax_pattern():
@@ -1956,7 +1957,19 @@ class TIDLAnnotation:
             # Only support concatenate across channel
             return (attrs.axis == 1) or (attrs.axis == 3)
 
-        whitelist_funcs = {"nn.argmax": argmax_whitelist_fn,
+        def max_whitelist_fn(attrs, args):
+            axis = attrs.axis
+            supported = (attrs.exclude == False) and isinstance(axis, tvm.ir.container.Array) and \
+                        (len(axis) == 2) and ((int(axis[0]) == 1 and int(axis[1]) == 2) or \
+                                              (int(axis[0]) == 2 and int(axis[1]) == 3))
+            return supported
+
+        def mean_whitelist_fn(attrs, args):
+            return max_whitelist_fn(attrs, args)  # same constraints as "max"
+
+        whitelist_funcs = {"argmax": argmax_whitelist_fn,
+                           "max": max_whitelist_fn,
+                           "mean": mean_whitelist_fn,
                            "nn.avg_pool2d": avg_pool_whitelist_fn,
                            "nn.batch_flatten": batch_flatten_fn,
                            "nn.batch_norm": batch_norm_whitelist_fn,
