@@ -54,6 +54,7 @@ class TIDLSubgraphInfo {
   std::string params_data;
   std::vector<std::string> input_names;
   std::size_t num_outputs;
+  int32_t     is_nchw;
 
   std::size_t NumInputs() const { return input_names.size(); }
   std::size_t NumOutputs() const { return num_outputs; }

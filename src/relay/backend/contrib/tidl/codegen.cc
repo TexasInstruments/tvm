@@ -59,7 +59,7 @@ class TIDLContextNode : public Object {
 
   std::string platform;
 
-  TIDLContextNode() : artifacts_directory(""), platform("j6") {}
+  TIDLContextNode() : artifacts_directory(""), platform("AM57") {}
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("artifacts_directory", &artifacts_directory);
@@ -297,10 +297,25 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
     CHECK(subgraph_name.substr(0, 5) == "tidl_");
     int subgraph_id = std::stoi(subgraph_name.substr(5));
 
+    std::stringstream subgraph_prefix_stream;
+    subgraph_prefix_stream << ctx->artifacts_directory << '/' << "subgraph"
+                           << subgraph_id;
+    std::string subgraph_prefix = subgraph_prefix_stream.str();
+
+    // Read in the subgraph info file
+    std::string info_filename = subgraph_prefix + ".nfo";
+    std::ifstream info_file_stream(info_filename.c_str());
+    if (!info_file_stream.is_open())
+      LOG(FATAL) << "Failed to open TIDL info file " << info_filename << '\n';
+    subgraph_info.is_nchw = 1;
+    dmlc::JSONReader reader(&info_file_stream);
+    dmlc::JSONObjectReadHelper helper;
+    helper.DeclareField("is_nchw", &subgraph_info.is_nchw);
+    helper.ReadAllFields(&reader);
+    info_file_stream.close();
+
     // Read in the net binary file
-    std::stringstream net_filename_stream;
-    net_filename_stream << ctx->artifacts_directory << '/' << "subgraph" << subgraph_id << "_net.bin";
-    std::string net_filename = net_filename_stream.str();
+    std::string net_filename = subgraph_prefix + "_net.bin";
     std::ifstream net_file_stream(net_filename, std::ios::binary | std::ios::in);
     if (!net_file_stream.is_open())
       LOG(FATAL) << "Failed to open TIDL network file " << net_filename << '\n';
@@ -309,9 +324,7 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
                                    std::istreambuf_iterator<char>());
 
     // Read in the params binary file
-    std::stringstream params_filename_stream;
-    params_filename_stream << ctx->artifacts_directory << '/' << "subgraph" << subgraph_id << "_params_1.bin";
-    std::string params_filename = params_filename_stream.str();
+    std::string params_filename = subgraph_prefix + "_params_1.bin";
     std::ifstream params_file_stream(params_filename, std::ios::binary | std::ios::in);
     if (!params_file_stream.is_open())
       LOG(FATAL) << "Failed to open TIDL params file " << params_filename << '\n';
@@ -362,10 +375,10 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
  */
 runtime::Module TIDLCompiler(const ObjectRef& ref) {
   TIDLContext ctx = TIDLContext::Current();
-  if (ctx->platform == "j6") {
+  if (ctx->platform == "AM57") {
     TIDLJ6ModuleCodeGen tidl;
     return tidl.CreateCSourceModule(ref);
-  } else if (ctx->platform == "j7") {
+  } else if (ctx->platform == "J7") {
     TIDLJ7ModuleCodeGen tidl;
     return tidl.CreateCSourceModule(ref);
   } else {

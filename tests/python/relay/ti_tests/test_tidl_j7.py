@@ -22,6 +22,7 @@ import pytest
 from tvm import relay
 from tvm.contrib.download import download_testdata
 import tensorflow as tf
+import onnx
 from tvm.relay.testing import tf as tf_testing
 from tvm.relay.backend.contrib import tidl
 
@@ -101,7 +102,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     #target = "llvm -target=armv7l-linux-gnueabihf" # for AM57x or J6 devices
     target = "llvm"                                 # for host
 
-    with tidl.build_config(artifacts_folder="tempDir", platform="j7"):
+    with tidl.build_config(artifacts_folder="tempDir", platform=tidl_platform):
         graph, lib, params = relay.build_module.build(mod, target=target, params=params)
 
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
@@ -248,41 +249,80 @@ def create_tflite_relay_graph(model, input_node, input_shape, layout):
 
     return mod, params
 
+def load_image(batch_size, mean, scale, needs_nchw):
+    img_file = download_testdata(
+         'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true',
+         'cat.png', module='data')
+    #img_file = "./airshow.jpg"
+    from PIL import Image
+    orig_img = Image.open(img_file)  # HWC
+    resized_img = orig_img.resize((256, 256))
+    cropped_img = resized_img.crop((16, 16, 240, 240))
+    # Normalize input data to (-1, 1)
+    norm_img = np.asarray(cropped_img).astype("float32")
+    norm_img[:, :, 0] = (norm_img[:, :, 0] - mean[0]) * scale[0]
+    norm_img[:, :, 1] = (norm_img[:, :, 1] - mean[1]) * scale[1]
+    norm_img[:, :, 2] = (norm_img[:, :, 2] - mean[2]) * scale[2]
+    #norm_img = norm_img / np.amax(np.abs(norm_img))
+    # Set batch_size of input data: NHWC
+    input_data = np.concatenate([norm_img[np.newaxis, :, :]]*batch_size)
+    if needs_nchw:
+        input_data = input_data.transpose(0, 3, 1, 2)  # NCHW
+    return input_data
+
 def test_tidl_tf_mobilenets(model_name, format="tf"):
-    tidl_tools_path = get_tidl_tools_path()
-    #dtype = "float32"
     data_layout = "NHWC"
-    input_shape = (1, 224, 224, 3)
-    x = np.load(os.path.join(tidl_tools_path, 'dog.npy'))  # "NCHW"
-    x = x.transpose(0,2,3,1)  # TF uses "NHWC" layout
-    if x.shape != input_shape:
-        sys.exit("Input data shape is not correct!")
-    # Normalize input data to (-1,1)
-    input_data = x/np.amax(np.abs(x))
     input_node = "input"
+    input_shape = (1, 224, 224, 3)
+    input_data = load_image(1, [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False)
+    if input_data.shape != input_shape:
+        sys.exit("Input data shape is not correct!")
+    print("input_data shape: {}".format(input_data.shape))
 
     #============= Create a Relay graph for MobileNet model ==============
     if format == "tflite":
         create_relay_graph_func = create_tflite_relay_graph
     else:
         create_relay_graph_func = create_tf_relay_graph
-    tf_mod, tf_params = create_relay_graph_func(model = model_name,
-                                              input_node  = input_node,
-                                              input_shape = input_shape,
-                                              layout = data_layout)
+    tf_mod, tf_params = create_relay_graph_func(model = model_name, input_node = input_node,
+                                                input_shape = input_shape, layout = data_layout)
     print("---------- Original TF Graph ----------")
     print(tf_mod.astext(show_meta_data=False))
 
     #======================== TIDL code generation ====================
-    status = model_compile(model_name, tf_mod, tf_params,
-                           {input_node:input_data})
+    status = model_compile(model_name, tf_mod, tf_params, {input_node:input_data})
     assert status != -1, "TIDL compilation failed"   # For CI test
+
+def test_tidl_onnx(model_name):
+    data_layout = "NCHW"
+    input_node = "data"
+    input_shape = (1, 3, 224, 224)
+    input_data = load_image(1, [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True)
+    if input_data.shape != input_shape:
+        sys.exit("Input data shape is not correct!")
+    print("input_data shape: {}".format(input_data.shape))
+
+    #============= Create a Relay graph for MobileNet model ==============
+    if model_name == "ONNX_MobileNetV2":
+        model = "./onnx_mobileNet2/mobilenetv2-1.0.onnx"
+
+    onnx_mod, onnx_params = relay.frontend.from_onnx(onnx.load(model),
+                                                     shape={input_node:input_shape})
+
+    print("---------- Original TF Graph ----------")
+    print(onnx_mod.astext(show_meta_data=False))
+
+    #======================== TIDL code generation ====================
+    status = model_compile(model_name, onnx_mod, onnx_params, {input_node:input_data})
+    assert status != -1, "TIDL compilation failed"   # For CI test
+
 
 if __name__ == '__main__':
     test_tidl_tf_mobilenets("MobileNetV1")
     #test_tidl_tf_mobilenets("MobileNetV1", "tflite")
     #test_tidl_tf_mobilenets("MobileNetV2")
     #test_tidl_tf_mobilenets("MobileNetV2", "tflite")
+    test_tidl_onnx("ONNX_MobileNetV2")
     #test_tidl_classification()
     #test_tidl_object_detection()
     #test_tidl_segmentation()

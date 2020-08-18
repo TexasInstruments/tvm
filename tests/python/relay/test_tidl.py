@@ -110,7 +110,8 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
         target = "llvm -mtriple=armv7l-linux-gnueabihf" # for AM57x/J6 devices
     else:
         target = "llvm"                                 # testing on J7 host 
-    graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+    with tidl.build_config(artifacts_folder="tempDir", platform=tidl_platform):
+        graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
     path_graph = os.path.join(tidl_artifacts_folder, "deploy_graph.json")
     path_params = os.path.join(tidl_artifacts_folder, "deploy_param.params")
@@ -252,7 +253,7 @@ def test_tidl_pytorch(batch_size=4):
 
     model_metadata = {
         'inception_v3': (299, 299, 'input'),
-        #'resnet152': (224, 224, 'input'),
+        'resnet152': (224, 224, 'input'),
     }
     models = {
         'inception_v3': 'inception_v3',
@@ -281,7 +282,7 @@ def test_tidl_tflite(batch_size=4):
     model_metadata = {
         'mobilenet100_v1': (224, 224, 'input'),
         'mobilenet100_v2': (224, 224, 'input'),
-        #'densenet': (224, 224, 'input'),
+        'densenet': (224, 224, 'input'),
         'mnasnet': (224, 224, 'input'),
         'resnet_v2_101': (299, 299, 'input'),
     }

@@ -24,6 +24,7 @@ import ctypes
 import _ctypes
 import re
 import functools
+import json
 import numpy as np
 from topi.util import get_const_tuple
 import tvm
@@ -586,14 +587,9 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file,
                          params_file, platform="AM57", tidl_tensor_bits=8):
     """ Run TIDL calibation for the imported subgraph.
     """
-    # Prepare for calibration
-    temp_folder = './tempDir/'
-    if os.path.isdir(temp_folder):
-        shutil.rmtree(temp_folder)
-    os.mkdir(temp_folder)
-
     # Save quantized input vector to a file for calib tool to read
     # Saving as 'int8' or 'uint8' is the same
+    temp_folder = './tempDir/'
     calib_raw_image = temp_folder + 'calib_raw_data.bin'
     open(calib_raw_image, "wb").close() # delete old file contents
     fid = open(calib_raw_image, "ab")
@@ -764,6 +760,12 @@ class TIDLImport:
         self.tidl_platform = tidl_platform
         self.data_layout = data_layout
         self.tidl_tensor_bits = tidl_tensor_bits
+
+        # Prepare for import
+        temp_folder = './tempDir/'
+        if os.path.isdir(temp_folder):
+            shutil.rmtree(temp_folder)
+        os.mkdir(temp_folder)
 
     def tidl_import_conv2d(self, this_node, params):
         r""" Import conv2d operator to TIDL
@@ -1063,7 +1065,7 @@ class TIDLImport:
         import_lib_mul(mul_params, ctypes.POINTER(ctypes.c_int)())
         return True
 
-    def tidl_import_init(self, input_scale, input_signed, input):
+    def tidl_import_init(self, subgraph_id, input_scale, input_signed, input):
         r""" Initializing TIDL import
 
         Parameters
@@ -1116,6 +1118,9 @@ class TIDLImport:
             input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
             import_lib_init(len(input), input_dscr_ptr, is_nchw, self.tidl_tensor_bits)
+            subgraph_info_dict = { "is_nchw" : is_nchw }
+            with open("./tempDir/subgraph"+str(subgraph_id)+".nfo", "w") as of:
+                json.dump(subgraph_info_dict, of, indent=4)
             return True
 
         (channel, height, width) = input_shapes[0][1:4]
@@ -1363,7 +1368,7 @@ class TIDLImport:
                             tensor_quant_flatten(input_fp, self.data_layout, self.tidl_tensor_bits)
 
             # Initialize TIDL import
-            if not self.tidl_import_init(input_scale, input_signed, input_fp):
+            if not self.tidl_import_init(subgraph_id, input_scale, input_signed, input_fp):
                 return import_fail
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
@@ -2183,7 +2188,7 @@ class TIDLContext(tvm.runtime.Object):
         """Return the current pass context."""
         return _ffi_tidl_api.GetCurrentTIDLContext()
 
-def build_config(artifacts_folder, platform="j6"):
+def build_config(artifacts_folder, platform="AM57"):
     CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
     return CreateTIDLContext(artifacts_folder, platform)
 

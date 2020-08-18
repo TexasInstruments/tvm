@@ -177,14 +177,14 @@ class TIDLJ6Module : public runtime::ModuleNode {
     CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
 
     std::ostringstream os;
-    os << "j6";
+    os << "J6";
     ToJSON(os, total_subgraphs_, num_inputs_, num_outputs_);
     SaveBinaryToFile(file_name, os.str());
   }
 
   void SaveToBinary(dmlc::Stream* stream) final {
     std::ostringstream os;
-    os << "j6";
+    os << "J6";
     ToJSON(os, total_subgraphs_, num_inputs_, num_outputs_);
     stream->Write(os.str());
   }
@@ -306,11 +306,15 @@ class TIDLJ7Module : public runtime::ModuleNode {
 
     params.netPtr = (void *) info.net_data.data();
     params.ioBufDescPtr = (void *) info.params_data.data();
-printf("net_data size: %d\n", info.net_data.size());
+printf("net_data size: %d\n", (int) info.net_data.size());
     params.net_capacity = info.net_data.size();
-printf("ioparams size: %d\n", info.params_data.size());
+printf("ioparams size: %d\n", (int) info.params_data.size());
     params.io_capacity  = info.params_data.size();
-    params.traceLogLevel = 1;
+    if (getenv("TIDL_RELAY_IMPORT_DEBUG") != nullptr)
+    {
+      params.traceLogLevel = 1;
+      params.traceWriteLevel = 1;
+    }
     params.TIDLVprintf = TIDLVprintf;
 
     void* tidlrt_handle = nullptr;
@@ -385,7 +389,7 @@ printf("Convert arg/tensor %d\n", i);
             strncpy((char *) rt_arg->name, info.input_names[i].c_str(),
                     name_size);
             rt_arg->name[name_size] = '\0';
-printf("## name: %s\n", (char *) rt_arg->name);
+printf("## input name: %s\n", (char *) rt_arg->name);
           }
 
           // Set element type
@@ -445,8 +449,7 @@ printf("## ptr: %p\n", rt_arg->ptr);
           // is called on the entire graph and only transpose or NCHW operators
           // are whitelisted as TIDL nodes. This assumption means TIDLRT does
           // not need to perform any layout conversions.
-          //YUAN rt_arg->layout = TIDLRT_LT_NCHW;
-          rt_arg->layout = TIDLRT_LT_NHWC;
+          rt_arg->layout = info.is_nchw ? TIDLRT_LT_NCHW : TIDLRT_LT_NHWC;
 printf("## layout: %d\n", rt_arg->layout);
 
           // Skip zeroPoint and scale since those are for quantized models.
@@ -534,7 +537,7 @@ printf("## memType: %d\n", rt_arg->memType);
 
   void SaveToBinary(dmlc::Stream* stream) final {
     std::ostringstream os;
-    os << "j7";
+    os << "J7";
     dmlc::JSONWriter writer(&os);
     writer.Write(infos);
     stream->Write(os.str());
@@ -582,9 +585,9 @@ static Module LoadFromFile(const std::string& path) {
   std::istringstream graph_stream(graph_info);
   char keyword[3];
   graph_stream.get(keyword, 3);
-  if (!strcmp(keyword, "j6"))
+  if (!strcmp(keyword, "J6"))
     return TIDLJ6Module::FromJSON(graph_stream);
-  else if (!strcmp(keyword, "j7"))
+  else if (!strcmp(keyword, "J7"))
     return TIDLJ7Module::FromJSON(graph_stream);
   else {
     LOG(FATAL) << "Unsupported platform found when loading TIDL binary (" << keyword << ")\n";
@@ -603,9 +606,9 @@ static Module LoadFromBinary(void* strm) {
   std::istringstream graph_stream(graph_info);
   char keyword[3];
   graph_stream.get(keyword, 3);
-  if (!strcmp(keyword, "j6"))
+  if (!strcmp(keyword, "J6"))
     return TIDLJ6Module::FromJSON(graph_stream);
-  else if (!strcmp(keyword, "j7"))
+  else if (!strcmp(keyword, "J7"))
     return TIDLJ7Module::FromJSON(graph_stream);
   else {
     LOG(FATAL) << "Unsupported platform found when loading TIDL binary (" << keyword << ")\n";
@@ -640,6 +643,7 @@ void TIDLSubgraphInfo::Save(dmlc::JSONWriter* writer) const {
   writer->BeginObject();
   writer->WriteObjectKeyValue("input_names", input_names);
   writer->WriteObjectKeyValue("num_outputs", num_outputs);
+  writer->WriteObjectKeyValue("is_nchw", is_nchw);
   writer->WriteObjectKeyValue("net_data", Base64Encode(net_data));
   writer->WriteObjectKeyValue("params_data", Base64Encode(params_data));
   writer->EndObject();
@@ -650,6 +654,7 @@ void TIDLSubgraphInfo::Load(dmlc::JSONReader* reader) {
   dmlc::JSONObjectReadHelper helper;
   helper.DeclareField("input_names", &input_names);
   helper.DeclareField("num_outputs", &num_outputs);
+  helper.DeclareField("is_nchw", &is_nchw);
 
   std::string net_base64;
   helper.DeclareField("net_data", &net_base64);
