@@ -62,6 +62,13 @@ def find_data_layout(mod):
             break
     return data_layout
 
+def convert_str_list_to_char_array(str_list):
+    """ Convert list of strings to array of ctypes char * """
+    char_array = (ctypes.c_char_p * len(str_list))()
+    for i in range(len(str_list)):
+        char_array[i] = bytes(str_list[i], 'utf-8')
+    return char_array
+
 def find_in_nodes(all_nodes, this_node, input_prefix):
     r""" Find the input nodes of a given relay.expr.Call node.
 
@@ -72,7 +79,7 @@ def find_in_nodes(all_nodes, this_node, input_prefix):
     Parameters
     ----------
     all_nodes : dictionary
-        Dictionary of all nodes of the graph
+        Dictionary of all nodes of the graph: keys are nodes and values are node indices
     this_node : relay.expr.Call
         A relay.expr.Call node whose input nodes are to be found by this function
     input_prefix : string
@@ -81,7 +88,8 @@ def find_in_nodes(all_nodes, this_node, input_prefix):
     Returns
     -------
     input_nodes : list
-        A list of all input node indices of the given node
+        A list of all input nodes' names of the given node. For call node, the name is the node
+        index in all_nodes dictionary. For input tensors, the name is the tensor's name.
     """
 
     input_nodes = []
@@ -92,16 +100,16 @@ def find_in_nodes(all_nodes, this_node, input_prefix):
 
     for node in in_nodes:
         if isinstance(node, relay.expr.Call):
-            input_nodes.append(all_nodes[node])
+            input_nodes.append(str(all_nodes[node]))
         elif isinstance(node, relay.expr.TupleGetItem):
-            input_nodes.append(all_nodes[node.tuple_value])
+            input_nodes.append(str(all_nodes[node.tuple_value]))
         elif isinstance(node, relay.expr.Tuple):
             input_nodes = input_nodes + find_in_nodes(all_nodes, node, input_prefix)
-        elif isinstance(node, relay.expr.Var):
+        elif isinstance(node, relay.expr.Var): # input tensor is relay.expr.Var
             if input_prefix in node.name_hint and "_i" in node.name_hint:
-                # this is the input to the subgraph
-                input_nodes.append(-1)
-        #else: ignore all other types of nodes: var, const, etc.
+                # this is an input tensor to the subgraph
+                input_nodes.append(node.name_hint)
+        #else: ignore all other types of nodes: const, etc.
 
     return input_nodes
 
@@ -112,7 +120,7 @@ def find_out_nodes(all_nodes, this_node):
     Parameters
     ----------
     all_nodes : dictionary
-        Dictionary of all relay.expr.Call nodes of the graph
+        Dictionary of all nodes of the graph: keys are nodes and values are node indices
     this_node : relay.expr.Call
         A relay.expr.Call node whose output nodes are to be found by this function
 
@@ -126,7 +134,7 @@ def find_out_nodes(all_nodes, this_node):
     for node, node_idx in all_nodes.items():
         if isinstance(node, relay.expr.Call):
             if this_node in node.args:
-                output_nodes.append(node_idx)
+                output_nodes.append(str(node_idx))
         elif isinstance(node, relay.expr.TupleGetItem):
             if this_node == node.tuple_value:
                 output_nodes = output_nodes + find_out_nodes(all_nodes, node)
@@ -135,7 +143,7 @@ def find_out_nodes(all_nodes, this_node):
                 tuple_node_outs = find_out_nodes(all_nodes, node)
                 if len(tuple_node_outs) == 0:
                     # this is an output node
-                    output_nodes.append(all_nodes[node])
+                    output_nodes.append(str(all_nodes[node]))
                 else:
                     # this is an input node to another node
                     output_nodes = output_nodes + tuple_node_outs
@@ -162,15 +170,15 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix):
 
     in_out_nodes = InOutNodes()    # instantiate structure
 
-    in_out_nodes.this_node = all_nodes[this_node]
+    in_out_nodes.this_node = bytes(str(all_nodes[this_node]), 'utf-8')
 
     in_nodes = find_in_nodes(all_nodes, this_node, input_prefix) # node indices of input nodes
     if len(in_nodes) == 0:
-        in_out_nodes.in_nodes = None  # this is the first node
+        in_out_nodes.in_nodes = None
     else:
-        # convert list to numpy arrary in order to pass to C library
-        in_nodes_array = np.asarray(in_nodes, dtype=np.int32)
-        in_out_nodes.in_nodes = ctypes.c_void_p(in_nodes_array.ctypes.data)
+        # convert list to char * array in order to pass to C library
+        in_nodes_char = convert_str_list_to_char_array(in_nodes)
+        in_out_nodes.in_nodes = ctypes.cast(in_nodes_char, ctypes.c_void_p)
 
     in_out_nodes.num_in_nodes = len(in_nodes)
 
@@ -178,9 +186,9 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix):
     if len(out_nodes) == 0:
         in_out_nodes.out_nodes = None # this is the last node
     else:
-        # convert list to numpy arrary in order to pass to C library
-        out_nodes_array = np.asarray(out_nodes, dtype=np.int32)
-        in_out_nodes.out_nodes = ctypes.c_void_p(out_nodes_array.ctypes.data)
+        # convert list to char * array in order to pass to C library
+        out_nodes_array = convert_str_list_to_char_array(out_nodes)
+        in_out_nodes.out_nodes = ctypes.cast(out_nodes_array, ctypes.c_void_p)
 
     in_out_nodes.num_out_nodes = len(out_nodes)
 
@@ -190,10 +198,12 @@ def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
     r""" Obtain input/output tensor for a given subgraph"""
 
     tensor = []
+    names = []
     for key, value in subgraph_tensors.items():
         if key.find(tensor_name_prefix) != -1:
             tensor.append(value)
-    return tensor
+            names.append(key)
+    return tensor, names
 
 def tensor_quant_flatten(input_tensors, data_layout, tensor_bits):
     r""" Convert float32 n-d array to int8/int16 or uint8/uint16 1-d array
@@ -721,7 +731,7 @@ class MulParams(ctypes.Structure):
 
 class InOutNodes(ctypes.Structure):
     """ Input/output nodes defined in ctypes for passing to TIDL C library """
-    _fields_ = [('this_node', ctypes.c_int),
+    _fields_ = [('this_node', ctypes.c_char_p),
                 ('num_in_nodes', ctypes.c_int), ('num_out_nodes', ctypes.c_int),
                 ('in_nodes', ctypes.c_void_p), ('out_nodes', ctypes.c_void_p)]
 
@@ -1065,25 +1075,29 @@ class TIDLImport:
         import_lib_mul(mul_params, ctypes.POINTER(ctypes.c_int)())
         return True
 
-    def tidl_import_init(self, subgraph_id, input_scale, input_signed, input):
+    def tidl_import_init(self, subgraph_id, input_scale, input_signed, input_tensors, input_names):
         r""" Initializing TIDL import
 
         Parameters
         ----------
+        subgraph_id: int
+            Id of the subgraph to be imported to TIDL
         input_scale: list
             Scaling factor to convert floating point input to 8-bit quantized input
         input_signed: list
             Signed (1) or unsigned (0) of input
-        input: list
+        input_tensors: list
             Input tensors to TIDL subgraph
+        input_names: list
+            Names of input tensors
         Returns
         -------
         True if initialization succeeds or False if initialization fails
         """
 
         input_shapes = []
-        for i in range(len(input)):
-            input_shape = input[i].shape
+        for input_tensor in input_tensors:
+            input_shape = input_tensor.shape
             if len(input_shape) == 2:
                 # input is a vector - expand (N,W) to (N,1,1,W)
                 in_shape = (input_shape[0], 1, 1, input_shape[1])
@@ -1110,14 +1124,15 @@ class TIDLImport:
             return False
 
         if self.tidl_platform == "J7":
-            descr = (TensorDescriptor * len(input))()
-            for i in range(len(input)):
+            descr = (TensorDescriptor * len(input_tensors))()
+            for i in range(len(input_tensors)):
                 descr[i].input_scale = input_scale[i]
                 descr[i].input_signed = input_signed[i]
                 (descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][1:4]
             input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
-            import_lib_init(subgraph_id, len(input), input_dscr_ptr, is_nchw, self.tidl_tensor_bits)
+            import_lib_init(subgraph_id, len(input_tensors), input_dscr_ptr, is_nchw,
+                            self.tidl_tensor_bits)
             subgraph_info_dict = { "is_nchw" : is_nchw }
             with open("./tempDir/subgraph"+str(subgraph_id)+".nfo", "w") as of:
                 json.dump(subgraph_info_dict, of, indent=4)
@@ -1277,12 +1292,13 @@ class TIDLImport:
 
                 # prepare input/output nodes information for linking
                 in_out_nodes = InOutNodes()    # instantiate structure
-                in_out_nodes.this_node = new_node_ind
+                in_out_nodes.this_node = bytes(str(new_node_ind), 'utf-8')
                 in_out_nodes.num_in_nodes = nodes_for_this_data_layer
                 in_nodes_this_layer = \
                     in_nodes[imported_nodes:imported_nodes+nodes_for_this_data_layer]
-                in_nodes_array = np.asarray(in_nodes_this_layer, dtype=np.int32)
-                in_out_nodes.in_nodes = ctypes.c_void_p(in_nodes_array.ctypes.data)
+                # convert list to char * array in order to pass to C library
+                in_nodes_char = convert_str_list_to_char_array(in_nodes)
+                in_out_nodes.in_nodes = ctypes.cast(in_nodes_char, ctypes.c_void_p)
                 in_out_nodes.out_nodes = None
                 in_out_nodes.num_out_nodes = 0
 
@@ -1356,7 +1372,7 @@ class TIDLImport:
             out_tensor_name = tidl_subgraph + '_o'
 
             # Obtain input tensor from TVM graph execution
-            input_fp = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name)
+            input_fp, input_names = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name)
             if input_fp is None:
                 return import_fail
             if self.tidl_platform == "AM57" and len(input_fp) > 1:
@@ -1368,7 +1384,8 @@ class TIDLImport:
                             tensor_quant_flatten(input_fp, self.data_layout, self.tidl_tensor_bits)
 
             # Initialize TIDL import
-            if not self.tidl_import_init(subgraph_id, input_scale, input_signed, input_fp):
+            if not self.tidl_import_init(subgraph_id, input_scale, input_signed, input_fp,
+                                         input_names):
                 return import_fail
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
@@ -1426,7 +1443,7 @@ class TIDLImport:
 
             # AM57x (J6) only: Calculate scaling factor to convert output tensor to floating point
             # Obtain output tensor from TVM graph execution
-            output_fp = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
+            output_fp, _ = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
 
             # TODO: convert following lines into a function
             if output_fp is None:
@@ -1479,6 +1496,7 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.batch_flatten")
         self._register_constrained_op("nn.batch_norm")
         self._register_constrained_op("nn.conv2d")
+        #self._register_supported_op("nn.conv2d")    # use this for debugging
         self._register_constrained_op("nn.dense")
         self._register_constrained_op("nn.conv2d_transpose")
         self._register_constrained_op("nn.global_avg_pool2d")
