@@ -150,7 +150,7 @@ def find_out_nodes(all_nodes, this_node):
 
     return output_nodes
 
-def find_in_out_nodes(all_nodes, this_node, input_prefix):
+def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names):
     r""" Find the input and output nodes of a given relay.expr.Call node.
 
     Parameters
@@ -184,6 +184,9 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix):
 
     out_nodes = find_out_nodes(all_nodes, this_node) # node indices of output nodes
     if len(out_nodes) == 0:
+        # This is the last node, use the output tensor name as this node's name
+        # When the last node is a call node, it can have only one output tensor.
+        in_out_nodes.this_node = bytes(str(output_names[0]), 'utf-8')
         in_out_nodes.out_nodes = None # this is the last node
     else:
         # convert list to char * array in order to pass to C library
@@ -1151,7 +1154,7 @@ class TIDLImport:
 
         return True
 
-    def tidl_import_node(self, all_nodes, this_node, params):
+    def tidl_import_node(self, all_nodes, this_node, params, output_names):
         r""" Importing a given node (operator) to TIDL
             # https://docs.tvm.ai/langref/relay_op.html#relay-core-tensor-operators
 
@@ -1172,7 +1175,7 @@ class TIDLImport:
             import_lib_node = tvm.get_global_func("TIDL_relayImportNode")
             if import_lib_node(this_node) != 0:
                 return False
-            in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target)
+            in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names)
             import_lib_linknode = tvm.get_global_func("TIDL_relayImportLinkNode")
             if import_lib_linknode(ctypes.cast(ctypes.byref(in_out_nodes), ctypes.c_void_p)) == 0:
                 return True
@@ -1249,7 +1252,7 @@ class TIDLImport:
 
         # Common for all nodes:
         # fill tensor names, update consumer counts, link input/output tensors
-        in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target)
+        in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names)
 
         import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
         import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
@@ -1259,71 +1262,72 @@ class TIDLImport:
 
         return True
 
-    def tidl_import_tuple_node(self, all_nodes, node):
+    def tidl_import_out_tuple_node(self, all_nodes, node, out_tensor_names):
         """ Importing a Relay tuple node, e.g. (%232, %279, %283, %274).
             If this node is the last node, import it to TIDL output data layer.
             If this node is not the last node, do nothing.
         """
 
+        # make sure 16 matches TIDL_NUM_OUT_BUFS defined in itidl_ti.h
         max_num_outputs_per_data_layer = 16
-        out_nodes = find_out_nodes(all_nodes, node)
-        if len(out_nodes) == 0:
-            # this is the last node of the graph - import this to out data layer
-            in_nodes = find_in_nodes(all_nodes, node, self.tidl_target)
-            imported_nodes = 0
-            new_node_ind = len(all_nodes) + 1
-            status = True
-            while imported_nodes < len(in_nodes):
-                if len(in_nodes) - imported_nodes < max_num_outputs_per_data_layer:
-                    nodes_for_this_data_layer = len(in_nodes) - imported_nodes
-                    this_is_the_last_one = True
-                else:
-                    nodes_for_this_data_layer = max_num_outputs_per_data_layer
-                    this_is_the_last_one = False
+        # this is the last node of the graph - import this to out data layer
+        in_nodes = find_in_nodes(all_nodes, node, self.tidl_target)
+        imported_nodes = 0
+        new_node_ind = len(all_nodes) + 1
+        status = True
+        while imported_nodes < len(in_nodes):
+            if len(in_nodes) - imported_nodes < max_num_outputs_per_data_layer:
+                nodes_for_this_data_layer = len(in_nodes) - imported_nodes
+                this_is_the_last_one = True
+            else:
+                nodes_for_this_data_layer = max_num_outputs_per_data_layer
+                this_is_the_last_one = False
 
-                if self.tidl_platform == "AM57":
-                    import_lib_out_data = self.import_lib.tidlImportOutData
-                    import_lib_out_data.argtype = ctypes.c_int
-                    import_lib_out_data.restype = None
-                else:
-                    import_lib_out_data = tvm.get_global_func(
-                                                "TIDL_relayImportOutDataLayer")
-                import_lib_out_data(nodes_for_this_data_layer)
+            if self.tidl_platform == "AM57":
+                import_lib_out_data = self.import_lib.tidlImportOutData
+                import_lib_out_data.argtype = ctypes.c_int
+                import_lib_out_data.restype = None
+            else:
+                import_lib_out_data = tvm.get_global_func(
+                                            "TIDL_relayImportOutDataLayer")
+            import_lib_out_data(nodes_for_this_data_layer)
 
-                # prepare input/output nodes information for linking
-                in_out_nodes = InOutNodes()    # instantiate structure
-                in_out_nodes.this_node = bytes(str(new_node_ind), 'utf-8')
-                in_out_nodes.num_in_nodes = nodes_for_this_data_layer
-                in_nodes_this_layer = \
-                    in_nodes[imported_nodes:imported_nodes+nodes_for_this_data_layer]
-                # convert list to char * array in order to pass to C library
-                in_nodes_char = convert_str_list_to_char_array(in_nodes)
-                in_out_nodes.in_nodes = ctypes.cast(in_nodes_char, ctypes.c_void_p)
-                in_out_nodes.out_nodes = None
-                in_out_nodes.num_out_nodes = 0
+            # prepare input/output nodes information for linking
+            in_out_nodes = InOutNodes()    # instantiate structure
+            # TODO: put a meaningful name to this_node, e.g. tidl_0_outnode_0, etc.
+            in_out_nodes.this_node = bytes(str(new_node_ind), 'utf-8')
+            in_out_nodes.num_in_nodes = nodes_for_this_data_layer
+            in_nodes_this_layer = \
+                in_nodes[imported_nodes:imported_nodes+nodes_for_this_data_layer]
+            # convert list to char * array in order to pass to C library
+            in_nodes_char = convert_str_list_to_char_array(in_nodes_this_layer)
+            in_out_nodes.in_nodes = ctypes.cast(in_nodes_char, ctypes.c_void_p)
+            out_tensor_names_this_layer = \
+                out_tensor_names[imported_nodes:imported_nodes+nodes_for_this_data_layer]
+            out_tensors_char = convert_str_list_to_char_array(out_tensor_names_this_layer)
+            # output tensor names are stored in out_nodes[]
+            in_out_nodes.out_nodes = ctypes.cast(out_tensors_char, ctypes.c_void_p)
+            in_out_nodes.num_out_nodes = nodes_for_this_data_layer
 
-                if self.tidl_platform == "AM57":
-                    import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
-                    import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
-                    import_lib_link_nodes.restype = ctypes.c_int
-                    if import_lib_link_nodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
-                        status = False
-                        break
-                else:
-                    import_lib_linknode = tvm.get_global_func(
-                                                    "TIDL_relayImportLinkNode")
-                    if import_lib_linknode(ctypes.cast(ctypes.byref(
-                                         in_out_nodes), ctypes.c_void_p)) != 0:
-                        status = False
-                        break
-
-                imported_nodes = imported_nodes + nodes_for_this_data_layer
-                new_node_ind = new_node_ind + 1
-                if this_is_the_last_one:
+            if self.tidl_platform == "AM57":
+                import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
+                import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
+                import_lib_link_nodes.restype = ctypes.c_int
+                if import_lib_link_nodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
+                    status = False
                     break
-        else:
-            # this is not the last node of the graph - ignore it
-            status = True
+            else:
+                import_lib_linknode = tvm.get_global_func(
+                                                "TIDL_relayImportLinkNode")
+                if import_lib_linknode(ctypes.cast(ctypes.byref(
+                                     in_out_nodes), ctypes.c_void_p)) != 0:
+                    status = False
+                    break
+
+            imported_nodes = imported_nodes + nodes_for_this_data_layer
+            new_node_ind = new_node_ind + 1
+            if this_is_the_last_one:
+                break
 
         return status
 
@@ -1373,6 +1377,7 @@ class TIDLImport:
 
             # Obtain input tensor from TVM graph execution
             input_fp, input_names = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name)
+            output_fp, output_names = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
             if input_fp is None:
                 return import_fail
             if self.tidl_platform == "AM57" and len(input_fp) > 1:
@@ -1394,15 +1399,16 @@ class TIDLImport:
             relay.analysis.post_order_visit(mod[tidl_subgraph], traverse_func)
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
-                    result = self.tidl_import_node(all_nodes_tidl, node, params)
+                    result = self.tidl_import_node(all_nodes_tidl, node, params, output_names)
                     if not result:
                         return import_fail
 
-            # Import expr.Tuple node after importing all expr.call nodes
+            # Import expr.Tuple node if it is the last node, after importing all expr.call nodes
             for node in all_nodes_tidl:
-                if isinstance(node, relay.expr.Tuple):
+                if isinstance(node, relay.expr.Tuple) and \
+                   len(find_out_nodes(all_nodes_tidl, node)) == 0:
                     #node.fields: array of expr.call nodes
-                    result = self.tidl_import_tuple_node(all_nodes_tidl, node)
+                    result = self.tidl_import_out_tuple_node(all_nodes_tidl, node, output_names)
                     if not result:
                         print('Error importing output tuple node')
                         return import_fail
@@ -1424,8 +1430,7 @@ class TIDLImport:
                     print('TIDL import optimization failed')
                     return import_fail
             else:  # == "J7"
-                import_lib_optimize = tvm.get_global_func(
-                                                       "TIDL_relayOptimizeNet")
+                import_lib_optimize = tvm.get_global_func("TIDL_relayOptimizeNet")
                 import_lib_optimize()
 
             # Calibrate TIDL for the imported subgraph
