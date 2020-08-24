@@ -25,6 +25,11 @@ import tensorflow as tf
 import onnx
 from tvm.relay.testing import tf as tf_testing
 from tvm.relay.backend.contrib import tidl
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--target', action='store_true')
+args = parser.parse_args()
 
 def get_compiler_path():
     arm_gcc_path = os.getenv("ARM_GCC_PATH")
@@ -32,11 +37,11 @@ def get_compiler_path():
         print("Environment variable ARM_GCC_PATH is not set! Model won't be compiled!")
         return None
     else:
-        arm_gcc = os.path.join(arm_gcc_path, "arm-linux-gnueabihf-g++")
+        arm_gcc = os.path.join(arm_gcc_path, "aarch64-none-linux-gnu-g++")
         if os.path.exists(arm_gcc):
             return arm_gcc
         else:
-            print("ARM GCC arm-linux-gnueabihf-g++ does not exist! Model won't be compiled!")
+            print("ARM GCC aarch64-none-linux-gnu-g++ does not exist! Model won't be compiled!")
             return None
 
 def get_tidl_tools_path():
@@ -74,7 +79,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     tidl_target = "tidl"
     tidl_platform = "J7"   # or "AM57"
     tidl_version = (7, 0)  # corresponding Processor SDK version
-    tidl_artifacts_folder = "./artifacts_" + model_name
+    tidl_artifacts_folder = "./artifacts_" + model_name +  ("_target" if args.target else "_host")
     if os.path.isdir(tidl_artifacts_folder):
         filelist = [f for f in os.listdir(tidl_artifacts_folder)]
         for file in filelist:
@@ -89,18 +94,21 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
                                       tidl_tensor_bits=16)
     mod, status = tidl_compiler.enable(mod_orig, params, model_input)
 
-    #arm_gcc = get_compiler_path()
-    #if arm_gcc is None:
-    #    print("Skip build because ARM_GCC_PATH is not set")
-    #    return 0  # No graph compilation
+    if args.target:
+        arm_gcc = get_compiler_path()
+        if arm_gcc is None:
+            print("Skip build because ARM_GCC_PATH is not set")
+            return 0  # No graph compilation
 
     if status == 1: # TIDL compilation succeeded
         print("Graph execution with TIDL")
     else: # TIDL compilation failed or no TIDL compilation due to missing tools
         print("Graph execution without TIDL")
 
-    #target = "llvm -target=armv7l-linux-gnueabihf" # for AM57x or J6 devices
-    target = "llvm"                                 # for host
+    if args.target:
+        target = "llvm -device=arm_cpu -mtriple=aarch64-linux-gnu"
+    else:
+        target = "llvm"
 
     with tidl.build_config(artifacts_folder="tempDir", platform=tidl_platform):
         graph, lib, params = relay.build_module.build(mod, target=target, params=params)
@@ -108,8 +116,10 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
     path_graph = os.path.join(tidl_artifacts_folder, "deploy_graph.json")
     path_params = os.path.join(tidl_artifacts_folder, "deploy_param.params")
-    #lib.export_library(path_lib, cc=arm_gcc)   # for AM57x/J6 devices
-    lib.export_library(path_lib)                # for host
+    if args.target:
+        lib.export_library(path_lib, cc=arm_gcc)
+    else:
+        lib.export_library(path_lib)
     with open(path_graph, "w") as fo:
         fo.write(graph)
     with open(path_params, "wb") as fo:

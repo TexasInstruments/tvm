@@ -18,20 +18,28 @@
 import os
 import sys
 import numpy as np
-import tvm
-from tvm.contrib import graph_runtime as runtime
-from tvm.contrib.download import download_testdata
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--dlr', action='store_true')
+parser.add_argument('--cv', action='store_true')
+parser.add_argument('--target', action='store_true')
+parser.add_argument('input', nargs='?')
+args = parser.parse_args()
+
+if args.dlr:
+    from dlr import DLRModel
+else:
+    import tvm
+    from tvm.contrib import graph_runtime as runtime
+    from tvm.contrib.download import download_testdata
 
 ######################################################################
 # Load a test image
 # ---------------------------------------------
-def load_image(batch_size, mean, scale, needs_nchw):
+def load_image_pillow(batch_size, img_file, mean, scale, needs_nchw):
     from PIL import Image
     #from matplotlib import pyplot as plt
-
-    img_file = "./airshow.jpg"
-    if len(sys.argv) > 1:
-        img_file = sys.argv[1]
 
     orig_img = Image.open(img_file)  # HWC
     resized_img = orig_img.resize((256, 256))
@@ -51,31 +59,76 @@ def load_image(batch_size, mean, scale, needs_nchw):
         input_data = input_data.transpose(0, 3, 1, 2)  # NCHW
     return input_data
 
+def load_image_cv(batch_size, img_file, mean, scale, needs_nchw):
+    import cv2
+
+    img = cv2.imread(img_file)
+
+    # Resize to 299xH or Wx299
+    orig_height, orig_width, _ = img.shape
+    new_height = orig_height * 299 // min(img.shape[:2])
+    new_width = orig_width * 299 // min(img.shape[:2])
+    img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+
+    # Center crop to 299x299
+    height, width, _ = img.shape
+    startx = width//2 - (224//2)
+    starty = height//2 - (224//2)
+    img = img[starty:starty+224,startx:startx+224]
+
+    # OpenCV loads as BGR, convert to RGB by swapping channels
+    img = img[:,:,::-1]
+
+    # convert HWC to NCHW
+    img = np.expand_dims(np.transpose(img, (2,0,1)),axis=0).astype(np.float32)
+
+    for mean, scale, ch in zip(mean, scale, range(img.shape[1])):
+        img[:,ch,:,:] = ((img[:,ch,:,:] - mean) * scale)
+
+    if not needs_nchw:
+        img = img.transpose(0, 2, 3, 1)
+
+    return img
+
 ######################################################################
 # Run the model with relay runtime
 # ---------------------------------------------
 def run_module(model_name, input_tensor, mean, scale, is_nchw):
     # load deployable module
-    artifacts_dir = "artifacts_" + model_name + "/"
-    loaded_json = open(artifacts_dir + "deploy_graph.json").read()
-    loaded_lib = tvm.runtime.load_module(artifacts_dir + "deploy_lib.so")
-    loaded_params = bytearray(open(artifacts_dir + "deploy_param.params", "rb").read())
+    artifacts_dir = "artifacts_" + model_name + ("_target" if args.target else "_host") + "/"
 
-    # create a runtime executor module
-    module = runtime.create(loaded_json, loaded_lib, tvm.cpu())
+    img_file = "./airshow.jpg"
+    if args.input is not None:
+        img_file = args.input
 
-    # load params into the module
-    module.load_params(loaded_params)
+    if args.cv:
+        input_data = load_image_cv(1, img_file, mean, scale, is_nchw)
+    else:
+        input_data = load_image_pillow(1, img_file, mean, scale, is_nchw)
 
-    # feed input data
-    input_data = load_image(1, mean, scale, is_nchw)
-    module.set_input(input_tensor, tvm.nd.array(input_data))
+    if args.dlr:
+        module = DLRModel(artifacts_dir)
+        results = module.run({input_tensor : input_data})
+        tvm_output = results[0]
+    else:
+        loaded_json = open(artifacts_dir + "deploy_graph.json").read()
+        loaded_lib = tvm.runtime.load_module(artifacts_dir + "deploy_lib.so")
+        loaded_params = bytearray(open(artifacts_dir + "deploy_param.params", "rb").read())
 
-    # run
-    module.run()
+        # create a runtime executor module
+        module = runtime.create(loaded_json, loaded_lib, tvm.cpu())
 
-    # get output
-    tvm_output = module.get_output(0).asnumpy()
+        # load params into the module
+        module.load_params(loaded_params)
+
+        # feed input data
+        module.set_input(input_tensor, tvm.nd.array(input_data))
+
+        # run
+        module.run()
+
+        # get output
+        tvm_output = module.get_output(0).asnumpy()
 
     print(model_name + " execution finished")
     return tvm_output
