@@ -290,7 +290,7 @@ class TIDLJ7Module : public runtime::ModuleNode {
 
     auto info_it = infos.find(name);
     if (info_it == infos.end()) {
-      LOG(FATAL) << "Invalid subgraph id of " << subgraph_id << '\n';
+      // try to find it in next TIDLJ7Module
       return PackedFunc(nullptr);
     }
     auto& info = info_it->second;

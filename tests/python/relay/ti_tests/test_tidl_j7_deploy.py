@@ -82,11 +82,14 @@ def run_module(model_name, input_tensor, mean, scale, is_nchw):
 
 def print_top5(output):
     top5 = []
+    values = []
     for i in range(5):
         top = np.argmax(output[0, :])
-        output[0, top] = 0
         top5.append(top)
+        values.append(output[0, top])
+        output[0, top] = 0
     print(top5)
+    print(values)
 
 if __name__ == '__main__':
 

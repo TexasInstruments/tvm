@@ -583,14 +583,14 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outScaleF2Q   = {}\n".format(print_list(output_scale)))
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
-def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file,
+def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec, input_signed, net_file,
                          params_file, platform="AM57", tidl_tensor_bits=8):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Save quantized input vector to a file for calib tool to read
     # Saving as 'int8' or 'uint8' is the same
     temp_folder = './tempDir/'
-    calib_raw_image = temp_folder + 'calib_raw_data.bin'
+    calib_raw_image = temp_folder + 'calib_raw_data'+str(subgraph_id)+'.bin'
     open(calib_raw_image, "wb").close() # delete old file contents
     fid = open(calib_raw_image, "ab")
 
@@ -1117,7 +1117,7 @@ class TIDLImport:
                 (descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][1:4]
             input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
-            import_lib_init(len(input), input_dscr_ptr, is_nchw, self.tidl_tensor_bits)
+            import_lib_init(subgraph_id, len(input), input_dscr_ptr, is_nchw, self.tidl_tensor_bits)
             subgraph_info_dict = { "is_nchw" : is_nchw }
             with open("./tempDir/subgraph"+str(subgraph_id)+".nfo", "w") as of:
                 json.dump(subgraph_info_dict, of, indent=4)
@@ -1412,13 +1412,13 @@ class TIDLImport:
                 import_lib_optimize()
 
             # Calibrate TIDL for the imported subgraph
-            status, out_data_q = subgraph_calibration(self.calib_tool,
+            status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
                                      input_quant_vec, input_signed,
                                      net_file, par_file, self.tidl_platform,
                                      self.tidl_tensor_bits)
             if self.tidl_platform == "J7":
                 if status:
-                    return import_succeed
+                    continue  # import next subgraph
                 else:
                     return import_fail
             if not status:
@@ -1842,6 +1842,7 @@ class TIDLAnnotation:
         if self.import_lib is None:
             # For CI testing which doesn't have import library - still run TVM passes
             return True
+
         # Invoke TIDL import library call to check if this op can be supported
         op = tvm.ir.Op.get(op_name)
         callnode = tvm.relay.Call(op, args, attrs)
