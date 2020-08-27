@@ -285,9 +285,6 @@ class TIDLJ7Module : public runtime::ModuleNode {
       return PackedFunc(nullptr);
     }
 
-    // Get subgraph id which is after "tidl_" (5 characters). Hopefully this never fails ...
-    int subgraph_id = std::stoi(name.substr(5));
-
     auto info_it = infos.find(name);
     if (info_it == infos.end()) {
       // try to find it in next TIDLJ7Module
@@ -295,6 +292,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
     }
     auto& info = info_it->second;
 
+    // Get subgraph id which is after "tidl_" (5 characters). Hopefully this never fails ...
+    subgraph_id = std::stoi(name.substr(5));
 
     // Do this here to avoid requiring the TIDLRT library at compile time.
     // Alternatively we could do this in FromJSON since that is the function
@@ -390,6 +389,12 @@ printf("Convert arg/tensor %d\n", i);
                     name_size);
             rt_arg->name[name_size] = '\0';
 printf("## input name: %s\n", (char *) rt_arg->name);
+          }
+          else
+          {
+            sprintf((char *) rt_arg->name, "tidl_%d_o%d",
+                    subgraph_id, i - (int) info.input_names.size());
+printf("## output name: %s\n", (char *) rt_arg->name);
           }
 
           // Set element type
@@ -555,7 +560,7 @@ private:
   // I used an unordered map with strings as the index because there is built in
   // support to serialize/deserialize this to/from JSON.
   std::unordered_map<std::string, TIDLSubgraphInfo> infos;
-
+  int subgraph_id;
 
   // Pointers to every handle so they can be deleted
   std::vector<void*> tidlrt_handles;
