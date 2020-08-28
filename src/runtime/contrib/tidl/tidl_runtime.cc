@@ -25,6 +25,7 @@
 #include <dlfcn.h>
 #include <dmlc/logging.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <time.h>
 #include <tvm/node/serialization.h>
 #include <tvm/relay/expr_functor.h>
@@ -46,6 +47,34 @@
 #include "tidl_runtime.h"
 #include "itidl_rt.h"
 
+int tidlrt_debuglevel = 0;
+
+static void __attribute__((constructor)) lib_init()
+{
+	char *debug_str;
+
+	debug_str = getenv("TIDL_RT_DEBUG");
+	if(!debug_str)
+		tidlrt_debuglevel = 0;
+	else
+		tidlrt_debuglevel = atoi(debug_str);
+}
+
+static int debug_printf(const char *fmt, ...)
+{
+	va_list ap;
+	int ret = 0;
+
+	if(tidlrt_debuglevel == 0)
+		goto out;
+
+	va_start(ap, fmt);
+	ret = vprintf(fmt, ap);
+	va_end(ap);
+
+out:
+	return ret;
+}
 
 // #define TVM_RUNTIME_DBG_TIDL_TIMER
 #ifdef TVM_RUNTIME_DBG_TIDL_TIMER
@@ -305,11 +334,11 @@ class TIDLJ7Module : public runtime::ModuleNode {
 
     params.netPtr = (void *) info.net_data.data();
     params.ioBufDescPtr = (void *) info.params_data.data();
-printf("net_data size: %d\n", (int) info.net_data.size());
+debug_printf("net_data size: %d\n", (int) info.net_data.size());
     params.net_capacity = info.net_data.size();
-printf("ioparams size: %d\n", (int) info.params_data.size());
+debug_printf("ioparams size: %d\n", (int) info.params_data.size());
     params.io_capacity  = info.params_data.size();
-    if (getenv("TIDL_RELAY_IMPORT_DEBUG") != nullptr)
+    if (tidlrt_debuglevel > 1)
     {
       params.traceLogLevel = 1;
       params.traceWriteLevel = 1;
@@ -338,7 +367,7 @@ printf("ioparams size: %d\n", (int) info.params_data.size());
       std::vector<sTIDLRT_Tensor_t*> tidlrt_params = ConvertArgs(args, info);
       sTIDLRT_Tensor_t** inputs = &tidlrt_params[0];
       sTIDLRT_Tensor_t** outputs = &tidlrt_params[info.NumInputs()];
-printf("num_inputs: %d, num_outputs: %d\n", (int) info.NumInputs(), (int) (tidlrt_params.size() - info.NumInputs()));
+debug_printf("num_inputs: %d, num_outputs: %d\n", (int) info.NumInputs(), (int) (tidlrt_params.size() - info.NumInputs()));
 
       if (TIDLRT_invoke_(tidlrt_handle, inputs, outputs) != 0)
         LOG(FATAL) << "TIDLRT_invoke failed\n";
@@ -365,7 +394,7 @@ printf("num_inputs: %d, num_outputs: %d\n", (int) info.NumInputs(), (int) (tidlr
     std::vector<sTIDLRT_Tensor_t*> rt_args(args.size());
 
     for (int i = 0; i < args.size(); i++) {
-printf("Convert arg/tensor %d\n", i);
+debug_printf("Convert arg/tensor %d\n", i);
 
       // Allocate and initialize the tensor
       sTIDLRT_Tensor_t* rt_arg = new sTIDLRT_Tensor_t;
@@ -388,22 +417,22 @@ printf("Convert arg/tensor %d\n", i);
             strncpy((char *) rt_arg->name, info.input_names[i].c_str(),
                     name_size);
             rt_arg->name[name_size] = '\0';
-printf("## input name: %s\n", (char *) rt_arg->name);
+debug_printf("## input name: %s\n", (char *) rt_arg->name);
           }
           else
           {
             sprintf((char *) rt_arg->name, "tidl_%d_o%d",
                     subgraph_id, i - (int) info.input_names.size());
-printf("## output name: %s\n", (char *) rt_arg->name);
+debug_printf("## output name: %s\n", (char *) rt_arg->name);
           }
 
           // Set element type
           rt_arg->elementType = GetTIDLRTElementType(tensor_arg->dtype);
-printf("## elementType: %d\n", rt_arg->elementType);
+debug_printf("## elementType: %d\n", rt_arg->elementType);
 
           // Set the number of dimensions
           rt_arg->numDim = tensor_arg->ndim;
-printf("## numDim: %d\n", rt_arg->numDim);
+debug_printf("## numDim: %d\n", rt_arg->numDim);
 
 
           if (rt_arg->numDim > TIDLRT_DIM_MAX) {
@@ -431,39 +460,39 @@ printf("## numDim: %d\n", rt_arg->numDim);
           }
 
           for (int s = 0; s < TIDLRT_DIM_MAX; s++)
-printf("##  dimValues[%d]: %d\n", s, rt_arg->dimValues[s]);
+debug_printf("##  dimValues[%d]: %d\n", s, rt_arg->dimValues[s]);
 
           // Skip pitch for now
           rt_arg->pitch[2] = rt_arg->dimValues[3];
           rt_arg->pitch[1] = rt_arg->dimValues[2] * rt_arg->dimValues[3];
           rt_arg->pitch[0] = rt_arg->dimValues[1] * rt_arg->dimValues[2] * rt_arg->dimValues[3];
-printf("##  pitch: %d %d %d\n", rt_arg->pitch[0], rt_arg->pitch[1], rt_arg->pitch[2]);
+debug_printf("##  pitch: %d %d %d\n", rt_arg->pitch[0], rt_arg->pitch[1], rt_arg->pitch[2]);
 
           // Skip pad values for now
           rt_arg->padValues[0] = 
           rt_arg->padValues[1] = 
           rt_arg->padValues[2] = 
           rt_arg->padValues[3] = 0;
-printf("##  padValues: %d %d %d %d\n", rt_arg->padValues[0],rt_arg->padValues[1],rt_arg->padValues[2],rt_arg->padValues[3]);
+debug_printf("##  padValues: %d %d %d %d\n", rt_arg->padValues[0],rt_arg->padValues[1],rt_arg->padValues[2],rt_arg->padValues[3]);
 
           // Set the data pointer
           rt_arg->ptr = tensor_arg->data;
-printf("## ptr: %p\n", rt_arg->ptr);
+debug_printf("## ptr: %p\n", rt_arg->ptr);
 
           // Assume the layout is NCHW. It is assumed that ConvertLayout("NCHW")
           // is called on the entire graph and only transpose or NCHW operators
           // are whitelisted as TIDL nodes. This assumption means TIDLRT does
           // not need to perform any layout conversions.
           rt_arg->layout = info.is_nchw ? TIDLRT_LT_NCHW : TIDLRT_LT_NHWC;
-printf("## layout: %d\n", rt_arg->layout);
+debug_printf("## layout: %d\n", rt_arg->layout);
 
           // Skip zeroPoint and scale since those are for quantized models.
           rt_arg->scale = 1.0f;
-printf("## zeroPoint %d, scale: %f\n", rt_arg->zeroPoint, rt_arg->scale);
+debug_printf("## zeroPoint %d, scale: %f\n", rt_arg->zeroPoint, rt_arg->scale);
 
           // Not sure what to set memtype to.
           rt_arg->memType = TIDLRT_MEM_USER_SPACE;
-printf("## memType: %d\n", rt_arg->memType);
+debug_printf("## memType: %d\n", rt_arg->memType);
 
           break;
         }
