@@ -380,7 +380,7 @@ class RemoveMultiplyByOne(ExprMutator):
                     return call.args[1]
         return super().visit_call(call)
 
-def generate_subgraph_tensors(tidl_target, mod, params, graph_input, save_output=False):
+def generate_subgraph_tensors(tidl_target, mod, params, graph_input, artifacts_folder, save_output=False):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
     """
 
@@ -401,7 +401,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input, save_output
     mod.run()
 
     results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
-    np.savetxt('graph_output.txt', results[0].flatten(), fmt='%10.5f')
+    np.savetxt(os.path.join(artifacts_folder, 'tempDir/graph_output.txt'), results[0].flatten(), fmt='%10.5f')
 
     # We now have subgraph inputs
     # {1: 'tidl_1_i0', 2: 'tidl_1_o0', 3: 'tidl_0_i0', 4: 'tidl_0_o0'}
@@ -410,7 +410,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input, save_output
         if i in calib_mutator.name_map:
             subgraph_tensors[calib_mutator.name_map[i]] = res
             if save_output:
-                file_name = calib_mutator.name_map[i] + ".txt"
+                file_name = os.path.join(artifacts_folder, 'tempDir/' + calib_mutator.name_map[i] + ".txt")
                 np.savetxt(file_name, res.flatten(), fmt='%10.5f')
 
     return subgraph_tensors
@@ -596,13 +596,13 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outScaleF2Q   = {}\n".format(print_list(output_scale)))
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
-def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec, input_signed, net_file,
-                         params_file, platform="AM57", tidl_tensor_bits=8):
+def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec, input_signed, artifacts_folder,
+                         net_file, params_file, platform="AM57", tidl_tensor_bits=8):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Save quantized input vector to a file for calib tool to read
     # Saving as 'int8' or 'uint8' is the same
-    temp_folder = './tempDir/'
+    temp_folder = os.path.join(artifacts_folder, 'tempDir/')
     calib_raw_image = temp_folder + 'calib_raw_data'+str(subgraph_id)+'.bin'
     open(calib_raw_image, "wb").close() # delete old file contents
     fid = open(calib_raw_image, "ab")
@@ -629,7 +629,7 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec, input_signed,
     shutil.copyfile(net_file, output_tmp_file)
 
     calib_config_file = temp_folder + 'configFilesList.txt'
-    quant_config_file = './tempDir/quant_stats_config.txt'
+    quant_config_file = temp_folder + 'quant_stats_config.txt'
     with open(calib_config_file, 'w') as config_file:
         config_file.write('1 ' + quant_config_file + '\n')
         config_file.write('0\n')
@@ -775,10 +775,13 @@ class TIDLImport:
         self.tidl_tensor_bits = tidl_tensor_bits
 
         # Prepare for import
-        temp_folder = './tempDir/'
-        if os.path.isdir(temp_folder):
-            shutil.rmtree(temp_folder)
-        os.mkdir(temp_folder)
+        temp_folder = os.path.join(artifacts_folder, 'tempDir/')
+        os.makedirs(temp_folder, exist_ok=True)
+        for root, dirs, files in os.walk(temp_folder, topdown=False):
+            for f in files:
+                os.remove(os.path.join(root, f))
+            for d in dirs:
+                os.rmdir(os.path.join(root, d))
 
     def tidl_import_conv2d(self, this_node, params):
         r""" Import conv2d operator to TIDL
@@ -1135,9 +1138,9 @@ class TIDLImport:
             input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
             import_lib_init(subgraph_id, len(input_tensors), input_dscr_ptr, is_nchw,
-                            self.tidl_tensor_bits)
+                            self.tidl_tensor_bits, os.path.join(self.artifacts_folder, 'tempDir'))
             subgraph_info_dict = { "is_nchw" : is_nchw }
-            with open("./tempDir/subgraph"+str(subgraph_id)+".nfo", "w") as of:
+            with open(os.path.join(self.artifacts_folder, "tempDir/subgraph"+str(subgraph_id)+".nfo"), "w") as of:
                 json.dump(subgraph_info_dict, of, indent=4)
             return True
 
@@ -1435,7 +1438,7 @@ class TIDLImport:
 
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
-                                     input_quant_vec, input_signed,
+                                     input_quant_vec, input_signed, self.artifacts_folder,
                                      net_file, par_file, self.tidl_platform,
                                      self.tidl_tensor_bits)
             if self.tidl_platform == "J7":
@@ -2162,9 +2165,6 @@ class TIDLCompiler:
         #print("-----------final partitioned graph-----------")
         #print(mod.astext(show_meta_data=False))
 
-        #============= Generate subgraph boundary tensors ==============
-        subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input)
-
         #================ Import the graph to TIDL =====================
         if self.tidl_tools_path is not None:
             if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
@@ -2172,6 +2172,7 @@ class TIDLCompiler:
                                          self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
                                          data_layout, self.tidl_tensor_bits)
+                subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input, self.artifacts_folder)
                 import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors)
                 _ctypes.dlclose(import_lib._handle)
                 if import_status == 1:

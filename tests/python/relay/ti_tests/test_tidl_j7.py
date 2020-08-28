@@ -80,12 +80,12 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     tidl_platform = "J7"   # or "AM57"
     tidl_version = (7, 0)  # corresponding Processor SDK version
     tidl_artifacts_folder = "./artifacts_" + model_name +  ("_target" if args.target else "_host")
-    if os.path.isdir(tidl_artifacts_folder):
-        filelist = [f for f in os.listdir(tidl_artifacts_folder)]
-        for file in filelist:
-            os.remove(os.path.join(tidl_artifacts_folder, file))
-    else:
-        os.mkdir(tidl_artifacts_folder)
+    os.makedirs(tidl_artifacts_folder, exist_ok = True)
+    for root, dirs, files in os.walk(tidl_artifacts_folder, topdown=False):
+        for f in files:
+            os.remove(os.path.join(root, f))
+        for d in dirs:
+            os.rmdir(os.path.join(root, d))
 
     tidl_compiler = tidl.TIDLCompiler(tidl_platform, tidl_version,
                                       num_tidl_subgraphs=num_tidl_subgraphs,
@@ -110,7 +110,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
     else:
         target = "llvm"
 
-    with tidl.build_config(artifacts_folder="tempDir", platform=tidl_platform):
+    with tidl.build_config(artifacts_folder=tidl_artifacts_folder, platform=tidl_platform):
         graph, lib, params = relay.build_module.build(mod, target=target, params=params)
 
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")

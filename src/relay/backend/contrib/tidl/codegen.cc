@@ -298,7 +298,7 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
     int subgraph_id = std::stoi(subgraph_name.substr(5));
 
     std::stringstream subgraph_prefix_stream;
-    subgraph_prefix_stream << ctx->artifacts_directory << '/' << "subgraph"
+    subgraph_prefix_stream << ctx->artifacts_directory << "/tempDir/" << "subgraph"
                            << subgraph_id;
     std::string subgraph_prefix = subgraph_prefix_stream.str();
 
