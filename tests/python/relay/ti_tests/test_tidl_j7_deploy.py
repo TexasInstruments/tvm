@@ -37,13 +37,18 @@ else:
 ######################################################################
 # Load a test image
 # ---------------------------------------------
-def load_image_pillow(batch_size, img_file, mean, scale, needs_nchw):
+def load_image_pillow(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop_wh):
     from PIL import Image
     #from matplotlib import pyplot as plt
 
     orig_img = Image.open(img_file)  # HWC
-    resized_img = orig_img.resize((256, 256))
-    cropped_img = resized_img.crop((16, 16, 240, 240))
+    resized_img = orig_img.resize((resize_wh[0], resize_wh[1]))
+    if resize_wh[0] > crop_wh[0] or resize_wh[1] > crop_wh[1]:
+        wh_start = [ (x - y) / 2 for x, y in zip(resize_wh, crop_wh)]
+        wh_end   = [ x + y for x, y in zip(wh_start, crop_wh)]
+        cropped_img = resized_img.crop((wh_start[0], wh_start[1], wh_end[0], wh_end[1]))
+    else:
+        cropped_img = resized_img
     # plt.imshow(cropped_img)
     # plt.show()
 
@@ -59,7 +64,7 @@ def load_image_pillow(batch_size, img_file, mean, scale, needs_nchw):
         input_data = input_data.transpose(0, 3, 1, 2)  # NCHW
     return input_data
 
-def load_image_cv(batch_size, img_file, mean, scale, needs_nchw):
+def load_image_cv(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop_wh):
     import cv2
 
     img = cv2.imread(img_file)
@@ -93,18 +98,14 @@ def load_image_cv(batch_size, img_file, mean, scale, needs_nchw):
 ######################################################################
 # Run the model with relay runtime
 # ---------------------------------------------
-def run_module(model_name, input_tensor, mean, scale, is_nchw):
+def run_module(model_name, input_tensor, mean, scale, is_nchw, img_file, resize_wh, crop_wh):
     # load deployable module
     artifacts_dir = "artifacts_" + model_name + ("_target" if args.target else "_host") + "/"
 
-    img_file = "./airshow.jpg"
-    if args.input is not None:
-        img_file = args.input
-
     if args.cv:
-        input_data = load_image_cv(1, img_file, mean, scale, is_nchw)
+        input_data = load_image_cv(1, img_file, mean, scale, is_nchw, resize_wh, crop_wh)
     else:
-        input_data = load_image_pillow(1, img_file, mean, scale, is_nchw)
+        input_data = load_image_pillow(1, img_file, mean, scale, is_nchw, resize_wh, crop_wh)
 
     if args.dlr:
         module = DLRModel(artifacts_dir)
@@ -146,14 +147,33 @@ def print_top5(output):
 
 if __name__ == '__main__':
 
+    img_file = download_testdata(
+         'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true',
+         'cat.png', module='data')
+    #img_file = "./airshow.jpg"
+    if args.input is not None:
+        img_file = args.input
+
     output1 = run_module("MobileNetV1", "input", [128, 128, 128],
-                         [0.0078125, 0.0078125, 0.0078125], False)
+                         [0.0078125, 0.0078125, 0.0078125], False,
+                         img_file, [256,256], [224,224])
 
     output2 = run_module("ONNX_MobileNetV2", "data", [123.675, 116.28, 103.53],
-                         [0.017125, 0.017507, 0.017429], True)
+                         [0.017125, 0.017507, 0.017429], True,
+                         img_file, [256,256], [224,224])
+
+    if args.input is None:
+        img_file = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
+                                     'gluoncv/detection/street_small.jpg?raw=true',
+                                     'street_small.jpg', module='data')
+    output3 = run_module("deeplabv3", "sub_7", [128, 128, 128],
+                         [0.0078125, 0.0078125, 0.0078125], False,
+                         img_file, [257,257], [257,257])
 
     print("TensorFlow MobileNetV1 output: (index of 1001)")
     print_top5(output1)
     print("ONNX MobileNetV2 output: (index of 1000)")
     print_top5(output2)
-
+    print("deeplabv3 output shape: {}".format(output3.shape))
+    output3 = np.squeeze(output3, axis=0)
+    np.savetxt("deeplabv3.results", np.argmax(output3, axis=2).astype(int), "%2d", "")

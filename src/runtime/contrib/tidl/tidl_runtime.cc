@@ -264,6 +264,7 @@ class TIDLJ7Module : public runtime::ModuleNode {
 
   ~TIDLJ7Module() {
     for (void* handle : tidlrt_handles) {
+      debug_printf("#TVM# TIDLRT_delete tidl_%d: %p...\n", subgraph_id, handle);
       if (TIDLRT_delete_(handle) != 0) LOG(FATAL) << "TIDLRT_delete failed\n";
     }
   }
@@ -352,6 +353,8 @@ debug_printf("ioparams size: %d\n", (int) info.params_data.size());
       LOG(FATAL) << "Failed to initialize TIDLRT for subgraph " << subgraph_id << '\n';
       return PackedFunc(nullptr);
     }
+    debug_printf("#TVM# TIDLRT_create tidl_%d: %p\n",
+                 subgraph_id, tidlrt_handle);
 
     // Keep track of the handles so we can delete them in the destructor.
     tidlrt_handles.push_back(tidlrt_handle);
@@ -369,13 +372,15 @@ debug_printf("ioparams size: %d\n", (int) info.params_data.size());
       sTIDLRT_Tensor_t** outputs = &tidlrt_params[info.NumInputs()];
 debug_printf("num_inputs: %d, num_outputs: %d\n", (int) info.NumInputs(), (int) (tidlrt_params.size() - info.NumInputs()));
 
+      // TIDLRT_invoke() sequence: TIDL_activate, TIDL_invoke, TIDL_deactivate
       if (TIDLRT_invoke_(tidlrt_handle, inputs, outputs) != 0)
         LOG(FATAL) << "TIDLRT_invoke failed\n";
 
-      // Deactivate the subgraph if there are multiple subgraphs
-      if (infos.size() > 1)
-        if (TIDLRT_deactive_(tidlrt_handle) != 0)
-          LOG(FATAL) << "TIDLRT_deactivate failed\n";
+      // If TIDLRT_invoke() changes and does not call TIDL_deactivate(),
+      // we need to call TIDLRT_deactivate() explicitly here to handle
+      // multiple models or multiple TIDL subgraphs.  We can offer
+      // an environment variable to not call TIDL_deactivate()
+      // for the case of single model/subgraph.
 
       // Delete the tensor objects.
       for (sTIDLRT_Tensor_t* t : tidlrt_params)

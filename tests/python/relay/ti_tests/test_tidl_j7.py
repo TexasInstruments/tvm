@@ -32,6 +32,8 @@ parser.add_argument('--target', action='store_true',
                     help='generate code for target device (ARM core')
 parser.add_argument('--deny', dest='denylist', action='append',
                     help='force Relay operator to be unsupported by TIDL')
+parser.add_argument('--nooffload', action='store_true',
+                    help='produce a host-only deployable module without TIDL offload')
 args = parser.parse_args()
 
 def get_compiler_path():
@@ -90,13 +92,16 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
         for d in dirs:
             os.rmdir(os.path.join(root, d))
 
-    tidl_compiler = tidl.TIDLCompiler(tidl_platform, tidl_version,
-                                      num_tidl_subgraphs=num_tidl_subgraphs,
-                                      artifacts_folder=tidl_artifacts_folder,
-                                      tidl_tools_path=get_tidl_tools_path(),
-                                      tidl_tensor_bits=16,
-                                      tidl_denylist=args.denylist)
-    mod, status = tidl_compiler.enable(mod_orig, params, model_input)
+    if args.nooffload:
+        mod, status = mod_orig, 0
+    else:
+        tidl_compiler = tidl.TIDLCompiler(tidl_platform, tidl_version,
+                                          num_tidl_subgraphs=num_tidl_subgraphs,
+                                          artifacts_folder=tidl_artifacts_folder,
+                                          tidl_tools_path=get_tidl_tools_path(),
+                                          tidl_tensor_bits=16,
+                                          tidl_denylist=args.denylist)
+        mod, status = tidl_compiler.enable(mod_orig, params, model_input)
 
     if args.target:
         arm_gcc = get_compiler_path()
@@ -235,9 +240,13 @@ def create_tf_relay_graph(model, input_node, input_shape, layout):
 
 def create_tflite_relay_graph(model, input_node, input_shape, layout):
     if model == "MobileNetV1":
-        model    = "./mobileNet1/mobilenet_v1_1.0_224.tflite"
+        model = "./mobileNet1/mobilenet_v1_1.0_224.tflite"
     elif model == "MobileNetV2":
-        model    = "./mobileNet2/mobilenet_v2_1.0_224.tflite"
+        model = "./mobileNet2/mobilenet_v2_1.0_224.tflite"
+    elif model == "deeplabv3":
+        model = download_testdata(
+            'https://storage.googleapis.com/download.tensorflow.org/models/tflite/gpu/deeplabv3_257_mv_gpu.tflite?raw=true',
+            'deeplabv3_257_mv_gpu.tflite', module='model')
 
     # get TFLite model from buffer
     tflite_model_buf = open(model, "rb").read()
@@ -263,15 +272,16 @@ def create_tflite_relay_graph(model, input_node, input_shape, layout):
 
     return mod, params
 
-def load_image(batch_size, mean, scale, needs_nchw):
-    img_file = download_testdata(
-         'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true',
-         'cat.png', module='data')
-    #img_file = "./airshow.jpg"
+def load_image(batch_size, img_file, resize_wh, crop_wh, mean, scale, needs_nchw):
     from PIL import Image
     orig_img = Image.open(img_file)  # HWC
-    resized_img = orig_img.resize((256, 256))
-    cropped_img = resized_img.crop((16, 16, 240, 240))
+    resized_img = orig_img.resize((resize_wh[0], resize_wh[1]))
+    if resize_wh[0] > crop_wh[0] or resize_wh[1] > crop_wh[1]:
+        wh_start = [ (x - y) / 2 for x, y in zip(resize_wh, crop_wh)]
+        wh_end   = [ x + y for x, y in zip(wh_start, crop_wh)]
+        cropped_img = resized_img.crop((wh_start[0], wh_start[1], wh_end[0], wh_end[1]))
+    else:
+        cropped_img = resized_img
     # Normalize input data to (-1, 1)
     norm_img = np.asarray(cropped_img).astype("float32")
     norm_img[:, :, 0] = (norm_img[:, :, 0] - mean[0]) * scale[0]
@@ -284,11 +294,12 @@ def load_image(batch_size, mean, scale, needs_nchw):
         input_data = input_data.transpose(0, 3, 1, 2)  # NCHW
     return input_data
 
-def test_tidl_tf_mobilenets(model_name, format="tf"):
+def test_tidl_tf_mobilenets(model_name, img_file, format="tf"):
     data_layout = "NHWC"
     input_node = "input"
     input_shape = (1, 224, 224, 3)
-    input_data = load_image(1, [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False)
+    input_data = load_image(1, img_file, [256, 256], [224, 224],
+                            [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False)
     if input_data.shape != input_shape:
         sys.exit("Input data shape is not correct!")
     print("input_data shape: {}".format(input_data.shape))
@@ -307,11 +318,12 @@ def test_tidl_tf_mobilenets(model_name, format="tf"):
     status = model_compile(model_name, tf_mod, tf_params, {input_node:input_data})
     assert status != -1, "TIDL compilation failed"   # For CI test
 
-def test_tidl_onnx(model_name):
+def test_tidl_onnx(model_name, img_file):
     data_layout = "NCHW"
     input_node = "data"
     input_shape = (1, 3, 224, 224)
-    input_data = load_image(1, [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True)
+    input_data = load_image(1, img_file, [256, 256], [224, 224],
+                            [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True)
     if input_data.shape != input_shape:
         sys.exit("Input data shape is not correct!")
     print("input_data shape: {}".format(input_data.shape))
@@ -330,13 +342,44 @@ def test_tidl_onnx(model_name):
     status = model_compile(model_name, onnx_mod, onnx_params, {input_node:input_data})
     assert status != -1, "TIDL compilation failed"   # For CI test
 
+def test_tidl_tflite_deeplabv3(img_file):
+    model_name = "deeplabv3"
+    data_layout = "NHWC"
+    input_node = "sub_7"
+    input_shape = (1, 257, 257, 3)
+    input_data = load_image(1, img_file, [257, 257], [257, 257],
+                            [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False)
+    if input_data.shape != input_shape:
+        sys.exit("Input data shape is not correct!")
+    print("input_data shape: {}".format(input_data.shape))
+
+    #============= Create a Relay graph for model ==============
+    tf_mod, tf_params = create_tflite_relay_graph(model = model_name, input_node = input_node,
+                                                  input_shape = input_shape, layout = data_layout)
+    print("---------- Original TF Graph ----------")
+    print(tf_mod.astext(show_meta_data=False))
+
+    #======================== TIDL code generation ====================
+    status = model_compile(model_name, tf_mod, tf_params, {input_node:input_data},
+                           num_tidl_subgraphs=2)
+    assert status != -1, "TIDL compilation failed"   # For CI test
 
 if __name__ == '__main__':
-    test_tidl_tf_mobilenets("MobileNetV1")
-    #test_tidl_tf_mobilenets("MobileNetV1", "tflite")
-    #test_tidl_tf_mobilenets("MobileNetV2")
-    #test_tidl_tf_mobilenets("MobileNetV2", "tflite")
-    test_tidl_onnx("ONNX_MobileNetV2")
+    img_file = download_testdata(
+         'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true',
+         'cat.png', module='data')
+    #img_file = "./airshow.jpg"
+    test_tidl_tf_mobilenets("MobileNetV1", img_file)
+    #test_tidl_tf_mobilenets("MobileNetV1", img_file, "tflite")
+    #test_tidl_tf_mobilenets("MobileNetV2", img_file)
+    #test_tidl_tf_mobilenets("MobileNetV2", img_file, "tflite")
+    test_tidl_onnx("ONNX_MobileNetV2", img_file)
+
+    img_file = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
+                                 'gluoncv/detection/street_small.jpg?raw=true',
+                                 'street_small.jpg', module='data')
+    #img_file = "./deeplab_kidbike_input.png"
+    test_tidl_tflite_deeplabv3(img_file)
     #test_tidl_classification()
     #test_tidl_object_detection()
     #test_tidl_segmentation()
