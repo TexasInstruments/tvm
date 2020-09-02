@@ -28,7 +28,10 @@ from tvm.relay.backend.contrib import tidl
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--target', action='store_true')
+parser.add_argument('--target', action='store_true',
+                    help='generate code for target device (ARM core')
+parser.add_argument('--deny', dest='denylist', action='append',
+                    help='force Relay operator to be unsupported by TIDL')
 args = parser.parse_args()
 
 def get_compiler_path():
@@ -91,7 +94,8 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
                                       num_tidl_subgraphs=num_tidl_subgraphs,
                                       artifacts_folder=tidl_artifacts_folder,
                                       tidl_tools_path=get_tidl_tools_path(),
-                                      tidl_tensor_bits=16)
+                                      tidl_tensor_bits=16,
+                                      tidl_denylist=args.denylist)
     mod, status = tidl_compiler.enable(mod_orig, params, model_input)
 
     if args.target:

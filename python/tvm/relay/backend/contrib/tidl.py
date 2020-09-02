@@ -1473,10 +1473,11 @@ class TIDLImport:
         return import_succeed
 
 class TIDLAnnotation:
-    def __init__(self, platform, version, import_lib):
+    def __init__(self, platform, version, import_lib, denylist=None):
         self.tidl_platform = platform
         self.version = version
         self.import_lib = import_lib
+        self.denylist = denylist
 
     def register_whitelist_ops(self):
         """ TIDL operators registration """
@@ -1543,6 +1544,8 @@ class TIDLAnnotation:
             squeeze_out = is_op('squeeze')(wildcard())
             reshape_out = is_op('reshape')(squeeze_out)
             return reshape_out
+        def _squeeze_reshape_checker(extract):
+            return not self._user_denied('squeeze', 'reshape')
 
         #transpose has to be preceded and followed by reshape
         def _transpose_reshape_pattern():
@@ -1550,6 +1553,8 @@ class TIDLAnnotation:
             transpose_out = is_op('transpose')(reshape_out1)
             reshape_out2 = is_op('reshape')(transpose_out)
             return reshape_out2
+        def _transpose_reshape_checker(extract):
+            return not self._user_denied('reshape', 'transpose')
 
         #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense, or mean
         def _reshape_avg_pool_pattern():
@@ -1557,6 +1562,8 @@ class TIDLAnnotation:
             reshape_out = is_op('reshape')(avg_pool_out)
             return reshape_out
         def _reshape_avg_pool_checker(extract):
+            if self._user_denied('nn.avg_pool2d', 'reshape'):
+                return False
             op = extract.args[0]
             return self.whitelist_check_func('nn.avg_pool2d', op.attrs, op.args)
         def _reshape_global_avg_pool_pattern():
@@ -1564,6 +1571,8 @@ class TIDLAnnotation:
             reshape_out = is_op('reshape')(global_avg_pool_out)
             return reshape_out
         def _reshape_global_avg_pool_checker(extract):
+            if self._user_denied('nn.global_avg_pool2d', 'reshape'):
+                return False
             op = extract.args[0]
             return self.whitelist_check_func('nn.global_avg_pool2d', op.attrs, op.args)
         def _reshape_dense_pattern():
@@ -1571,6 +1580,8 @@ class TIDLAnnotation:
             reshape_out = is_op('reshape')(dense_out)
             return reshape_out
         def _reshape_dense_checker(extract):
+            if self._user_denied('nn.dense', 'reshape'):
+                return False
             op = extract.args[0]
             return self.whitelist_check_func('nn.dense', op.attrs, op.args)
         def _reshape_mean_pattern():
@@ -1578,6 +1589,8 @@ class TIDLAnnotation:
             reshape_out = is_op('reshape')(mean_out)
             return reshape_out
         def _reshape_mean_checker(extract):
+            if self._user_denied('mean', 'reshape'):
+                return False
             op = extract.args[0]
             return self.whitelist_check_func('mean', op.attrs, op.args)
 
@@ -1586,13 +1599,17 @@ class TIDLAnnotation:
             reshape_out = is_op('reshape')(wildcard())
             softmax_out = is_op('nn.softmax')(reshape_out)
             return softmax_out
-
+        def _reshape_softmax_checker(extract):
+            return not self._user_denied('reshape', 'nn.softmax')
+            
         #bias_add has be preceded by conv2d
         def _conv2d_bias_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
             bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
             return bias_out
         def _conv2d_bias_checker(extract):
+            if self._user_denied('nn.conv2d', 'nn.bias_add'):
+                return False
             op = extract.args[0]
             return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
         def _conv2d_add_pattern():
@@ -1600,6 +1617,8 @@ class TIDLAnnotation:
             add_out = is_op('add')(conv2d_out, is_constant())
             return add_out
         def _conv2d_add_checker(extract):
+            if self._user_denied('nn.conv2d', 'add'):
+                return False
             op = extract.args[0]
             return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
 
@@ -1613,8 +1632,9 @@ class TIDLAnnotation:
             pad_out = is_op('nn.pad')(wildcard())
             conv2d_out = is_op('nn.conv2d')(pad_out, is_constant())
             return conv2d_out
-
         def _pad_conv2d_checker(extract):
+            if self._user_denied('nn.pad', 'nn.conv2d'):
+                return False
             pad_supported = _pad_checker(extract.args[0])
             conv2d_supported = self.whitelist_check_func('nn.conv2d', extract.attrs, extract.args)
             return conv2d_supported and pad_supported
@@ -1623,8 +1643,9 @@ class TIDLAnnotation:
             pad_conv2d_out = _pad_conv2d_pattern()
             bias_out = is_op('nn.bias_add')(pad_conv2d_out, is_constant())
             return bias_out
-
         def _pad_conv2d_bias_checker(extract):
+            if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add'):
+                return False
             pad_supported = _pad_checker(extract.args[0].args[0])
             conv2d_bias_supported = _conv2d_bias_checker(extract)
             return conv2d_bias_supported and pad_supported
@@ -1633,8 +1654,9 @@ class TIDLAnnotation:
             pad_conv2d_out = _pad_conv2d_pattern()
             add_out = is_op('add')(pad_conv2d_out, is_constant())
             return add_out
-
         def _pad_conv2d_add_checker(extract):
+            if _user_denied('nn.pad', 'nn.conv2d', 'add'):
+               return False
             pad_supported = _pad_checker(extract.args[0].args[0])
             conv2d_add_supported = _conv2d_add_checker(extract)
             return conv2d_add_supported and pad_supported
@@ -1645,25 +1667,30 @@ class TIDLAnnotation:
             bias_out = is_op('nn.bias_add')(dense_out, is_constant())
             return bias_out
         def _dense_bias_checker(extract):
+            if self._user_denied('nn.dense', 'nn.bias_add'):
+                return False
             op = extract.args[0]
             return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+
         def _dense_add_pattern():
             dense_out = is_op('nn.dense')(wildcard(), is_constant())
             add_out = is_op('add')(dense_out, is_constant())
             return add_out
         def _dense_add_checker(extract):
+            if self._user_denied('nn.dense', 'add'):
+                return False
             op = extract.args[0]
             return self.whitelist_check_func('nn.dense', op.attrs, op.args)
 
         # common patterns required by J7 or J6
         pattern_table_common = [
-            ('tidl.squeeze_reshape', _squeeze_reshape_pattern()),
+            ('tidl.squeeze_reshape', _squeeze_reshape_pattern(), _squeeze_reshape_checker),
             ('tidl.reshape_avgpool', _reshape_avg_pool_pattern(), _reshape_avg_pool_checker),
             ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
                                            _reshape_global_avg_pool_checker),
             ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
             ('tidl.reshape_mean', _reshape_mean_pattern(), _reshape_mean_checker),
-            ('tidl.reshape_softmax', _reshape_softmax_pattern()),
+            ('tidl.reshape_softmax', _reshape_softmax_pattern(), _reshape_softmax_checker),
             ('tidl.pad_conv2d_bias', _pad_conv2d_bias_pattern(), _pad_conv2d_bias_checker),
             ('tidl.pad_conv2d_add', _pad_conv2d_add_pattern(), _pad_conv2d_add_checker),
             ('tidl.conv2d_bias', _conv2d_bias_pattern(), _conv2d_bias_checker),
@@ -1683,8 +1710,9 @@ class TIDLAnnotation:
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
             relu6_out = is_op('clip')(conv2d_out)
             return relu6_out
-
         def _conv2d_relu6_checker(extract):
+            if self._user_denied('nn.conv2d', 'clip'):
+                return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0]
             return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
@@ -1694,8 +1722,9 @@ class TIDLAnnotation:
             bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
             relu6_out = is_op('clip')(bias_out)
             return relu6_out
-
         def _conv2d_bias_relu6_checker(extract):
+            if self._user_denied('nn.conv2d', 'nn.bias_add', 'clip'):
+                return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0].args[0]
             return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
@@ -1706,8 +1735,9 @@ class TIDLAnnotation:
             bias_add_out = is_op('add')(conv2d_out, is_constant())
             relu6_out = is_op('clip')(bias_add_out)
             return relu6_out
-
         def _conv2d_add_relu6_checker(extract):
+            if self._user_denied('nn.conv2', 'add', 'clip'):
+                return False
             return _conv2d_bias_relu6_checker(extract)
 
         #relu6 has to be preceded by element-wise add, batch_norm, or dense
@@ -1716,8 +1746,9 @@ class TIDLAnnotation:
             add_out = is_op('add')(wildcard(), wildcard())
             relu6_out = is_op('clip')(add_out)
             return relu6_out
-
         def _add_relu6_checker(extract):
+            if self._user_denied('add', 'clip'):
+                return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             return relu6_supported
 
@@ -1727,8 +1758,9 @@ class TIDLAnnotation:
             tuple_get_item_node = is_tuple_get_item(bn_out, 0)
             relu6_out = is_op('clip')(tuple_get_item_node)
             return relu6_out
-
         def _bn_relu6_checker(extract):
+            if self._user_denied('nn.batch_norm', 'clip'):
+                return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             bn_op = extract.args[0].tuple_value
             bn_supported = self.whitelist_check_func('nn.batch_norm', bn_op.attrs, bn_op.args)
@@ -1738,8 +1770,9 @@ class TIDLAnnotation:
             dense_out = is_op('nn.dense')(wildcard(), is_constant())
             relu6_out = is_op('clip')(dense_out)
             return relu6_out
-
         def _dense_relu6_checker(extract):
+            if self._user_denied('nn.dense', 'clip'):
+                return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0]
             return self.whitelist_check_func('nn.dense', op.attrs, op.args) and relu6_supported
@@ -1751,8 +1784,9 @@ class TIDLAnnotation:
             bias_out = is_op('nn.bias_add')(dense_out, is_constant())
             relu6_out = is_op('clip')(bias_out)
             return relu6_out
-
         def _dense_bias_relu6_checker(extract):
+            if self._user_denied('nn.dense', 'nn.bias_add', 'clip'):
+                return False
             dense_op = extract.args[0].args[0]
             relu6_supported = _relu6_check_fun(extract.attrs)
             dense_supported = self.whitelist_check_func('nn.dense', dense_op.attrs, dense_op.args)
@@ -1763,16 +1797,18 @@ class TIDLAnnotation:
             bias_add_out = is_op('add')(dense_out, is_constant())
             relu6_out = is_op('clip')(bias_add_out)
             return relu6_out
-
         def _dense_add_relu6_checker(extract):
+            if self._user_denied('nn.dense', 'add', 'clip'):
+                return False
             return _dense_bias_relu6_checker(extract)
 
         def _pad_conv2d_relu6_pattern():
             _pad_conv2d_out = _pad_conv2d_pattern()
             relu6_out = is_op('clip')(_pad_conv2d_out)
             return relu6_out
-
         def _pad_conv2d_relu6_checker(extract):
+            if self._user_denied('nn.pad', 'nn.conv2d', 'clip'):
+                return False
             pad_op = extract.args[0].args[0]
             pad_supported = _pad_checker(pad_op)
             return pad_supported and _conv2d_relu6_checker(extract)
@@ -1781,8 +1817,9 @@ class TIDLAnnotation:
             _pad_conv2d_bias_out = _pad_conv2d_bias_pattern()
             relu6_out = is_op('clip')(_pad_conv2d_bias_out)
             return relu6_out
-
         def _pad_conv2d_bias_relu6_checker(extract):
+            if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add', 'clip'):
+                return False
             pad_op = extract.args[0].args[0].args[0]
             pad_supported = _pad_checker(pad_op)
             return pad_supported and _conv2d_bias_relu6_checker(extract)
@@ -1791,8 +1828,9 @@ class TIDLAnnotation:
             _pad_conv2d_add_out = _pad_conv2d_add_pattern()
             relu6_out = is_op('clip')(_pad_conv2d_add_out)
             return relu6_out
-
         def _pad_conv2d_add_relu6_checker(extract):
+            if _user_denied('nn.pad', 'nn.conv2d', 'add', 'clip'):
+                return False
             pad_op = extract.args[0].args[0].args[0]
             pad_supported = _pad_checker(pad_op)
             return pad_supported and _conv2d_add_relu6_checker(extract)
@@ -1818,14 +1856,15 @@ class TIDLAnnotation:
             pad_out = is_op('nn.pad')(wildcard())
             avg_pool_out = is_op('nn.avg_pool2d')(pad_out)
             return avg_pool_out
-
         def _pad_avg_pool_checker(extract):
+            if self._user_denied('nn.pad', 'nn.avg_pool2d'):
+                return False
             pad_supported = _pad_checker(extract.args[0])
             pool_supported = self.whitelist_check_func('nn.avg_pool2d', extract.attrs, extract.args)
             return pool_supported and pad_supported
 
         pattern_table_j7 = [
-            ('tidl.transpose_reshape', _transpose_reshape_pattern()),
+            ('tidl.transpose_reshape', _transpose_reshape_pattern(), _transpose_reshape_checker),
             ('tidl.pad_avgpool', _pad_avg_pool_pattern(), _pad_avg_pool_checker),
         ]
 
@@ -1838,10 +1877,21 @@ class TIDLAnnotation:
         return relay.transform.MergeComposite(pattern_table)(mod)
 
     # Helper functions
+    def _user_denied(self, *args):
+        """ The arguments are operator names. Return true if any of the operators
+            are in the user-specified denylist (e.g. via the --deny option to the 
+            unit test program).  """
+        for op in args:
+            if self.denylist and op in self.denylist:
+                return True
+        return False
+       
     def _register_supported_op(self, op_name):
         """ Helper function to register an op that is supported without any constraints """
         @tvm.ir.register_op_attr(op_name, "target.tidl")
         def _func_wrapper(attrs, args):
+            if self._user_denied(op_name):
+                return False
             #TODO: add data type check
             #if any([arg.checked_type.dtype != "float32" for arg in args]):
             #    return False
@@ -1852,6 +1902,8 @@ class TIDLAnnotation:
         """ Helper function to register an op that is supported with some constraints """
         @tvm.ir.register_op_attr(op_name, "target.tidl")
         def _func_wrapper(attrs, args):
+            if self._user_denied(op_name):
+                return False
             return self.whitelist_check_func(op_name, attrs, args)
         return _func_wrapper
 
@@ -2036,6 +2088,8 @@ class TIDLCompiler:
             Folder to TIDL tools
         artifacts_folder : string
             Folder to hold TIDL artifacts
+        tidl_denylist : list of strings
+            Force-annotate Relay operators as unsupported
     """
 
     def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=448, **kwargs):
@@ -2048,11 +2102,12 @@ class TIDLCompiler:
             self.artifacts_folder = None
             self.tidl_tools_path = None
             self.tidl_tensor_bits = 8
+            self.tidl_denylist = []
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
             # Read arguments provided through **kwargs
-            for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_tools_path'):
+            for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_tools_path', 'tidl_denylist'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
@@ -2067,12 +2122,13 @@ class TIDLCompiler:
             self.artifacts_folder = None
             self.tidl_tools_path = None
             self.tidl_tensor_bits = 16
+            self.tidl_denylist = []
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
             # Read arguments provided through **kwargs
             for key in ('num_tidl_subgraphs', 'artifacts_folder',
-                        'tidl_tools_path', 'tidl_tensor_bits'):
+                        'tidl_tools_path', 'tidl_tensor_bits', 'tidl_denylist'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
@@ -2125,7 +2181,8 @@ class TIDLCompiler:
             import_lib = None # Continue with graph annotation and partition for CI testing
 
         # Register TIDL annotation functions
-        tidl_annotation = TIDLAnnotation(self.tidl_platform, self.version, import_lib)
+        tidl_annotation = TIDLAnnotation(self.tidl_platform, self.version, import_lib, 
+                                         self.tidl_denylist)
         tidl_annotation.register_whitelist_ops()
 
         #============= Prepare graph for partitioning =============
