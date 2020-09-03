@@ -43,6 +43,8 @@ def load_image_pillow(batch_size, img_file, mean, scale, needs_nchw, resize_wh, 
 
     orig_img = Image.open(img_file)  # HWC
     resized_img = orig_img.resize((resize_wh[0], resize_wh[1]))
+    assert(resize_wh[0] >= crop_wh[0] and resize_wh[1] >= crop_wh[1]), \
+           "resize size needs to be bigger than crop size"
     if resize_wh[0] > crop_wh[0] or resize_wh[1] > crop_wh[1]:
         wh_start = [ (x - y) / 2 for x, y in zip(resize_wh, crop_wh)]
         wh_end   = [ x + y for x, y in zip(wh_start, crop_wh)]

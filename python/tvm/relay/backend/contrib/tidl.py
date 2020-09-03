@@ -197,47 +197,65 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names):
 
     return in_out_nodes
 
-def obtain_subgraph_tensor(subgraph_tensors, tensor_name_prefix):
+def obtain_subgraph_tensor(subgraph_tensors_list, tensor_name_prefix):
     r""" Obtain input/output tensor for a given subgraph"""
 
-    tensor = []
-    names = []
-    for key, value in subgraph_tensors.items():
-        if key.find(tensor_name_prefix) != -1:
-            tensor.append(value)
-            names.append(key)
-    return tensor, names
+    tensors_list = []
+    names_list = []
+    for subgraph_tensors in subgraph_tensors_list:
+        tensors = []
+        names = []
+        for key, value in subgraph_tensors.items():
+            if key.find(tensor_name_prefix) != -1:
+                tensors.append(value)
+                names.append(key)
+        tensors_list.append(tensors)
+        names_list.append(names)
 
-def tensor_quant_flatten(input_tensors, data_layout, tensor_bits):
+    return tensors_list, names_list
+
+def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
     r""" Convert float32 n-d array to int8/int16 or uint8/uint16 1-d array
 
     Parameters
     ----------
-    input_tensor: float32 array
+    input_tensor_list: list of float32 array, one calibration image/data per list element
     data_layout: "NCHW" or "NHWC"
     tensor_bits: 8 or 16
+    Returns
+    -------
+    quant_tensors_list: each list element contains quantized tensors for one calibration image/data
+    quant_scales: quant_scales for (multiple) subgraph inputs across all calibration images/data
+    quant_signs: signs for (multiple) subgraph inputs across all calibration images/data
     """
 
-    quant_tensors = list()
-    quant_scales = list()
-    input_signs = list()
-    for input_tensor in input_tensors:
-        # only use 1 batch for calibration
-        input_tensor = input_tensor[0, :]
-        # change layout to CxHxW to use numpy.flatten to change to 1-d array
-        if data_layout == "NHWC" and len(input_tensor.shape) == 3:
-            input_tensor = input_tensor.transpose(2, 0, 1)
 
-        max_value = max(abs(np.amin(input_tensor)), np.amax(input_tensor))
+    # find min, max for each subgraph input across all calibration images/data
+    min_values = []
+    max_values = []
+    for i in range(len(input_tensors_list[0])):
+        min_values_i = []
+        max_values_i = []
+        for input_tensors in input_tensors_list:
+            # only use 1 batch per input for calibration
+            min_values_i.append(np.amin(input_tensors[i][0, :]))
+            max_values_i.append(np.amax(input_tensors[i][0, :]))
+        min_values.append(min(min_values_i))
+        max_values.append(max(max_values_i))
+
+    # compute quant_scales, input_signs, quant_mins/quant_maxs for each subgraph input
+    quant_scales = []
+    input_signs = []
+    quant_mins = []
+    quant_maxs = []
+    for i in range(len(input_tensors_list[0])):
+        max_value = max(abs(min_values[i]), max_values[i])
         if max_value == 0:
             max_value = 1.0  # arbitrary number if input tensor is all 0's
-        abs_signed_max = 128.0
-        abs_unsigned_max = 255.0
-        if tensor_bits == 16:
-            abs_signed_max = 32768.0
-            abs_unsigned_max = 65535.0
+        abs_signed_max   = 128.0 if (tensor_bits == 8) else 32768.0
+        abs_unsigned_max = 255.0 if (tensor_bits == 8) else 65535.0
 
-        if np.amin(input_tensor) >= 0:
+        if min_values[i] >= 0:
             # quantize to Uint8 or Uint16
             sign = 0
             scale = abs_unsigned_max/max_value
@@ -248,16 +266,32 @@ def tensor_quant_flatten(input_tensors, data_layout, tensor_bits):
             scale = abs_signed_max/max_value
             quant_min, quant_max = (- abs_signed_max), (abs_signed_max - 1.0)
 
-        tensor_norm = np.multiply(input_tensor, scale)
-        tensor_quant = np.rint(tensor_norm)
-        tensor_quant = np.clip(tensor_quant, quant_min, quant_max)
-        output = tensor_quant.flatten()   # works only if tensor_quant is in "CxHxW" format
-
-        quant_tensors.append(output)
         quant_scales.append(scale)
         input_signs.append(sign)
+        quant_mins.append(quant_min)
+        quant_maxs.append(quant_max)
 
-    return quant_tensors, quant_scales, input_signs
+    # quantize all calibration images/data
+    quant_tensors_list = []
+    for input_tensors in input_tensors_list:
+        quant_tensors = []
+        for input_tensor, scale, sign, quant_min, quant_max in zip(input_tensors, quant_scales,
+                                                           input_signs, quant_mins, quant_maxs):
+            # only use 1 batch for calibration
+            input_tensor = input_tensor[0, :]
+            # change layout to CxHxW to use numpy.flatten to change to 1-d array
+            if data_layout == "NHWC" and len(input_tensor.shape) == 3:
+                input_tensor = input_tensor.transpose(2, 0, 1)
+
+            tensor_norm = np.multiply(input_tensor, scale)
+            tensor_quant = np.rint(tensor_norm)
+            tensor_quant = np.clip(tensor_quant, quant_min, quant_max)
+            output = tensor_quant.flatten()   # works only if tensor_quant is in "CxHxW" format
+
+            quant_tensors.append(output)
+        quant_tensors_list.append(quant_tensors)
+
+    return quant_tensors_list, quant_scales, input_signs
 
 class VarReplacer(ExprMutator):
     """
@@ -380,7 +414,7 @@ class RemoveMultiplyByOne(ExprMutator):
                     return call.args[1]
         return super().visit_call(call)
 
-def generate_subgraph_tensors(tidl_target, mod, params, graph_input, artifacts_folder, save_output=False):
+def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, artifacts_folder, save_output=False):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
     """
 
@@ -396,24 +430,27 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input, artifacts_f
     with relay.build_config(opt_level=0):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
     mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
-    mod.set_input(**graph_input)
     mod.set_input(**params)
-    mod.run()
 
-    results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
-    np.savetxt(os.path.join(artifacts_folder, 'tempDir/graph_output.txt'), results[0].flatten(), fmt='%10.5f')
+    subgraph_tensors_list = []
+    for graph_input in graph_input_list:
+        mod.set_input(**graph_input)
+        mod.run()
 
-    # We now have subgraph inputs
-    # {1: 'tidl_1_i0', 2: 'tidl_1_o0', 3: 'tidl_0_i0', 4: 'tidl_0_o0'}
-    subgraph_tensors = {}
-    for i, res in enumerate(results):
-        if i in calib_mutator.name_map:
-            subgraph_tensors[calib_mutator.name_map[i]] = res
-            if save_output:
-                file_name = os.path.join(artifacts_folder, 'tempDir/' + calib_mutator.name_map[i] + ".txt")
-                np.savetxt(file_name, res.flatten(), fmt='%10.5f')
+        results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
 
-    return subgraph_tensors
+        # We now have subgraph inputs
+        # {1: 'tidl_1_i0', 2: 'tidl_1_o0', 3: 'tidl_0_i0', 4: 'tidl_0_o0'}
+        subgraph_tensors = {}
+        for i, res in enumerate(results):
+            if i in calib_mutator.name_map:
+                subgraph_tensors[calib_mutator.name_map[i]] = res
+                if save_output:
+                    file_name = os.path.join(artifacts_folder, 'tempDir/' + calib_mutator.name_map[i] + ".txt")
+                    np.savetxt(file_name, res.flatten(), fmt='%10.5f')
+        subgraph_tensors_list.append(subgraph_tensors)
+
+    return subgraph_tensors_list
 
 class VarRenamer(ExprMutator):
     """
@@ -596,7 +633,8 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outScaleF2Q   = {}\n".format(print_list(output_scale)))
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
-def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec, input_signed, artifacts_folder,
+def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_signed,
+                         artifacts_folder,
                          net_file, params_file, platform="AM57", tidl_tensor_bits=8):
     """ Run TIDL calibation for the imported subgraph.
     """
@@ -607,22 +645,24 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec, input_signed,
     open(calib_raw_image, "wb").close() # delete old file contents
     fid = open(calib_raw_image, "ab")
 
-    for i in range(len(input_quant_vec)):
-        if tidl_tensor_bits == 8:
-            if input_signed == 1:
-                input_quant_vec[i].astype('int8').tofile(fid)
+    # Multiple calibration data are written to the same file, one after another
+    for input_quant_vec in input_quant_vec_list:
+        for i in range(len(input_quant_vec)):
+            if tidl_tensor_bits == 8:
+                if input_signed[i] == 1:
+                    input_quant_vec[i].astype('int8').tofile(fid)
+                else:
+                    input_quant_vec[i].astype('uint8').tofile(fid)
             else:
-                input_quant_vec[i].astype('uint8').tofile(fid)
-        else:
-            if input_signed == 1:
-                input_quant_vec[i].astype('int16').tofile(fid)
-            else:
-                input_quant_vec[i].astype('uint16').tofile(fid)
+                if input_signed[i] == 1:
+                    input_quant_vec[i].astype('int16').tofile(fid)
+                else:
+                    input_quant_vec[i].astype('uint16').tofile(fid)
     fid.close()
 
     if platform == "J7":
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
-        import_lib_postprocess()
+        import_lib_postprocess(len(input_quant_vec_list))
         return True, 123  ## TODO: do we need dataQ for J7?
 
     output_tmp_file = temp_folder + 'precalib_net.bin'
@@ -1334,7 +1374,7 @@ class TIDLImport:
 
         return status
 
-    def import_relay_ir(self, mod, params, subgraph_tensors):
+    def import_relay_ir(self, mod, params, subgraph_tensors_list):
         r""" Relay IR import to TIDL
 
         Parameters
@@ -1343,7 +1383,7 @@ class TIDLImport:
             Relay IR graph with subgraphs
         params : dict of str to tvm.NDArray
             The parameter dict to be used by relay
-        subgraph_tensors: dict
+        subgraph_tensors_list: list of dict (list length equals number of calibration data)
             Input/output tensors of subgraphs obtained from TVM graph execution
 
         Returns
@@ -1379,20 +1419,24 @@ class TIDLImport:
             out_tensor_name = tidl_subgraph + '_o'
 
             # Obtain input tensor from TVM graph execution
-            input_fp, input_names = obtain_subgraph_tensor(subgraph_tensors, in_tensor_name)
-            output_fp, output_names = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
-            if input_fp is None:
+            input_fp_list, input_names_list = obtain_subgraph_tensor(subgraph_tensors_list,
+                                                                     in_tensor_name)
+            output_fp_list, output_names_list = obtain_subgraph_tensor(subgraph_tensors_list,
+                                                                       out_tensor_name)
+            input_names = input_names_list[0]
+            output_names = output_names_list[0]
+            if not input_fp_list:
                 return import_fail
-            if self.tidl_platform == "AM57" and len(input_fp) > 1:
+            if self.tidl_platform == "AM57" and len(input_fp_list[0]) > 1:
                 print("Error - only 1 input tensor is supported for AM57x (J6)!")
                 return import_fail
 
             # Quantize input tensors
-            input_quant_vec, input_scale, input_signed = \
-                            tensor_quant_flatten(input_fp, self.data_layout, self.tidl_tensor_bits)
+            input_quant_vec_list, input_scale, input_signed = \
+                    tensor_quant_flatten(input_fp_list, self.data_layout, self.tidl_tensor_bits)
 
             # Initialize TIDL import
-            if not self.tidl_import_init(subgraph_id, input_scale, input_signed, input_fp,
+            if not self.tidl_import_init(subgraph_id, input_scale, input_signed, input_fp_list[0],
                                          input_names):
                 return import_fail
 
@@ -1438,7 +1482,7 @@ class TIDLImport:
 
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
-                                     input_quant_vec, input_signed, self.artifacts_folder,
+                                     input_quant_vec_list, input_signed, self.artifacts_folder,
                                      net_file, par_file, self.tidl_platform,
                                      self.tidl_tensor_bits)
             if self.tidl_platform == "J7":
@@ -1451,7 +1495,7 @@ class TIDLImport:
 
             # AM57x (J6) only: Calculate scaling factor to convert output tensor to floating point
             # Obtain output tensor from TVM graph execution
-            output_fp, _ = obtain_subgraph_tensor(subgraph_tensors, out_tensor_name)
+            output_fp = output_fp_list[0]
 
             # TODO: convert following lines into a function
             if output_fp is None:
@@ -2139,7 +2183,7 @@ class TIDLCompiler:
         else:
             sys.exit("Unsupported TIDL platform or version!")
 
-    def enable(self, mod_orig, params, graph_input):
+    def enable(self, mod_orig, params, graph_input_list):
         """ Enable TIDL compilation
 
         This function tries to partition and compile the given Relay IR graph.
@@ -2153,7 +2197,7 @@ class TIDLCompiler:
             Original Relay IR graph
         params : dict of str to tvm.NDArray
             The parameter dict to be used by relay
-        graph_input: dictionary
+        graph_input_list: dictionary OR list of dictionaries (for multiple calibration data)
             A dictionary where the key is input name and the value is input tensor
 
         Returns
@@ -2166,6 +2210,10 @@ class TIDLCompiler:
                 -1 - compilation failure
                 0  - no compilation due to missing TIDL tools
         """
+
+        # (Backward compatiable) if single calibration image/data/dict, convert to list
+        if not isinstance(graph_input_list, list):
+            graph_input_list = [ graph_input_list ]
 
         #============= Find data layout of the original graph =============
         data_layout = find_data_layout(mod_orig)
@@ -2229,8 +2277,8 @@ class TIDLCompiler:
                                          self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
                                          data_layout, self.tidl_tensor_bits)
-                subgraph_tensors = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input, self.artifacts_folder)
-                import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors)
+                subgraph_tensors_list = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input_list, self.artifacts_folder)
+                import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list)
                 _ctypes.dlclose(import_lib._handle)
                 if import_status == 1:
                     print("TIDL import of Relay IR graph succeeded.")

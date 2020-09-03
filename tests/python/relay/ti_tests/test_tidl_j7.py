@@ -57,7 +57,7 @@ def get_tidl_tools_path():
     else:
         return tidl_tools_path
 
-def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=1):
+def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgraphs=1):
     """ Compile a model in Relay IR graph
 
     Parameters
@@ -68,7 +68,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
         Original Relay IR graph
     params : dict of str to tvm.NDArray
         The parameter dict to be used by relay
-    model_input : dictionary
+    model_input_list : list of dictionary for multiple calibration data
         A dictionary where the key in input name and the value is input tensor
     num_tidl_subgraphs : int
         Number of subgraphs to offload to TIDL
@@ -101,7 +101,7 @@ def model_compile(model_name, mod_orig, params, model_input, num_tidl_subgraphs=
                                           tidl_tools_path=get_tidl_tools_path(),
                                           tidl_tensor_bits=16,
                                           tidl_denylist=args.denylist)
-        mod, status = tidl_compiler.enable(mod_orig, params, model_input)
+        mod, status = tidl_compiler.enable(mod_orig, params, model_input_list)
 
     if args.target:
         arm_gcc = get_compiler_path()
@@ -155,7 +155,7 @@ def gluoncv_compile_model(model_name, img_file, img_size=None, img_norm="ssd", b
         mod, params = relay.frontend.from_mxnet(model, {input_name:input_data.shape})
 
         #======================== Compile the model ========================
-        status = model_compile(model_name, mod, params, {input_name:input_data})
+        status = model_compile(model_name, mod, params, [{input_name:input_data}])
         assert status != -1, "TIDL compilation failed"   # For CI test
 
     except ModuleNotFoundError:
@@ -276,6 +276,8 @@ def load_image(batch_size, img_file, resize_wh, crop_wh, mean, scale, needs_nchw
     from PIL import Image
     orig_img = Image.open(img_file)  # HWC
     resized_img = orig_img.resize((resize_wh[0], resize_wh[1]))
+    assert(resize_wh[0] >= crop_wh[0] and resize_wh[1] >= crop_wh[1]), \
+          "resize size needs to be bigger than crop size"
     if resize_wh[0] > crop_wh[0] or resize_wh[1] > crop_wh[1]:
         wh_start = [ (x - y) / 2 for x, y in zip(resize_wh, crop_wh)]
         wh_end   = [ x + y for x, y in zip(wh_start, crop_wh)]
@@ -294,15 +296,16 @@ def load_image(batch_size, img_file, resize_wh, crop_wh, mean, scale, needs_nchw
         input_data = input_data.transpose(0, 3, 1, 2)  # NCHW
     return input_data
 
-def test_tidl_tf_mobilenets(model_name, img_file, format="tf"):
+def test_tidl_tf_mobilenets(model_name, img_file_list, format="tf"):
     data_layout = "NHWC"
     input_node = "input"
     input_shape = (1, 224, 224, 3)
-    input_data = load_image(1, img_file, [256, 256], [224, 224],
+    input_data_list = [ load_image(1, img_file, [256, 256], [224, 224],
                             [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False)
-    if input_data.shape != input_shape:
+                            for img_file in img_file_list ]
+    if input_data_list[0].shape != input_shape:
         sys.exit("Input data shape is not correct!")
-    print("input_data shape: {}".format(input_data.shape))
+    print("input_data shape: {}".format(input_data_list[0].shape))
 
     #============= Create a Relay graph for MobileNet model ==============
     if format == "tflite":
@@ -315,18 +318,20 @@ def test_tidl_tf_mobilenets(model_name, img_file, format="tf"):
     print(tf_mod.astext(show_meta_data=False))
 
     #======================== TIDL code generation ====================
-    status = model_compile(model_name, tf_mod, tf_params, {input_node:input_data})
+    input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
+    status = model_compile(model_name, tf_mod, tf_params, input_dict_list)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
-def test_tidl_onnx(model_name, img_file):
+def test_tidl_onnx(model_name, img_file_list):
     data_layout = "NCHW"
     input_node = "data"
     input_shape = (1, 3, 224, 224)
-    input_data = load_image(1, img_file, [256, 256], [224, 224],
+    input_data_list = [ load_image(1, img_file, [256, 256], [224, 224],
                             [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True)
-    if input_data.shape != input_shape:
+                            for img_file in img_file_list ]
+    if input_data_list[0].shape != input_shape:
         sys.exit("Input data shape is not correct!")
-    print("input_data shape: {}".format(input_data.shape))
+    print("input_data shape: {}".format(input_data_list[0].shape))
 
     #============= Create a Relay graph for MobileNet model ==============
     if model_name == "ONNX_MobileNetV2":
@@ -339,19 +344,21 @@ def test_tidl_onnx(model_name, img_file):
     print(onnx_mod.astext(show_meta_data=False))
 
     #======================== TIDL code generation ====================
-    status = model_compile(model_name, onnx_mod, onnx_params, {input_node:input_data})
+    input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
+    status = model_compile(model_name, onnx_mod, onnx_params, input_dict_list)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
-def test_tidl_tflite_deeplabv3(img_file):
+def test_tidl_tflite_deeplabv3(img_file_list):
     model_name = "deeplabv3"
     data_layout = "NHWC"
     input_node = "sub_7"
     input_shape = (1, 257, 257, 3)
-    input_data = load_image(1, img_file, [257, 257], [257, 257],
+    input_data_list = [ load_image(1, img_file, [257, 257], [257, 257],
                             [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False)
-    if input_data.shape != input_shape:
+                            for img_file in img_file_list ]
+    if input_data_list[0].shape != input_shape:
         sys.exit("Input data shape is not correct!")
-    print("input_data shape: {}".format(input_data.shape))
+    print("input_data shape: {}".format(input_data_list[0].shape))
 
     #============= Create a Relay graph for model ==============
     tf_mod, tf_params = create_tflite_relay_graph(model = model_name, input_node = input_node,
@@ -360,26 +367,32 @@ def test_tidl_tflite_deeplabv3(img_file):
     print(tf_mod.astext(show_meta_data=False))
 
     #======================== TIDL code generation ====================
-    status = model_compile(model_name, tf_mod, tf_params, {input_node:input_data},
+    input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
+    status = model_compile(model_name, tf_mod, tf_params, input_dict_list,
                            num_tidl_subgraphs=2)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
 if __name__ == '__main__':
-    img_file = download_testdata(
+    img_cat = download_testdata(
          'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true',
          'cat.png', module='data')
-    #img_file = "./airshow.jpg"
-    test_tidl_tf_mobilenets("MobileNetV1", img_file)
-    #test_tidl_tf_mobilenets("MobileNetV1", img_file, "tflite")
-    #test_tidl_tf_mobilenets("MobileNetV2", img_file)
-    #test_tidl_tf_mobilenets("MobileNetV2", img_file, "tflite")
-    test_tidl_onnx("ONNX_MobileNetV2", img_file)
+    img_cat2 = download_testdata(
+         'https://git.ti.com/cgit/tidl/tidl-api/plain/examples/test/testvecs/input/objects/cat-pet-animal-domestic-104827.jpeg',
+         'cat2.jpeg', module='data')
+    img_airshow = download_testdata(
+         'https://git.ti.com/cgit/tidl/tidl-utils/plain/test/testvecs/input/airshow.jpg',
+         'airshow.jpg', module='data')
+    test_tidl_tf_mobilenets("MobileNetV1", [ img_cat, img_cat2, img_airshow ])
+    #test_tidl_tf_mobilenets("MobileNetV1", [ img_cat ], "tflite")
+    #test_tidl_tf_mobilenets("MobileNetV2", [ img_cat ])
+    #test_tidl_tf_mobilenets("MobileNetV2", [ img_cat ], "tflite")
+    test_tidl_onnx("ONNX_MobileNetV2", [ img_airshow, img_cat2, img_cat ])
 
-    img_file = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
+    img_street = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
                                  'gluoncv/detection/street_small.jpg?raw=true',
                                  'street_small.jpg', module='data')
-    #img_file = "./deeplab_kidbike_input.png"
-    test_tidl_tflite_deeplabv3(img_file)
+    #img_kidbike = "./deeplab_kidbike_input.png"
+    test_tidl_tflite_deeplabv3([ img_street ])
     #test_tidl_classification()
     #test_tidl_object_detection()
     #test_tidl_segmentation()
