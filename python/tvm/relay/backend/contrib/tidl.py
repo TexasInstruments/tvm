@@ -37,6 +37,7 @@ from tvm.relay.function import Function
 from tvm.contrib import graph_runtime
 #import tvm.relay.op.contrib.tidl as tidl_annotation
 from .tidl_reduce_subgraph_size import reduce_subgraph_size
+from .tidl_visualize import visualize_relay_graph
 
 tidl_annotations_registered = False
 
@@ -1393,8 +1394,7 @@ class TIDLImport:
         print(mod.astext(show_meta_data=False))
 
         # Generate svg for partitined graph
-        dot = visualize(mod['main'], mod)
-        dot.render(filename=self.temp_folder+'/relay.gv')
+        visualize_relay_graph(module=mod, filename=self.temp_folder+'/relay.gv')
 
         # Define return values
         import_succeed, import_fail, no_import = 1, -1, 0
