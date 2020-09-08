@@ -27,12 +27,12 @@ parser.add_argument('--target', action='store_true')
 parser.add_argument('input', nargs='?')
 args = parser.parse_args()
 
+from tvm.contrib.download import download_testdata
 if args.dlr:
     from dlr import DLRModel
 else:
     import tvm
     from tvm.contrib import graph_runtime as runtime
-    from tvm.contrib.download import download_testdata
 
 ######################################################################
 # Load a test image
