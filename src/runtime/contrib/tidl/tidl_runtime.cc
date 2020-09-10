@@ -333,6 +333,7 @@ class TIDLJ7Module : public runtime::ModuleNode {
     sTIDLRT_Params_t params;
     TIDLRT_setParamsDefault_(&params);
 
+    params.stats = &stats;
     params.netPtr = (void *) info.net_data.data();
     params.ioBufDescPtr = (void *) info.params_data.data();
 debug_printf("net_data size: %d\n", (int) info.net_data.size());
@@ -591,6 +592,7 @@ debug_printf("## memType: %d\n", rt_arg->memType);
 
 private:
 
+  sTIDLRT_PerfStats_t stats;
   // I used an unordered map with strings as the index because there is built in
   // support to serialize/deserialize this to/from JSON.
   std::unordered_map<std::string, TIDLSubgraphInfo> infos;
