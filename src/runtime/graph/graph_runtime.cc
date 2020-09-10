@@ -441,7 +441,17 @@ std::pair<std::function<void()>, std::shared_ptr<GraphRuntime::OpArgs> > GraphRu
 PackedFunc GraphRuntime::GetFunction(const std::string& name,
                                      const ObjectPtr<Object>& sptr_to_self) {
   // Return member functions during query.
-  if (name == "set_input") {
+  if (name == "get_custom_data") {
+    return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
+      auto func_name = args[0].operator String();
+      PackedFunc func = module_.GetFunction(func_name, true);
+      if(func == nullptr)
+        *rv = nullptr;
+      else
+        *rv = func(args[1]);
+    });
+  }
+  else if (name == "set_input") {
     return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
       if (String::CanConvertFrom(args[0])) {
         int in_idx = this->GetInputIndex(args[0].operator String());

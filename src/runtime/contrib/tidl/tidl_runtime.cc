@@ -48,16 +48,23 @@
 #include "itidl_rt.h"
 
 int tidlrt_debuglevel = 0;
+int tidlrt_perfstats = 0;
 
 static void __attribute__((constructor)) lib_init()
 {
-	char *debug_str;
+	char *debug_str, *perf_str;
 
 	debug_str = getenv("TIDL_RT_DEBUG");
 	if(!debug_str)
 		tidlrt_debuglevel = 0;
 	else
 		tidlrt_debuglevel = atoi(debug_str);
+
+	perf_str = getenv("TIDL_RT_PERFSTATS");
+	if(!perf_str)
+		tidlrt_perfstats = 0;
+	else
+		tidlrt_perfstats = atoi(perf_str);
 }
 
 static int debug_printf(const char *fmt, ...)
@@ -134,6 +141,10 @@ class TIDLJ6Module : public runtime::ModuleNode {
    */
   PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& sptr_to_self) final {
     if (name.find("tidl_") == std::string::npos) {
+      return PackedFunc(nullptr);
+    }
+
+    if (name.find("tidl_getinfo_") != std::string::npos) {
       return PackedFunc(nullptr);
     }
 
@@ -259,7 +270,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
   // I wanted to use a std::unique_ptr API for the unordered map, but there are
   // problems with the make_object API and non-copyable objects. I changed this
   // to pass by value just to make progress.
-  explicit TIDLJ7Module(std::unordered_map<std::string, TIDLSubgraphInfo> infos) : infos(infos) {}
+  explicit TIDLJ7Module(std::unordered_map<std::string, TIDLSubgraphInfo> infos) :
+           infos(infos), subgraph_id(-1) {}
 
 
   ~TIDLJ7Module() {
@@ -315,6 +327,30 @@ class TIDLJ7Module : public runtime::ModuleNode {
       return PackedFunc(nullptr);
     }
 
+    if (name.find("tidl_getinfo_") != std::string::npos) {
+      if(tidlrt_perfstats == 0)
+        return PackedFunc(nullptr);
+
+      int tmp_id = std::stoi(name.substr(13));
+      if(tmp_id == subgraph_id && subgraph_id != -1)
+        return PackedFunc([this](tvm::TVMArgs args, tvm::TVMRetValue *rv) {
+          float f[3];
+          NDArray ret;
+
+          f[0] = stats.cpIn_time_end - stats.cpIn_time_start;
+          f[1] = stats.proc_time_end - stats.proc_time_start;
+          f[2] = stats.cpOut_time_end - stats.cpOut_time_start;
+          ret = NDArray::Empty(
+                          std::vector<int64_t>{1, 3},
+                          DLDataType{kDLFloat, 32, 1},
+                          TVMContext{DLDeviceType::kDLCPU, 0});
+          ret.CopyFromBytes((const void *)f, 3 * sizeof(float));
+          *rv = ret;
+        });
+
+      return PackedFunc(nullptr);
+    }
+
     auto info_it = infos.find(name);
     if (info_it == infos.end()) {
       // try to find it in next TIDLJ7Module
@@ -333,7 +369,10 @@ class TIDLJ7Module : public runtime::ModuleNode {
     sTIDLRT_Params_t params;
     TIDLRT_setParamsDefault_(&params);
 
-    params.stats = &stats;
+    if(tidlrt_perfstats == 0)
+      params.stats = NULL;
+    else
+      params.stats = &stats;
     params.netPtr = (void *) info.net_data.data();
     params.ioBufDescPtr = (void *) info.params_data.data();
 debug_printf("net_data size: %d\n", (int) info.net_data.size());

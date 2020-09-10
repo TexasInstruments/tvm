@@ -113,6 +113,12 @@ def run_module(model_name, input_tensor, mean, scale, is_nchw, img_file, resize_
         module = DLRModel(artifacts_dir)
         results = module.run({input_tensor : input_data})
         tvm_output = results[0]
+        for c in range(16):
+            arr, status = module.get_custom_data('tidl_getinfo_%d' % c, np.zeros((1,3)).astype('float32'))
+            if not status:
+                break
+            print(arr)
+
     else:
         loaded_json = open(artifacts_dir + "deploy_graph.json").read()
         loaded_lib = tvm.runtime.load_module(artifacts_dir + "deploy_lib.so")
@@ -132,6 +138,14 @@ def run_module(model_name, input_tensor, mean, scale, is_nchw, img_file, resize_
 
         # get output
         tvm_output = module.get_output(0).asnumpy()
+        for c in range(16):
+            try:
+                func = loaded_lib.get_function('tidl_getinfo_%d' % c)
+            except AttributeError as e:
+                break
+
+            arr = func()
+            print(arr)
 
     print(model_name + " execution finished")
     return tvm_output
