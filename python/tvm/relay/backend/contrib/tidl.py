@@ -414,7 +414,7 @@ class RemoveMultiplyByOne(ExprMutator):
                     return call.args[1]
         return super().visit_call(call)
 
-def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, artifacts_folder, save_output=False):
+def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_folder, save_output=False):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
     """
 
@@ -446,7 +446,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, artifa
             if i in calib_mutator.name_map:
                 subgraph_tensors[calib_mutator.name_map[i]] = res
                 if save_output:
-                    file_name = os.path.join(artifacts_folder, 'tempDir/' + calib_mutator.name_map[i] + ".txt")
+                    file_name = os.path.join(temp_folder, calib_mutator.name_map[i] + ".txt")
                     np.savetxt(file_name, res.flatten(), fmt='%10.5f')
         subgraph_tensors_list.append(subgraph_tensors)
 
@@ -634,13 +634,12 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
 def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_signed,
-                         artifacts_folder,
+                         temp_folder,
                          net_file, params_file, platform="AM57", tidl_tensor_bits=8):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Save quantized input vector to a file for calib tool to read
     # Saving as 'int8' or 'uint8' is the same
-    temp_folder = os.path.join(artifacts_folder, 'tempDir/')
     calib_raw_image = temp_folder + 'calib_raw_data'+str(subgraph_id)+'.bin'
     open(calib_raw_image, "wb").close() # delete old file contents
     fid = open(calib_raw_image, "ab")
@@ -813,11 +812,12 @@ class TIDLImport:
         self.tidl_platform = tidl_platform
         self.data_layout = data_layout
         self.tidl_tensor_bits = tidl_tensor_bits
+        self.info_dict = {}
 
         # Prepare for import
-        temp_folder = os.path.join(artifacts_folder, 'tempDir/')
-        os.makedirs(temp_folder, exist_ok=True)
-        for root, dirs, files in os.walk(temp_folder, topdown=False):
+        self.temp_folder = os.path.join(artifacts_folder, 'tempDir/')
+        os.makedirs(self.temp_folder, exist_ok=True)
+        for root, dirs, files in os.walk(self.temp_folder, topdown=False):
             for f in files:
                 os.remove(os.path.join(root, f))
             for d in dirs:
@@ -1178,10 +1178,7 @@ class TIDLImport:
             input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
             import_lib_init(subgraph_id, len(input_tensors), input_dscr_ptr, is_nchw,
-                            self.tidl_tensor_bits, os.path.join(self.artifacts_folder, 'tempDir'))
-            subgraph_info_dict = { "is_nchw" : is_nchw }
-            with open(os.path.join(self.artifacts_folder, "tempDir/subgraph"+str(subgraph_id)+".nfo"), "w") as of:
-                json.dump(subgraph_info_dict, of, indent=4)
+                            self.tidl_tensor_bits, self.temp_folder)
             return True
 
         (channel, height, width) = input_shapes[0][1:4]
@@ -1395,21 +1392,34 @@ class TIDLImport:
         print("----- RelayIR Graph for importing to TIDL -----")
         print(mod.astext(show_meta_data=False))
 
+        # Generate svg for partitined graph
+        dot = visualize(mod['main'], mod)
+        dot.render(filename=self.temp_folder+'/relay.gv')
+
         # Define return values
         import_succeed, import_fail, no_import = 1, -1, 0
+
+        # Put some information about the graph in the info file passed to the TIDL codegen
+        self.info_dict['tvm'] = { 
+           'is_nchw'   : 1 if self.data_layout == "NCHW" else 0,
+           'macs'      : relay.analysis.get_total_mac_number(mod['main']),
+           'nodes'     : {},
+        }
+        self.info_dict['subgraphs'] = []
 
         # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
         all_nodes_main = {}
         traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_main)
         relay.analysis.post_order_visit(mod['main'], traverse_func)
         tidl_subgraphs = []
+        relay_call_ops = 0
         for node in all_nodes_main:
             if isinstance(node, relay.expr.GlobalVar):
                 if self.tidl_target in node.name_hint:
                     tidl_subgraphs.append(node.name_hint)
-
-        if len(tidl_subgraphs) == 0:
-            return no_import
+            # Tally relay call nodes that are not calls to a TIDL subgraph
+            if isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.op.Op):
+                self._tally_op(str(node.op), self.info_dict['tvm']['nodes'])
 
         # For each TIDL subgraph, import to TIDL and calibrate
         for tidl_subgraph in tidl_subgraphs:
@@ -1436,19 +1446,31 @@ class TIDLImport:
                     tensor_quant_flatten(input_fp_list, self.data_layout, self.tidl_tensor_bits)
 
             # Initialize TIDL import
+            subgraph = mod[tidl_subgraph]
             if not self.tidl_import_init(subgraph_id, input_scale, input_signed, input_fp_list[0],
                                          input_names):
                 return import_fail
 
+            # Initialize subgraph info for nfo file
+            subgraph_info_dict = { 
+               'name'    : tidl_subgraph, 
+               'is_nchw' : 1 if self.data_layout == "NCHW" else 0,
+               'macs'    : relay.analysis.get_total_mac_number(subgraph),
+               'ninputs' : len(input_names),
+               'noutputs': len(output_names),
+               'nodes'   : {},
+            }
+
             # Scan through all relay.expr.Call nodes and import each to TIDL
             all_nodes_tidl = {}
             traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_tidl)
-            relay.analysis.post_order_visit(mod[tidl_subgraph], traverse_func)
+            relay.analysis.post_order_visit(subgraph, traverse_func)
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params, output_names)
                     if not result:
                         return import_fail
+                    self._tally_op(str(node.op), subgraph_info_dict['nodes'])
 
             # Import expr.Tuple node if it is the last node, after importing all expr.call nodes
             for node in all_nodes_tidl:
@@ -1482,9 +1504,11 @@ class TIDLImport:
 
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
-                                     input_quant_vec_list, input_signed, self.artifacts_folder,
+                                     input_quant_vec_list, input_signed, self.temp_folder,
                                      net_file, par_file, self.tidl_platform,
                                      self.tidl_tensor_bits)
+
+            self.info_dict['subgraphs'].append(subgraph_info_dict)
             if self.tidl_platform == "J7":
                 if status:
                     continue  # import next subgraph
@@ -1514,7 +1538,18 @@ class TIDLImport:
             # Generate subgraph configuration file
             subgraph_cfg_gen(self.artifacts_folder, subgraph_id, self.data_layout,
                              input_scale[0], input_signed[0], output_scale, output_signed)
-        return import_succeed
+
+        with open(os.path.join(self.temp_folder, "relay.nfo"), "w") as of:
+            json.dump(self.info_dict, of, indent=4)
+
+        return import_succeed if len(tidl_subgraphs) > 0 else no_import
+
+    def _tally_op(self, op_name, node_dict):
+        """ helper function to tally instance count of each operator in info dictionary """
+        if op_name in node_dict:
+            node_dict[op_name] += 1
+        else:
+            node_dict[op_name] = 1
 
 class TIDLAnnotation:
     def __init__(self, platform, version, import_lib, denylist=None):

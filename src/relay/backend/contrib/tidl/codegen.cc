@@ -35,9 +35,12 @@
 #include <sstream>
 #include <unordered_map>
 #include <stack>
+#include <cstdint>
+#include <streambuf>
 
 #include "../../../../runtime/contrib/tidl/tidl_runtime.h"
 #include "../codegen_c/codegen_c.h"
+#include "picojson.h"
 
 namespace tvm {
 namespace relay {
@@ -296,23 +299,60 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
     auto subgraph_name = GetExtSymbol(func);
     CHECK(subgraph_name.substr(0, 5) == "tidl_");
     int subgraph_id = std::stoi(subgraph_name.substr(5));
+    const std::string tempdir_name = ctx->artifacts_directory + "/tempDir";
 
     std::stringstream subgraph_prefix_stream;
-    subgraph_prefix_stream << ctx->artifacts_directory << "/tempDir/" << "subgraph"
-                           << subgraph_id;
+    subgraph_prefix_stream << tempdir_name << "/subgraph" << subgraph_id;
     std::string subgraph_prefix = subgraph_prefix_stream.str();
 
     // Read in the subgraph info file
-    std::string info_filename = subgraph_prefix + ".nfo";
-    std::ifstream info_file_stream(info_filename.c_str());
+    // Read and parse the file using the picoJSON parser.
+    // Format of relay.nfo file is:
+    // {   ...
+    //     "subgraphs" : [
+    //           { "name"   : "tidl_0",
+    //             "is_nchw": 0,
+    //             ...
+    //           }
+    //           ...
+    subgraph_info.is_nchw = -1;
+
+    const std::string info_filename = tempdir_name + "/relay.nfo";
+    std::ifstream info_file_stream(info_filename);
     if (!info_file_stream.is_open())
       LOG(FATAL) << "Failed to open TIDL info file " << info_filename << '\n';
-    subgraph_info.is_nchw = 1;
-    dmlc::JSONReader reader(&info_file_stream);
-    dmlc::JSONObjectReadHelper helper;
-    helper.DeclareField("is_nchw", &subgraph_info.is_nchw);
-    helper.ReadAllFields(&reader);
+
+    picojson::value json;
+    auto in_it = std::istreambuf_iterator<char>(info_file_stream);
+    std::string err;
+    in_it = picojson::parse(json, in_it, std::istreambuf_iterator<char>(), &err);
     info_file_stream.close();
+    if (!err.empty())
+      LOG(FATAL) << "picoJSON error parsing TIDL info file " << info_filename << 
+                    '[' << err << ']' << '\n';
+
+    else if (json.is<picojson::object>()) { 
+      const picojson::object& obj = json.get<picojson::object>();
+      auto it = obj.find("subgraphs");
+      if (it != obj.end() && it->second.is<picojson::array>()) {
+        const picojson::array& subgraphs = it->second.get<picojson::array>();
+        for (const auto &sg : subgraphs) { 
+          if (!sg.is<picojson::object>()) 
+            continue;
+          const picojson::object& sg_obj = sg.get<picojson::object>();
+          auto it1 = sg_obj.find("name");
+          if (it1 == sg_obj.end() || it1->second.to_str() != subgraph_name)
+            continue;
+          auto it2 = sg_obj.find("is_nchw");
+          if (it2 == sg_obj.end())
+            continue;
+          subgraph_info.is_nchw = (it2->second.to_str() == "1");
+        } 
+      }
+    }
+    if (subgraph_info.is_nchw == -1)
+       LOG(FATAL) << "Could not determine layout for subgraph " << subgraph_name << "\n"; 
+    //std::cout << "Parsed info for " << subgraph_name << ", is_nchw=" << subgraph_info.is_nchw << "\n";
 
     // Read in the net binary file
     std::string net_filename = subgraph_prefix + "_net.bin";
