@@ -47,8 +47,8 @@
 #include "tidl_runtime.h"
 #include "itidl_rt.h"
 
-int tidlrt_debuglevel = 0;
-int tidlrt_perfstats = 0;
+static int tidlrt_debuglevel = 0;
+static int tidlrt_perfstats = 0;
 
 static void __attribute__((constructor)) lib_init()
 {
@@ -67,21 +67,7 @@ static void __attribute__((constructor)) lib_init()
 		tidlrt_perfstats = atoi(perf_str);
 }
 
-static int debug_printf(const char *fmt, ...)
-{
-	va_list ap;
-	int ret = 0;
-
-	if(tidlrt_debuglevel == 0)
-		goto out;
-
-	va_start(ap, fmt);
-	ret = vprintf(fmt, ap);
-	va_end(ap);
-
-out:
-	return ret;
-}
+#define TIDL_LOG   LOG_IF(INFO, (tidlrt_debuglevel > 0))
 
 // #define TVM_RUNTIME_DBG_TIDL_TIMER
 #ifdef TVM_RUNTIME_DBG_TIDL_TIMER
@@ -134,7 +120,7 @@ class TIDLJ6Module : public runtime::ModuleNode {
   }
 
   /*!
-   * \brief Provides a packed function implementation for TVM runtime to execute,
+   * \brief Provides a packed function for TVM runtime to execute,
    *  when TVM runtime wants to execute a subgraph with "tidl_" tag.
    * \param name Subgraph name which contains "tidl_" prefix if the subgraph is
    *  to run on TIDL.
@@ -151,9 +137,6 @@ class TIDLJ6Module : public runtime::ModuleNode {
     TidlInit();
 
     return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-#ifdef TVM_RUNTIME_DBG_TIDL_TIMER
-      tick();
-#endif
       std::string subgraph_name = (std::string)name;
       // Get subgraph id which is after "tidl_" (5 characters)
       int subgraph_id = std::stoi(subgraph_name.erase(0, 5));
@@ -176,13 +159,8 @@ class TIDLJ6Module : public runtime::ModuleNode {
         }
       }
       // Execute the subgraph on TIDL
-      tidl_subgraph(total_subgraphs_, subgraph_id, batch_size, num_inputs, num_outputs, &inputs[0],
-                    &outputs[0]);
-
-#ifdef TVM_RUNTIME_DBG_TIDL_TIMER
-      double time_secs = tock();
-      printf("Time spent on TIDL: %f seconds.\n", time_secs);
-#endif
+      tidl_subgraph(total_subgraphs_, subgraph_id, batch_size, num_inputs,
+                    num_outputs, &inputs[0], &outputs[0]);
     });
   }
 
@@ -270,22 +248,25 @@ class TIDLJ7Module : public runtime::ModuleNode {
   // I wanted to use a std::unique_ptr API for the unordered map, but there are
   // problems with the make_object API and non-copyable objects. I changed this
   // to pass by value just to make progress.
-  explicit TIDLJ7Module(std::unordered_map<std::string, TIDLSubgraphInfo> infos) :
-           infos(infos), subgraph_id(-1) {}
-
+  explicit TIDLJ7Module(std::unordered_map<std::string, TIDLSubgraphInfo> infos)
+           : infos(infos), subgraph_id(-1) {}
 
   ~TIDLJ7Module() {
-    for (void* handle : tidlrt_handles) {
-      debug_printf("#TVM# TIDLRT_delete tidl_%d: %p...\n", subgraph_id, handle);
-      if (TIDLRT_delete_(handle) != 0) LOG(FATAL) << "TIDLRT_delete failed\n";
+    for (auto rt_arg : tidlrt_args)   delete rt_arg;
+
+    if (tidlrt_handle != nullptr) {
+      TIDL_LOG << "#TVM# TIDLRT_delete tidl_" << subgraph_id << ": "
+               << tidlrt_handle << "...";
+      if (TIDLRT_delete_(tidlrt_handle) != 0)
+        LOG(FATAL) << "TIDLRT_delete failed\n";
     }
+    if (tidl_handle != nullptr)  dlclose(tidl_handle);
   }
 
   /*!
    * \brief Initialize TIDL runtime by loading subgraph execution function from
    * TIDL library.
    */
-
   void LoadTIDLRT() {
     if(!tidl_handle) {
       // Load TIDL shared library
@@ -296,12 +277,14 @@ class TIDLJ7Module : public runtime::ModuleNode {
         LOG(FATAL) << "Cannot open libvx_tidl_rt.so! " << dlsym_error1 << '\n';
       }
 
-      TIDLRT_create_   = LoadSymbol<decltype(TIDLRT_create_)>  ("TIDLRT_create");
-      TIDLRT_delete_   = LoadSymbol<decltype(TIDLRT_delete_)>  ("TIDLRT_delete");
-      TIDLRT_invoke_   = LoadSymbol<decltype(TIDLRT_invoke_)>  ("TIDLRT_invoke");
-      TIDLRT_deactive_ = LoadSymbol<decltype(TIDLRT_deactive_)>("TIDLRT_deactivate");
-      TIDLRT_setParamsDefault_ = LoadSymbol<decltype(TIDLRT_setParamsDefault_)>("TIDLRT_setParamsDefault");
-      TIDLRT_setTensorDefault_ = LoadSymbol<decltype(TIDLRT_setTensorDefault_)>("TIDLRT_setTensorDefault");
+      TIDLRT_create_ = LoadSymbol<decltype(TIDLRT_create_)>  ("TIDLRT_create");
+      TIDLRT_delete_ = LoadSymbol<decltype(TIDLRT_delete_)>  ("TIDLRT_delete");
+      TIDLRT_invoke_ = LoadSymbol<decltype(TIDLRT_invoke_)>  ("TIDLRT_invoke");
+      TIDLRT_deactive_ = LoadSymbol<decltype(TIDLRT_deactive_)>(
+                                                          "TIDLRT_deactivate");
+      TIDLRT_setParamsDefault_ = LoadSymbol<decltype(TIDLRT_setParamsDefault_)>(
+                                                    "TIDLRT_setParamsDefault");
+      TIDLRT_setTensorDefault_ = LoadSymbol<decltype(TIDLRT_setTensorDefault_)>(                                                    "TIDLRT_setTensorDefault");
     }
   }
 
@@ -310,13 +293,14 @@ class TIDLJ7Module : public runtime::ModuleNode {
   T LoadSymbol(const char* symbol) {
     T sym = reinterpret_cast<T>(dlsym(tidl_handle, symbol));
     const char* error = dlerror();
-    if (error) LOG(FATAL) << "Cannot load symbol " << symbol << ": " << error << '\n';
+    if (error) LOG(FATAL) << "Cannot load symbol " << symbol << ": " << error
+                          << '\n';
 
     return sym;
   }
 
   /*!
-   * \brief Provides a packed function implementation for TVM runtime to execute,
+   * \brief Provides a packed function for TVM runtime to execute,
    *  when TVM runtime wants to execute a subgraph with "tidl_" tag.
    * \param name Subgraph name which contains "tidl_" prefix if the subgraph is
    *  to run on TIDL.
@@ -358,62 +342,47 @@ class TIDLJ7Module : public runtime::ModuleNode {
     }
     auto& info = info_it->second;
 
-    // Get subgraph id which is after "tidl_" (5 characters). Hopefully this never fails ...
+    // Get subgraph id which is after "tidl_" (5 characters).
     subgraph_id = std::stoi(name.substr(5));
 
-    // Do this here to avoid requiring the TIDLRT library at compile time.
-    // Alternatively we could do this in FromJSON since that is the function
-    // called to create a module at runtime.
+    // Load TIDLRT library.  Each subgraph/TIDLJ7Module will call this once,
+    //     it is okay to dlopen() same library multiple times
     LoadTIDLRT();
 
+    // Call TIDLRT_create() to initialize the subgraph
     sTIDLRT_Params_t params;
     TIDLRT_setParamsDefault_(&params);
-
-    if(tidlrt_perfstats == 0)
-      params.stats = NULL;
-    else
-      params.stats = &stats;
+    params.stats = (tidlrt_perfstats == 0) ? nullptr : &stats;
     params.netPtr = (void *) info.net_data.data();
     params.ioBufDescPtr = (void *) info.params_data.data();
-debug_printf("net_data size: %d\n", (int) info.net_data.size());
     params.net_capacity = info.net_data.size();
-debug_printf("ioparams size: %d\n", (int) info.params_data.size());
     params.io_capacity  = info.params_data.size();
-    if (tidlrt_debuglevel > 1)
-    {
-      params.traceLogLevel = 1;
-      params.traceWriteLevel = 1;
-    }
+    params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
+    params.traceWriteLevel = (tidlrt_debuglevel > 3) ? 1 : 0;
     params.TIDLVprintf = TIDLVprintf;
+    TIDL_LOG << "#TVM# net size: " << info.net_data.size();
+    TIDL_LOG << "#TVM# ioparams size: " << info.params_data.size();
 
-    void* tidlrt_handle = nullptr;
-    // I think 0 is a successful return code, but there is no documentation in
-    // the header yet.
     if (TIDLRT_create_(&params, &tidlrt_handle) != 0) {
-      LOG(FATAL) << "Failed to initialize TIDLRT for subgraph " << subgraph_id << '\n';
+      LOG(FATAL) << "Failed to initialize TIDLRT for subgraph " << subgraph_id
+                 << '\n';
       return PackedFunc(nullptr);
     }
-    debug_printf("#TVM# TIDLRT_create tidl_%d: %p\n",
-                 subgraph_id, tidlrt_handle);
+    TIDL_LOG << "#TVM# TIDLRT_create tidl_" << subgraph_id << ": "
+             << tidlrt_handle;
 
-    // Keep track of the handles so we can delete them in the destructor.
-    tidlrt_handles.push_back(tidlrt_handle);
+    // Initialize sTIDLRT_Tensor_t* vector for inputs/outputs
+    InitArgs(info);
 
-    return PackedFunc([this, tidlrt_handle, info](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-#ifdef TVM_RUNTIME_DBG_TIDL_TIMER
-      tick();
-#endif
-
+    return PackedFunc([this, info](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
       // args contains both inputs and outputs. First convert all args to
       // sTIDLRT_Tensor_t objects then use the number of inputs to find the
       // output index.
-      std::vector<sTIDLRT_Tensor_t*> tidlrt_params = ConvertArgs(args, info);
-      sTIDLRT_Tensor_t** inputs = &tidlrt_params[0];
-      sTIDLRT_Tensor_t** outputs = &tidlrt_params[info.NumInputs()];
-debug_printf("num_inputs: %d, num_outputs: %d\n", (int) info.NumInputs(), (int) (tidlrt_params.size() - info.NumInputs()));
+      ConvertArgs(args, info);
 
       // TIDLRT_invoke() sequence: TIDL_activate, TIDL_invoke, TIDL_deactivate
-      if (TIDLRT_invoke_(tidlrt_handle, inputs, outputs) != 0)
+      if (TIDLRT_invoke_(tidlrt_handle, &tidlrt_args[0],
+                                        &tidlrt_args[info.NumInputs()]) != 0)
         LOG(FATAL) << "TIDLRT_invoke failed\n";
 
       // If TIDLRT_invoke() changes and does not call TIDL_deactivate(),
@@ -421,31 +390,73 @@ debug_printf("num_inputs: %d, num_outputs: %d\n", (int) info.NumInputs(), (int) 
       // multiple models or multiple TIDL subgraphs.  We can offer
       // an environment variable to not call TIDL_deactivate()
       // for the case of single model/subgraph.
-
-      // Delete the tensor objects.
-      for (sTIDLRT_Tensor_t* t : tidlrt_params)
-        delete t;
-
-#ifdef TVM_RUNTIME_DBG_TIDL_TIMER
-      double time_secs = tock();
-      printf("Time spent on TIDL: %f seconds.\n", time_secs);
-#endif
     });
   }
 
+  // Initialize TIDLRT_Tensor_t for TIDLRT inputs and outputs
+  // Certain fields can be set up at initialization time
+  void InitArgs(const TIDLSubgraphInfo& info) {
+    tidlrt_args.resize(info.NumInputs() + info.num_outputs, nullptr);
+
+    for (int i = 0; i < (int) tidlrt_args.size(); i++) {
+      sTIDLRT_Tensor_t * &rt_arg = tidlrt_args[i];
+      rt_arg = new sTIDLRT_Tensor_t;
+      memset(rt_arg, 0, sizeof(sTIDLRT_Tensor_t));
+      TIDLRT_setTensorDefault_(rt_arg);
+
+      // Set tensor name. Only inputs have names from TVM
+      if (i < (int) info.input_names.size())
+      {
+        int name_size = std::min((int) info.input_names[i].size(),
+                                 TIDLRT_STRING_SIZE - 1);
+        strncpy((char *) rt_arg->name, info.input_names[i].c_str(), name_size);
+        rt_arg->name[name_size] = '\0';
+        TIDL_LOG << "#TVM# input name: " << (char *) rt_arg->name;
+      }
+      else
+      {
+        sprintf((char *) rt_arg->name, "tidl_%d_o%d",
+                subgraph_id, i - (int) info.NumInputs());
+        TIDL_LOG << "#TVM# output name: " << (char *) rt_arg->name;
+      }
+
+      // Skip padValues for now (assuming TVM tensor is continuous)
+      rt_arg->padValues[0] =
+      rt_arg->padValues[1] =
+      rt_arg->padValues[2] =
+      rt_arg->padValues[3] = 0;
+      TIDL_LOG << "#TVM#  padValues: " << rt_arg->padValues[0] << " "
+               << rt_arg->padValues[1] << " " << rt_arg->padValues[2] << " "
+               << rt_arg->padValues[3];
+
+      // Skip dataOffset (assuming TVM tensor starts from offset 0)
+      rt_arg->dataOffset = 0;
+
+      // If ConvertLayout("NCHW") pass is called on the entire graph
+      // and only transpose or NCHW operators are whitelisted as TIDL
+      // nodes, then TIDLRT do not need to perform any layout conversions.
+      rt_arg->layout = info.is_nchw ? TIDLRT_LT_NCHW : TIDLRT_LT_NHWC;
+      TIDL_LOG << "#TVM# layout: " << rt_arg->layout;
+
+      // Skip zeroPoint and scale for now since those are for quantized models.
+      rt_arg->zeroPoint = 0;
+      rt_arg->scale = 1.0f;
+      TIDL_LOG << "#TVM# zeroPoint: " << rt_arg->zeroPoint << ", scale: "
+               << rt_arg->scale;
+
+      // Set memtype
+      rt_arg->memType = TIDLRT_MEM_USER_SPACE;
+      TIDL_LOG << "#TVM# memType: " << rt_arg->memType;
+    }
+
+    tidlrt_args_all_fields_initialized = false;
+  }
 
   // Convert arguments from TVM to sTIDLRT_Tensor_t objects
-  std::vector<sTIDLRT_Tensor_t*> ConvertArgs(tvm::TVMArgs args, const TIDLSubgraphInfo& info) {
-    std::vector<sTIDLRT_Tensor_t*> rt_args(args.size());
-
+  void ConvertArgs(tvm::TVMArgs args, const TIDLSubgraphInfo& info) {
     for (int i = 0; i < args.size(); i++) {
-debug_printf("Convert arg/tensor %d\n", i);
-
-      // Allocate and initialize the tensor
-      sTIDLRT_Tensor_t* rt_arg = new sTIDLRT_Tensor_t;
-      memset(rt_arg, 0, sizeof(sTIDLRT_Tensor_t));
-      rt_args[i] = rt_arg;
-      TIDLRT_setTensorDefault_(rt_arg);
+      TIDL_LOG << "#TVM# Convert arg/tensor " << i;
+      sTIDLRT_Tensor_t* rt_arg = tidlrt_args[i];
 
       // There are multiple type codes for a TVMArg. I think we only need to
       // support DLTensor, but TensorRT supports NDArray types as well.
@@ -453,91 +464,61 @@ debug_printf("Convert arg/tensor %d\n", i);
         case kTVMDLTensorHandle: {
           DLTensor* tensor_arg = args[i];
 
-          // Set tensor name. Only inputs have names so make sure we have a name to assign
-          if (i < (int) info.input_names.size())
-          {
-            int name_size = info.input_names[i].size();
-            if (name_size > TIDLRT_STRING_SIZE - 1)
-              name_size = TIDLRT_STRING_SIZE;
-            strncpy((char *) rt_arg->name, info.input_names[i].c_str(),
-                    name_size);
-            rt_arg->name[name_size] = '\0';
-debug_printf("## input name: %s\n", (char *) rt_arg->name);
-          }
-          else
-          {
-            sprintf((char *) rt_arg->name, "tidl_%d_o%d",
-                    subgraph_id, i - (int) info.input_names.size());
-debug_printf("## output name: %s\n", (char *) rt_arg->name);
-          }
+          /* -----------------------------------------------------------------
+           * One time setup, do not change in subsequent subgraph calls
+           * -----------------------------------------------------------------*/
+          if (! tidlrt_args_all_fields_initialized) {
+            // Set element type
+            rt_arg->elementType = GetTIDLRTElementType(tensor_arg->dtype);
+            TIDL_LOG << "#TVM# elementType: " << rt_arg->elementType;
 
-          // Set element type
-          rt_arg->elementType = GetTIDLRTElementType(tensor_arg->dtype);
-debug_printf("## elementType: %d\n", rt_arg->elementType);
+            // Set the number of dimensions
+            rt_arg->numDim = tensor_arg->ndim;
+            TIDL_LOG << "#TVM# numDim: " << rt_arg->numDim;
+            if (rt_arg->numDim > TIDLRT_DIM_MAX) {
+              LOG(FATAL) << "Number of dimensions (" << rt_arg->numDim
+                         << ") is greater than TIDLRT_DIM_MAX ("
+                         << TIDLRT_DIM_MAX << ")\n";
+              // Truncate to tidlrt max dimensions
+              rt_arg->numDim = TIDLRT_DIM_MAX;
+            }
 
-          // Set the number of dimensions
-          rt_arg->numDim = tensor_arg->ndim;
-debug_printf("## numDim: %d\n", rt_arg->numDim);
+            // Set the dimensions
+            int missing_dims = TIDLRT_DIM_MAX - rt_arg->numDim;
+            for (int s = 0; s < missing_dims; s++) {
+              rt_arg->dimValues[s] = 1;
+              TIDL_LOG << "#TVM#  auto-added dimValues[" << s << "]: 1";
+            }
+            for (int s = 0; s < rt_arg->numDim; s++) {
+              int64_t shape = tensor_arg->shape[s];
+              rt_arg->dimValues[missing_dims + s] = shape;
+              TIDL_LOG << "#TVM#  dimValues[" << missing_dims+s << "]: "<<shape;
 
+              // Perhaps this is paranoid, but make sure we don't overflow the
+              // 32-bit integer in the TIDLRT tensor object.
+              typedef typename std::remove_extent<decltype(rt_arg->dimValues)
+                                                 >::type rt_dimValue_type;
+              if (shape > std::numeric_limits<rt_dimValue_type>::max())
+                LOG(FATAL) << "Tensor shape of " << shape
+                           << " is not supported in TIDL RT\n";
+            }
 
-          if (rt_arg->numDim > TIDLRT_DIM_MAX) {
-            LOG(FATAL) << "Number of dimensions (" << rt_arg->numDim
-                       << ") is greater than TIDLRT_DIM_MAX (" << TIDLRT_DIM_MAX << ")";
-
-            // Truncate to tidlrt max dimensions
-            rt_arg->numDim = TIDLRT_DIM_MAX;
-          }
-
-          // Set the dimensions
-          int missing_dims = TIDLRT_DIM_MAX - rt_arg->numDim;
-          for (int s = 0; s < missing_dims; s++)
-            rt_arg->dimValues[s] = 1;
-          for (int s = 0; s < rt_arg->numDim; s++) {
-            int64_t shape = tensor_arg->shape[s];
-
-            // Perhaps this is paranoid, but make sure we don't overflow the
-            // 32-bit integer in the TIDLRT tensor object.
-            typedef typename std::remove_extent<decltype(rt_arg->dimValues)>::type rt_dimValue_type;
-            if (shape > std::numeric_limits<rt_dimValue_type>::max())
-              LOG(FATAL) << "Tensor shape of " << shape << " is not supported in TIDL RT";
-
-            rt_arg->dimValues[missing_dims + s] = shape;
+            // Skip pitch for now (assuming TVM tensor is continuous)
+            rt_arg->pitch[2] = rt_arg->dimValues[3];
+            rt_arg->pitch[1] = rt_arg->dimValues[2] * rt_arg->dimValues[3];
+            rt_arg->pitch[0] = rt_arg->dimValues[1] * rt_arg->dimValues[2] *
+                               rt_arg->dimValues[3];
+            TIDL_LOG << "#TVM#  pitch: " << rt_arg->pitch[0] << " "
+                     << rt_arg->pitch[1] << " " << rt_arg->pitch[2];
           }
 
-          for (int s = 0; s < TIDLRT_DIM_MAX; s++)
-debug_printf("##  dimValues[%d]: %d\n", s, rt_arg->dimValues[s]);
-
-          // Skip pitch for now
-          rt_arg->pitch[2] = rt_arg->dimValues[3];
-          rt_arg->pitch[1] = rt_arg->dimValues[2] * rt_arg->dimValues[3];
-          rt_arg->pitch[0] = rt_arg->dimValues[1] * rt_arg->dimValues[2] * rt_arg->dimValues[3];
-debug_printf("##  pitch: %d %d %d\n", rt_arg->pitch[0], rt_arg->pitch[1], rt_arg->pitch[2]);
-
-          // Skip pad values for now
-          rt_arg->padValues[0] = 
-          rt_arg->padValues[1] = 
-          rt_arg->padValues[2] = 
-          rt_arg->padValues[3] = 0;
-debug_printf("##  padValues: %d %d %d %d\n", rt_arg->padValues[0],rt_arg->padValues[1],rt_arg->padValues[2],rt_arg->padValues[3]);
+          /* -----------------------------------------------------------------
+           * Per-invocation setup, could change in each subgraph call
+           * -----------------------------------------------------------------*/
 
           // Set the data pointer
           rt_arg->ptr = tensor_arg->data;
-debug_printf("## ptr: %p\n", rt_arg->ptr);
-
-          // Assume the layout is NCHW. It is assumed that ConvertLayout("NCHW")
-          // is called on the entire graph and only transpose or NCHW operators
-          // are whitelisted as TIDL nodes. This assumption means TIDLRT does
-          // not need to perform any layout conversions.
-          rt_arg->layout = info.is_nchw ? TIDLRT_LT_NCHW : TIDLRT_LT_NHWC;
-debug_printf("## layout: %d\n", rt_arg->layout);
-
-          // Skip zeroPoint and scale since those are for quantized models.
-          rt_arg->scale = 1.0f;
-debug_printf("## zeroPoint %d, scale: %f\n", rt_arg->zeroPoint, rt_arg->scale);
-
-          // Not sure what to set memtype to.
-          rt_arg->memType = TIDLRT_MEM_USER_SPACE;
-debug_printf("## memType: %d\n", rt_arg->memType);
+          TIDL_LOG << "#TVM# ptr: " << rt_arg->ptr;
 
           break;
         }
@@ -545,18 +526,17 @@ debug_printf("## memType: %d\n", rt_arg->memType);
         // TensorRT handles this, but Jianzhong didn't.
         case kTVMNDArrayHandle:
         default:
-          LOG(FATAL) << "Invalid TVMArgs type (" << args[i].type_code() << ")\n";
+          LOG(FATAL) << "Invalid TVMArgs type (" << args[i].type_code() <<")\n";
       }
     }
 
-    return rt_args;
+    tidlrt_args_all_fields_initialized = true;
   }
 
   // Return the TIDLRT element type for a given DLDataType
   int32_t GetTIDLRTElementType(const DLDataType dtype) {
     if (dtype.lanes != 1) {
-      // Not sure what to return here, but it doesn't matter since FATAL logs stop execution.
-      LOG(FATAL) << "Vector types are not supported in TIDL Tensors.";
+      LOG(FATAL) << "Vector types are not supported in TIDL Tensors.\n";
       return -1;
     }
 
@@ -570,7 +550,7 @@ debug_printf("## memType: %d\n", rt_arg->memType);
            case 32:
              return TIDLRT_Int32;
            default:
-             LOG(FATAL) << "Invalid bit size (" << dtype.bits << ") for int";
+             LOG(FATAL) << "Invalid bit size (" << dtype.bits << ") for int\n";
              return -1;
          }
 
@@ -583,7 +563,7 @@ debug_printf("## memType: %d\n", rt_arg->memType);
            case 32:
              return TIDLRT_Uint32;
            default:
-             LOG(FATAL) << "Invalid bit size (" << dtype.bits << ") for uint";
+             LOG(FATAL) << "Invalid bit size (" << dtype.bits << ") for uint\n";
              return -1;
          }
 
@@ -592,12 +572,12 @@ debug_printf("## memType: %d\n", rt_arg->memType);
           case 32:
             return TIDLRT_Float32;
           default:
-            LOG(FATAL) << "Invalid bit size (" << dtype.bits << ") for float";
+            LOG(FATAL) << "Invalid bit size (" << dtype.bits << ") for float\n";
             return -1;
         }
 
       default:
-        LOG(FATAL) << "Invalid type code";
+        LOG(FATAL) << "Invalid type code\n";
         return -1;
     }
   }
@@ -635,12 +615,13 @@ private:
   // I used an unordered map with strings as the index because there is built in
   // support to serialize/deserialize this to/from JSON.
   std::unordered_map<std::string, TIDLSubgraphInfo> infos;
+
   int subgraph_id;
+  void* tidlrt_handle;
+  std::vector<sTIDLRT_Tensor_t*> tidlrt_args;
+  bool tidlrt_args_all_fields_initialized;
 
-  // Pointers to every handle so they can be deleted
-  std::vector<void*> tidlrt_handles;
-
-  // TIDLRT API
+  // TIDLRT API from TIDLRT shared library
   void* tidl_handle = nullptr;
   decltype(&TIDLRT_create) TIDLRT_create_ = nullptr;
   decltype(&TIDLRT_delete) TIDLRT_delete_ = nullptr;
