@@ -364,17 +364,20 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input, save_output
     mod.run()
 
     results = [mod.get_output(i).asnumpy() for i in range(mod.get_num_outputs())]
-    np.savetxt('graph_output.txt', results[0].flatten(), fmt='%10.5f')
 
     # We now have subgraph inputs
     # {1: 'tidl_1_i0', 2: 'tidl_1_o0', 3: 'tidl_0_i0', 4: 'tidl_0_o0'}
     subgraph_tensors = {}
     for i, res in enumerate(results):
-        if i in calib_mutator.name_map:
+        if i in calib_mutator.name_map: # subgraph boundary tensors
             subgraph_tensors[calib_mutator.name_map[i]] = res
             if save_output:
                 file_name = calib_mutator.name_map[i] + ".txt"
                 np.savetxt(file_name, res.flatten(), fmt='%10.5f')
+        else: # graph output tensors
+            if save_output:
+                graph_output_name = "graph_output_" + str(i) + ".txt"
+                np.savetxt(graph_output_name, results[i].flatten(), fmt='%10.5f')
 
     return subgraph_tensors
 
@@ -560,11 +563,12 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outScaleF2Q   = {}\n".format(print_list(output_scale)))
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
-def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, params_file):
+def subgraph_calibration(calib_tool, input_quant_vec, subgraph_id, input_signed, net_file,
+                         params_file):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Prepare for calibration
-    temp_folder = './tempDir/'
+    temp_folder = './tempDir' + str(subgraph_id) + '/'
     if os.path.isdir(temp_folder):
         shutil.rmtree(temp_folder)
     os.mkdir(temp_folder)
@@ -581,7 +585,7 @@ def subgraph_calibration(calib_tool, input_quant_vec, input_signed, net_file, pa
     shutil.copyfile(net_file, output_tmp_file)
 
     calib_config_file = temp_folder + 'configFilesList.txt'
-    quant_config_file = './tempDir/quant_stats_config.txt'
+    quant_config_file = temp_folder + '/quant_stats_config.txt'
     with open(calib_config_file, 'w') as config_file:
         config_file.write('1 ' + quant_config_file + '\n')
         config_file.write('0\n')
@@ -1299,7 +1303,7 @@ class TIDLImport:
                 return import_fail
 
             # Calibrate TIDL for the imported subgraph
-            status, out_data_q = subgraph_calibration(self.calib_tool, input_quant_vec,
+            status, out_data_q = subgraph_calibration(self.calib_tool, input_quant_vec, subgraph_id,
                                                       input_signed, net_file, par_file)
             if not status:
                 return import_fail

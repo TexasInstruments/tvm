@@ -206,6 +206,7 @@ def test_tidl_tensorflow(batch_size=4):
         'inception_v1': (224, 224, 'input', 'softmax/Softmax'),
         'inception_v3': (299, 299, 'input', 'InceptionV3/Predictions/Softmax'),
         'mobilenet130_v2': (224, 224, 'Placeholder', 'mobilenet130v2/probs'),
+        'squeezenet': (224, 224, 'Placeholder', 'squeezenet/probs'),
     }
     models = {
         'mobilenet100_v1': 'mobilenet_v1_1.0_224',
@@ -213,6 +214,7 @@ def test_tidl_tensorflow(batch_size=4):
         'inception_v1': 'inception_v1',
         'inception_v3': 'inception_v3',
         'mobilenet130_v2': 'mobilenet_v2_130',
+        'squeezenet': 'squeezenet',
     }
 
     for key, value in model_metadata.items():
@@ -262,11 +264,11 @@ def test_tidl_tflite(batch_size=4):
     import tflite.Model # import TFLite here instead of top to avoid CI error
 
     model_metadata = {
-        #'mobilenet100_v1': (224, 224, 'input'),
-        #'mobilenet100_v2': (224, 224, 'input'),
+        'mobilenet100_v1': (224, 224, 'input'),
+        'mobilenet100_v2': (224, 224, 'input'),
         #'densenet': (224, 224, 'input'),
         'mnasnet': (224, 224, 'input'),
-        #'resnet_v2_101': (299, 299, 'input'),
+        'resnet_v2_101': (299, 299, 'input'),
     }
     models = {
         'mobilenet100_v1': 'mobilenet_v1_1.0_224',
@@ -283,7 +285,7 @@ def test_tidl_tflite(batch_size=4):
         # Load the model to Relay
         with open(model_file, "rb") as f:
             tflite_model_buf = f.read()
-        tflite_model = tflite.Model.Model.GetRootAsModel(tflite_model_buf, 0)
+        tflite_model = tflite.Model.GetRootAsModel(tflite_model_buf, 0)
         mod, params = relay.frontend.from_tflite(tflite_model,
                                                  shape_dict={input_name: input_shape},
                                                  dtype_dict={input_name: "float32"})
@@ -318,6 +320,7 @@ def gluoncv_compile_model(model_name, img_file, batch_size, img_size=None, img_n
     except ModuleNotFoundError:
         print("gluoncv not installed. Skipping Gluon-CV model compilation.")
 
+@pytest.mark.skip('skip to limit CI testing time')
 def test_tidl_gluon_classification(batch_size=4):
     """ Test TIDL compilation for Gluon-CV image classification models """
     classification_models = ['mobilenet1.0', 'mobilenetv2_1.0', 'resnet101_v1', 'densenet121']
@@ -359,10 +362,10 @@ def test_tidl_gluon_segmentation(batch_size=1):
     gluoncv_compile_model(model_name, img_file, batch_size, img_norm="rcnn")
 
 if __name__ == '__main__':
-    # test_tidl_tensorflow()
-    # test_tidl_onnx()
-    # test_tidl_pytorch()
-    # test_tidl_tflite()
-    # test_tidl_gluon_classification()
+    test_tidl_tensorflow()
+    test_tidl_onnx()
+    test_tidl_pytorch()
+    test_tidl_tflite()
+    test_tidl_gluon_classification()
     test_tidl_gluon_object_detection()
-    # test_tidl_gluon_segmentation()
+    test_tidl_gluon_segmentation()

@@ -201,7 +201,11 @@ class SubgraphReducer(ExprMutator):
                     # cause more ops to be removed than is required, but it is much faster.
                     # TODO(trevmorr): Consider rewriting in C++ to improve speed.
                     # last_op_args = self._remove_op_furthest_from_lca(last_op, ancestor, distances)
-                    last_op_args = ancestor.args
+                    if isinstance(ancestor, tvm.relay.expr.TupleGetItem):
+                        for arg in ancestor.tuple_value.args:
+                            last_op_args.append(arg)
+                    else:
+                        last_op_args = ancestor.args
                 elif isinstance(last_op, tvm.relay.expr.Call):
                     last_op_args = last_op.args
                 elif isinstance(last_op, tvm.relay.expr.TupleGetItem):
