@@ -121,6 +121,7 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
 
     with tidl.build_config(artifacts_folder=tidl_artifacts_folder, platform=tidl_platform):
         graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+    tidl.remove_tidl_params(params)
 
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
     path_graph = os.path.join(tidl_artifacts_folder, "deploy_graph.json")

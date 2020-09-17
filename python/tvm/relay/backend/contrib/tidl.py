@@ -2357,3 +2357,19 @@ def build_config(artifacts_folder, platform="AM57"):
     CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
     return CreateTIDLContext(artifacts_folder, platform)
 
+def remove_tidl_params(params):
+    """ Remove params used by TIDL subgraphs from deployable module params
+
+    The params used by TIDL subgraph are already imported into TIDL subgraph
+    network artifacts.  They will not used by the remaining non-TIDL parts
+    of the graph.  Remove them from the deployable module params.
+
+    Parameters
+    ----------
+    params : dict of str to tvm.NDArray
+        At return, mutable dict object is updated, with "tidl_" params removed
+    """
+    tidl_params = [ key for key in params if key.find("tidl_") == 0 ]
+    for tidl_param in tidl_params:
+        del params[tidl_param]
+
