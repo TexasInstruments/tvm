@@ -814,6 +814,7 @@ class TIDLImport:
         self.data_layout = data_layout
         self.tidl_tensor_bits = tidl_tensor_bits
         self.info_dict = {}
+        self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
 
         # Prepare for import
         self.temp_folder = os.path.join(artifacts_folder, 'tempDir/')
@@ -1390,8 +1391,9 @@ class TIDLImport:
         -1: if TIDL import fails
         0: if there are no subgraphs for TIDL offload
         """
-        print("----- RelayIR Graph for importing to TIDL -----")
-        print(mod.astext(show_meta_data=False))
+        if self.tidl_relay_import_debug != None:
+            print("----- RelayIR Graph for importing to TIDL -----")
+            print(mod.astext(show_meta_data=False))
 
         # Generate svg for partitined graph
         visualize_relay_graph(module=mod, filename=self.temp_folder+'/relay.gv')

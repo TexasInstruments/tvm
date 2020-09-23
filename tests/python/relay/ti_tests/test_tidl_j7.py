@@ -36,6 +36,21 @@ parser.add_argument('--nooffload', action='store_true',
                     help='produce a host-only deployable module without TIDL offload')
 args = parser.parse_args()
 
+def disable_outputs():
+    """ Redirect stdout/stderr to /dev/null """
+    null_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_stdout_fd = os.dup(1)
+    saved_stderr_fd = os.dup(2)
+    os.dup2(null_fd, 1)
+    os.dup2(null_fd, 2)
+    return [ null_fd, saved_stdout_fd, saved_stderr_fd ]
+
+def restore_outputs(fds):
+    """ Restore stdout/stderr to saved fds """
+    os.dup2(fds[2], 2)
+    os.dup2(fds[1], 1)
+    os.close(fds[0])
+
 def get_compiler_path():
     arm_gcc_path = os.getenv("ARM_GCC_PATH")
     if arm_gcc_path is None:
@@ -313,10 +328,10 @@ def test_tidl_tf_mobilenets(model_name, img_file_list, format="tf"):
         create_relay_graph_func = create_tflite_relay_graph
     else:
         create_relay_graph_func = create_tf_relay_graph
+    fds = disable_outputs()
     tf_mod, tf_params = create_relay_graph_func(model = model_name, input_node = input_node,
                                                 input_shape = input_shape, layout = data_layout)
-    print("---------- Original TF Graph ----------")
-    print(tf_mod.astext(show_meta_data=False))
+    restore_outputs(fds)
 
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
@@ -341,9 +356,6 @@ def test_tidl_onnx(model_name, img_file_list):
     onnx_mod, onnx_params = relay.frontend.from_onnx(onnx.load(model),
                                                      shape={input_node:input_shape})
 
-    print("---------- Original TF Graph ----------")
-    print(onnx_mod.astext(show_meta_data=False))
-
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
     status = model_compile(model_name, onnx_mod, onnx_params, input_dict_list)
@@ -364,8 +376,6 @@ def test_tidl_tflite_deeplabv3(img_file_list):
     #============= Create a Relay graph for model ==============
     tf_mod, tf_params = create_tflite_relay_graph(model = model_name, input_node = input_node,
                                                   input_shape = input_shape, layout = data_layout)
-    print("---------- Original TF Graph ----------")
-    print(tf_mod.astext(show_meta_data=False))
 
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
