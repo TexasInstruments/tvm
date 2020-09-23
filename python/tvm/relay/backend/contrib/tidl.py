@@ -662,8 +662,8 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_si
 
     if platform == "J7":
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
-        import_lib_postprocess(len(input_quant_vec_list))
-        return True, 123  ## TODO: do we need dataQ for J7?
+        import_ret = import_lib_postprocess(len(input_quant_vec_list))
+        return (import_ret == 0), 123  ## TODO: do we need dataQ for J7?
 
     output_tmp_file = temp_folder + 'precalib_net.bin'
     shutil.copyfile(net_file, output_tmp_file)
@@ -1502,7 +1502,9 @@ class TIDLImport:
                     return import_fail
             else:  # == "J7"
                 import_lib_optimize = tvm.get_global_func("TIDL_relayOptimizeNet")
-                import_lib_optimize()
+                if import_lib_optimize() != 0:
+                    print('TIDL import optimization failed')
+                    return import_fail
 
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
