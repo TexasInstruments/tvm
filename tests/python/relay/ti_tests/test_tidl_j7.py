@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 from tvm import relay
 from tvm.contrib.download import download_testdata
+from tvm.contrib.tar import untar
 import tensorflow as tf
 import onnx
 from tvm.relay.testing import tf as tf_testing
@@ -217,7 +218,14 @@ def test_tidl_segmentation():
 def create_tf_relay_graph(model, input_node, input_shape, layout):
 
     if model == "MobileNetV1":
-        model    = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
+        model_tar = download_testdata(
+                'http://download.tensorflow.org/models/mobilenet_v1_2018_08_02/' +
+                'mobilenet_v1_1.0_224.tgz', 'mobilenet_v1_1.0_224.tgz', module='models')
+        model_dir = os.path.dirname(model_tar)
+        model = os.path.join(model_dir, 'mobilenet_v1_1.0_224_frozen.pb');
+        if not os.path.exists(model):
+            untar(model_tar, model_dir)
+        #model    = "./mobileNet1/mobilenet_v1_1.0_224_frozen.pb"
         #model    = "./mobileNet1/mobilenet_v1_1.0_224_final.pb"
         out_node = 'MobilenetV1/Predictions/Softmax'
         #out_node = 'MobilenetV1/MobilenetV1/Conv2d_0/Conv2D'
@@ -262,7 +270,7 @@ def create_tflite_relay_graph(model, input_node, input_shape, layout):
     elif model == "deeplabv3":
         model = download_testdata(
             'https://storage.googleapis.com/download.tensorflow.org/models/tflite/gpu/deeplabv3_257_mv_gpu.tflite?raw=true',
-            'deeplabv3_257_mv_gpu.tflite', module='model')
+            'deeplabv3_257_mv_gpu.tflite', module='models')
 
     # get TFLite model from buffer
     tflite_model_buf = open(model, "rb").read()
@@ -351,7 +359,10 @@ def test_tidl_onnx(model_name, img_file_list):
 
     #============= Create a Relay graph for MobileNet model ==============
     if model_name == "ONNX_MobileNetV2":
-        model = "./onnx_mobileNet2/mobilenetv2-1.0.onnx"
+        model = download_testdata(
+                'https://github.com/onnx/models/raw/master/vision/classification/mobilenet/' + 
+                'model/mobilenetv2-7.onnx', 'mobilenetv2-7.onnx', module='models')
+        #model = "./onnx_mobileNet2/mobilenetv2-1.0.onnx"
 
     onnx_mod, onnx_params = relay.frontend.from_onnx(onnx.load(model),
                                                      shape={input_node:input_shape})
