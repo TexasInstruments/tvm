@@ -2357,7 +2357,11 @@ class TIDLContext(tvm.runtime.Object):
         """Return the current pass context."""
         return _ffi_tidl_api.GetCurrentTIDLContext()
 
-def build_config(artifacts_folder, platform="AM57"):
+def build_config(tidl_compiler=None, artifacts_folder=None, platform="AM57"):
+    if tidl_compiler != None:
+        artifacts_folder = tidl_compiler.artifacts_folder
+        platform         = tidl_compiler.tidl_platform
+    assert artifacts_folder, "artifacts_folder must be specified for TIDL codegen in compilation"
     CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
     return CreateTIDLContext(artifacts_folder, platform)
 

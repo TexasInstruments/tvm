@@ -97,7 +97,6 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
             0  - no compilation due to missing TIDL tools or GCC ARM tools
     """
 
-    tidl_target = "tidl"
     tidl_platform = "J7"   # or "AM57"
     tidl_version = (7, 0)  # corresponding Processor SDK version
     tidl_artifacts_folder = "./artifacts_" + model_name +  ("_target" if args.target else "_host")
@@ -107,16 +106,16 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
             os.remove(os.path.join(root, f))
         for d in dirs:
             os.rmdir(os.path.join(root, d))
+    tidl_compiler = tidl.TIDLCompiler(tidl_platform, tidl_version,
+                                      num_tidl_subgraphs=num_tidl_subgraphs,
+                                      artifacts_folder=tidl_artifacts_folder,
+                                      tidl_tools_path=get_tidl_tools_path(),
+                                      tidl_tensor_bits=16,
+                                      tidl_denylist=args.denylist)
 
     if args.nooffload:
         mod, status = mod_orig, 0
     else:
-        tidl_compiler = tidl.TIDLCompiler(tidl_platform, tidl_version,
-                                          num_tidl_subgraphs=num_tidl_subgraphs,
-                                          artifacts_folder=tidl_artifacts_folder,
-                                          tidl_tools_path=get_tidl_tools_path(),
-                                          tidl_tensor_bits=16,
-                                          tidl_denylist=args.denylist)
         mod, status = tidl_compiler.enable(mod_orig, params, model_input_list)
 
     if args.target:
@@ -135,7 +134,7 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
     else:
         target = "llvm"
 
-    with tidl.build_config(artifacts_folder=tidl_artifacts_folder, platform=tidl_platform):
+    with tidl.build_config(tidl_compiler=tidl_compiler):
         graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     tidl.remove_tidl_params(params)
 
