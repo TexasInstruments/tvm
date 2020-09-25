@@ -887,7 +887,8 @@ class TensorDescriptor(ctypes.Structure):
                 ('input_signed', ctypes.c_int),
                 ('channel', ctypes.c_int),
                 ('height', ctypes.c_int),
-                ('width', ctypes.c_int)]
+                ('width', ctypes.c_int),
+                ('name', ctypes.c_char_p)]
 
 class TIDLImport:
     """TIDL import module.
@@ -1280,6 +1281,7 @@ class TIDLImport:
                 descr[i].input_scale = input_scale[i]
                 descr[i].input_signed = input_signed[i]
                 (descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][1:4]
+                descr[i].name = bytes(input_names[i], 'utf-8')
             input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
             import_lib_init(subgraph_id, len(input_tensors), input_dscr_ptr, is_nchw,
