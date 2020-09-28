@@ -330,8 +330,89 @@ def unpack_composites(mod):
         mod[func.name_hint] = Unpacker().visit(mod[func.name_hint])
     return mod
 
+def flatten_tuple_params(mod, compiler):
+    """ TIDL can't handle passing Tuples as arguments to a subgraph. This pass 
+        flattens them into their constituent components.
+
+        The declaration is rewritten as follows:
+            def %tidl_0(%tidl_0_i0: (<typeA>, <typeB>),   /* tuple */ 
+                        %tidl_0_i1: <typeC>) {            /* tensor */
+               ... use %tidl_0_i0 ...
+        ==> 
+            fn (%tidl_0_i0: <typeA>,                      /* tensor */
+                %tidl_0_i1: <typeB>,                      /* tensor */
+                %tidl_0_i2: <typeC>) {                    /* tensor */
+               %newTuple = (%tidl_0_i0, %tidl_0_i1)
+               ... use %newTuple ...
+
+        The call is rewritten as follows:
+            %z = @tidl_0(%t, %s)               /* tuple, tensor */
+        ==>
+            %z = @tidl_0(%t.0, %t.1, %s)       /* tuple, tensor, tensor */
+    """
+    def flatten_tuple_declaration(func):
+        """ Rewrite a function with tuple parameters """
+        new_params = []   # list of new param vars
+        var_map = {}      # maps old param list to new
+        def _addparm(ptype):
+            name = f'{gv.name_hint}_i{len(new_params)}'
+            var = tvm.relay.var(name, type_annotation=ptype)
+            new_params.append(var)
+            return var
+
+        for var in func.params:
+            if isinstance(var.checked_type, tvm.ir.TupleType):
+                # gather tuple subparams, and add func decl
+                tuple_parms = []
+                for t in var.checked_type.fields:
+                    tuple_parms.append(_addparm(t))
+                # create new tuple from tuple subparams, and enqueue for 
+                # rewriting (uses of old tuple param replaced with new tuple)
+                new_tuple = relay.expr.Tuple(tuple_parms)
+                var_map[var] = new_tuple
+            else:
+                new_parm = _addparm(var.checked_type)
+                var_map[var] = new_parm
+
+        # apply enqueued var replacements, and re-construct the function
+        new_body = VarReplacer(var_map).visit(func.body)
+        func = tvm.relay.Function(params=new_params, 
+                                  body=new_body, 
+                                  ret_type=func.ret_type, 
+                                  type_params=func.type_params, 
+                                  attrs=func.attrs)
+        return func
+
+    class Flatten_tuple_call(ExprMutator):
+        """ Visit call sites and rewrite Tuple arguments """
+        def __init__(self):
+            ExprMutator.__init__(self)
+
+        def visit_call(self, call):
+            if isinstance(call.op, GlobalVar):
+                new_args = []
+                for i,arg in enumerate(call.args):
+                    if isinstance(arg, relay.expr.Tuple):
+                        new_args.extend(arg.fields)
+                    else:
+                        new_args.append(arg)
+                call.args = new_args
+            return super().visit_call(call)
+
+    # Apply the first transformation to all the designated subgraphs
+    for gv in mod.get_global_vars():
+        func = mod[gv.name_hint]
+        if isinstance(func, Function) and \
+           func.attrs and "Compiler" in func.attrs and \
+           func.attrs['Compiler'] == compiler:
+            mod[gv.name_hint] = flatten_tuple_declaration(func)
+
+    # Apply the second transformation to all call sites
+    mod['main'] = Flatten_tuple_call().visit(mod['main'])
+    return mod
+
 class CalibrationGraphMutator(ExprMutator):
-    """This mutator should be called after partioning to produce a module which
+    """This mutator should be called after partitioning to produce a module which
     can be executed purely using TVM and will produce additional outputs for
     subgraph inputs. name_map can be used to find the subgraph input name
     corresponding to the output of the same index.
@@ -457,7 +538,7 @@ class VarRenamer(ExprMutator):
     """
     Renames vars to match the new subgraph name. Used when subgraphs are renamed starting from zero.
     If subgraph was originally "tidl_34", it would have inputs named like "tidl_34_i0".
-    IF new_subgraph_name is "tidl_0", pass will that input to "tidl_0_i0".
+    IF new_subgraph_name is "tidl_0", pass will rename that input to "tidl_0_i0".
     """
     def __init__(self, new_subgraph_name):
         ExprMutator.__init__(self)
@@ -2250,7 +2331,7 @@ class TIDLCompiler:
                 0  - no compilation due to missing TIDL tools
         """
 
-        # (Backward compatiable) if single calibration image/data/dict, convert to list
+        # (Backward compatible) if single calibration image/data/dict, convert to list
         if not isinstance(graph_input_list, list):
             graph_input_list = [ graph_input_list ]
 
@@ -2302,6 +2383,9 @@ class TIDLCompiler:
         mod = prune_subgraphs(mod, compiler=self.tidl_target,
                               num_subgraphs_to_keep=self.num_tidl_subgraphs,
                               min_mac_threshold=1)
+        mod = flatten_tuple_params(mod, self.tidl_target)
+
+        #============= Post-partition transformations  ==============
         with tvm.transform.PassContext(opt_level=3):
             convert_pass = [relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})]
             mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs

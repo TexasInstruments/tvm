@@ -60,7 +60,7 @@ def visualize(root, mod):
         node_idx = str(len(node_dict))
         node_dict[node] = node_idx
         if isinstance(node, relay.expr.Var):
-            dot.node(node_idx, f'{node.name_hint}:\nTensor[{tuple(node.type_annotation.shape)}, {node.type_annotation.dtype}]')
+            dot.node(node_idx, f'Var:{node.name_hint}')
         elif isinstance(node, relay.Function):
             visit(node.body, dot)
             dot.node(node_idx, f'Function {node_dict[node.body]}')
