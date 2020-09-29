@@ -92,28 +92,45 @@ def find_in_nodes(all_nodes, this_node, input_prefix):
         A list of all input nodes' names of the given node. For call node, the name is the node
         index in all_nodes dictionary. For input tensors, the name is the tensor's name.
     """
+def find_in_nodes(all_nodes, this_node, input_prefix):
+    def _get_result(node):
+        """ Return the name or names of the tensor produced by a node as a flattened list. 
+            Tuples are "flattened" so that each result in the list represents a single tensor.  
+        """
+        result = []
+        node_name = str(all_nodes[node])
+        # N is Call w/one output --> result is "N"
+        # N is Call w/tuple output --> result is ["N", "N:1", ...]
+        if isinstance(node, relay.expr.Call):
+            result.append(node_name)
+            if isinstance(node.checked_type, tvm.ir.TupleType):
+               for i in range(1, len(node.checked_type.fields)):
+                  result.append(node_name+f":{i}")
+        # N is TuplegetItem(Tuple,i) --> result is i'th result of Tuple
+        elif isinstance(node, relay.expr.TupleGetItem):
+            tuple_val = _get_result(node.tuple_value)
+            result.append(tuple_val[node.index])
+        # N is Tuple(N1,N2,...)  --> result is [result(N1), result(N2), ...]
+        elif isinstance(node, relay.expr.Tuple):
+            for field in node.fields:
+                result.extend(_get_result(field))
+        # N is Var --> result is "Var"
+        elif isinstance(node, relay.expr.Var): # input tensor is relay.expr.Var
+            if input_prefix in node.name_hint and "_i" in node.name_hint:
+                # this is an input tensor to the subgraph
+                result.append(node.name_hint)
+        #else: ignore all other types of nodes: const, etc.
+        return result
 
-    input_nodes = []
+    # Use the helper function to gather results of this node's inputs
+    input_names = []
     if isinstance(this_node, relay.expr.Call):
         in_nodes = this_node.args
     elif isinstance(this_node, relay.expr.Tuple):
         in_nodes = this_node.fields
-
     for node in in_nodes:
-        if isinstance(node, relay.expr.Call):
-            input_nodes.append(str(all_nodes[node]))
-        elif isinstance(node, relay.expr.TupleGetItem):
-            input_nodes.append(str(all_nodes[node.tuple_value]))
-        elif isinstance(node, relay.expr.Tuple):
-            input_nodes = input_nodes + find_in_nodes(all_nodes, node, input_prefix)
-        elif isinstance(node, relay.expr.Var): # input tensor is relay.expr.Var
-            if input_prefix in node.name_hint and "_i" in node.name_hint:
-                # this is an input tensor to the subgraph
-                input_nodes.append(node.name_hint)
-        #else: ignore all other types of nodes: const, etc.
-
-    return input_nodes
-
+        input_names.extend(_get_result(node))
+    return input_names
 
 def find_out_nodes(all_nodes, this_node):
     r""" Find the output nodes of a given relay.expr.Call node.
@@ -1373,7 +1390,7 @@ class TIDLImport:
         if not status:
             return False
 
-        # Common for all nodes:
+        # (AM57) Common for all nodes:
         # fill tensor names, update consumer counts, link input/output tensors
         in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names)
 
