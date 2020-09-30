@@ -92,7 +92,7 @@ def find_in_nodes(all_nodes, this_node, input_prefix):
         A list of all input nodes' names of the given node. For call node, the name is the node
         index in all_nodes dictionary. For input tensors, the name is the tensor's name.
     """
-def find_in_nodes(all_nodes, this_node, input_prefix):
+
     def _get_result(node):
         """ Return the name or names of the tensor produced by a node as a flattened list. 
             Tuples are "flattened" so that each result in the list represents a single tensor.  
@@ -367,12 +367,14 @@ def flatten_tuple_params(mod, compiler):
         ==>
             %z = @tidl_0(%t.0, %t.1, %s)       /* tuple, tensor, tensor */
     """
-    def flatten_tuple_declaration(func):
+    def flatten_tuple_declaration(func_name):
         """ Rewrite a function with tuple parameters """
         new_params = []   # list of new param vars
         var_map = {}      # maps old param list to new
+        func = mod[func_name]
+
         def _addparm(ptype):
-            name = f'{gv.name_hint}_i{len(new_params)}'
+            name = f'{func_name}_i{len(new_params)}'
             var = tvm.relay.var(name, type_annotation=ptype)
             new_params.append(var)
             return var
@@ -406,7 +408,8 @@ def flatten_tuple_params(mod, compiler):
             ExprMutator.__init__(self)
 
         def visit_call(self, call):
-            if isinstance(call.op, GlobalVar):
+            if isinstance(call.op, GlobalVar) and \
+               call.op.name_hint in compiler_functions:
                 new_args = []
                 for i,arg in enumerate(call.args):
                     if isinstance(arg, relay.expr.Tuple):
@@ -417,12 +420,14 @@ def flatten_tuple_params(mod, compiler):
             return super().visit_call(call)
 
     # Apply the first transformation to all the designated subgraphs
+    compiler_functions = []
     for gv in mod.get_global_vars():
         func = mod[gv.name_hint]
         if isinstance(func, Function) and \
            func.attrs and "Compiler" in func.attrs and \
            func.attrs['Compiler'] == compiler:
-            mod[gv.name_hint] = flatten_tuple_declaration(func)
+            mod[gv.name_hint] = flatten_tuple_declaration(gv.name_hint)
+            compiler_functions.append(gv.name_hint)
 
     # Apply the second transformation to all call sites
     mod['main'] = Flatten_tuple_call().visit(mod['main'])
