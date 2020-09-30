@@ -1788,7 +1788,9 @@ class TIDLAnnotation:
             softmax_out = is_op('nn.softmax')(reshape_out)
             return softmax_out
         def _reshape_softmax_checker(extract):
-            return not self._user_denied('reshape', 'nn.softmax')
+            if self._user_denied('reshape', 'nn.softmax'):
+                return False
+            return self.whitelist_check_func('nn.softmax', extract.attrs, extract.args)
             
         #bias_add has be preceded by conv2d
         def _conv2d_bias_pattern():
