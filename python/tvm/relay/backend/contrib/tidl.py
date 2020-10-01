@@ -1679,14 +1679,6 @@ class TIDLAnnotation:
         self._register_supported_op("nn.dropout")
         self._register_supported_op("nn.relu")
 
-        # Register J7/J6 common operators which are supported with same constraints
-        @tvm.ir.register_op_attr("add", "target.tidl")
-        def add_whitelist_fn(attrs, args):
-            if any([isinstance(arg, tvm.relay.expr.Constant) for arg in args]):
-                # This is the same as "bias_add" which is not supported standalone.
-                return False
-            return True
-
         # Register J7/J6 common operators which are supported with different constraints
         self._register_constrained_op("argmax")
         self._register_constrained_op("nn.avg_pool2d")
@@ -1705,6 +1697,8 @@ class TIDLAnnotation:
         # Register J7 specific operators, or those supported standalone by J7 but not J6,
         # or those for which there are no whitelist functions.
         if self.tidl_platform == 'J7':
+            self._register_supported_op("add")
+            self._register_supported_op("nn.bias_add")
             self._register_supported_op("maximum")
             self._register_supported_op("minimum")
             self._register_supported_op("multiply")
@@ -1721,6 +1715,12 @@ class TIDLAnnotation:
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
             self._register_constrained_op("max")           # 'max' mapped to max_pooling layer
+            @tvm.ir.register_op_attr("add", "target.tidl")
+            def add_whitelist_fn(attrs, args):
+                if any([isinstance(arg, tvm.relay.expr.Constant) for arg in args]):
+                    # This is the same as "bias_add" which is not supported standalone.
+                    return False
+                return True
 
         tidl_annotations_registered = True
 
@@ -1810,8 +1810,38 @@ class TIDLAnnotation:
             if self._user_denied('reshape', 'nn.softmax'):
                 return False
             return self.whitelist_check_func('nn.softmax', extract.attrs, extract.args)
-            
-        #bias_add has be preceded by conv2d
+
+        #pad has to precede conv2d, (conv2d, bias_add), or (conv2d, add)
+        def _pad_checker(pad_op):
+            pad_supported = (float(pad_op.attrs.pad_value) == 0.0 and \
+                             pad_op.attrs.pad_mode == 'constant')
+            return pad_supported
+
+        def _pad_conv2d_pattern():
+            pad_out = is_op('nn.pad')(wildcard())
+            conv2d_out = is_op('nn.conv2d')(pad_out, is_constant())
+            return conv2d_out
+        def _pad_conv2d_checker(extract):
+            if self._user_denied('nn.pad', 'nn.conv2d'):
+                return False
+            pad_supported = _pad_checker(extract.args[0])
+            conv2d_supported = self.whitelist_check_func('nn.conv2d', extract.attrs, extract.args)
+            return conv2d_supported and pad_supported
+
+        # common patterns required by J7 or J6
+        pattern_table_common = [
+            ('tidl.squeeze_reshape', _squeeze_reshape_pattern(), _squeeze_reshape_checker),
+            ('tidl.reshape_avgpool', _reshape_avg_pool_pattern(), _reshape_avg_pool_checker),
+            ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
+                                           _reshape_global_avg_pool_checker),
+            ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
+            ('tidl.reshape_mean', _reshape_mean_pattern(), _reshape_mean_checker),
+            ('tidl.reshape_softmax', _reshape_softmax_pattern(), _reshape_softmax_checker),
+            ('tidl.pad_conv2d', _pad_conv2d_pattern(), _pad_conv2d_checker),
+        ]
+
+        # additional patterns required by J6
+        #bias_add has be preceded by conv2d or (pad, conv2d)
         def _conv2d_bias_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
             bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
@@ -1830,23 +1860,6 @@ class TIDLAnnotation:
                 return False
             op = extract.args[0]
             return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
-
-        #pad has to precede conv2d, (conv2d, bias_add), or (conv2d, add)
-        def _pad_checker(pad_op):
-            pad_supported = (float(pad_op.attrs.pad_value) == 0.0 and \
-                             pad_op.attrs.pad_mode == 'constant')
-            return pad_supported
-
-        def _pad_conv2d_pattern():
-            pad_out = is_op('nn.pad')(wildcard())
-            conv2d_out = is_op('nn.conv2d')(pad_out, is_constant())
-            return conv2d_out
-        def _pad_conv2d_checker(extract):
-            if self._user_denied('nn.pad', 'nn.conv2d'):
-                return False
-            pad_supported = _pad_checker(extract.args[0])
-            conv2d_supported = self.whitelist_check_func('nn.conv2d', extract.attrs, extract.args)
-            return conv2d_supported and pad_supported
 
         def _pad_conv2d_bias_pattern():
             pad_conv2d_out = _pad_conv2d_pattern()
@@ -1891,25 +1904,6 @@ class TIDLAnnotation:
             op = extract.args[0]
             return self.whitelist_check_func('nn.dense', op.attrs, op.args)
 
-        # common patterns required by J7 or J6
-        pattern_table_common = [
-            ('tidl.squeeze_reshape', _squeeze_reshape_pattern(), _squeeze_reshape_checker),
-            ('tidl.reshape_avgpool', _reshape_avg_pool_pattern(), _reshape_avg_pool_checker),
-            ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
-                                           _reshape_global_avg_pool_checker),
-            ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
-            ('tidl.reshape_mean', _reshape_mean_pattern(), _reshape_mean_checker),
-            ('tidl.reshape_softmax', _reshape_softmax_pattern(), _reshape_softmax_checker),
-            ('tidl.pad_conv2d_bias', _pad_conv2d_bias_pattern(), _pad_conv2d_bias_checker),
-            ('tidl.pad_conv2d_add', _pad_conv2d_add_pattern(), _pad_conv2d_add_checker),
-            ('tidl.conv2d_bias', _conv2d_bias_pattern(), _conv2d_bias_checker),
-            ('tidl.conv2d_add', _conv2d_add_pattern(), _conv2d_add_checker),
-            ('tidl.pad_conv2d', _pad_conv2d_pattern(), _pad_conv2d_checker),
-            ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
-            ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
-        ]
-
-        # additional patterns required by J6
         #relu6 has to be preceded by conv2d or (conv2d, bias_add)
         def _relu6_check_fun(attrs): # clip(0, 6) is not supported standalone
             supported = (float(attrs.a_min) == 0.0) and (float(attrs.a_max) == 6.0)
@@ -2057,6 +2051,12 @@ class TIDLAnnotation:
             ('tidl.dense_relu6', _dense_relu6_pattern(), _dense_relu6_checker),
             ('tidl.add_relu6', _add_relu6_pattern(), _add_relu6_checker),
             ('tidl.bn_relu6', _bn_relu6_pattern(), _bn_relu6_checker),
+            ('tidl.pad_conv2d_bias', _pad_conv2d_bias_pattern(), _pad_conv2d_bias_checker),
+            ('tidl.pad_conv2d_add', _pad_conv2d_add_pattern(), _pad_conv2d_add_checker),
+            ('tidl.conv2d_bias', _conv2d_bias_pattern(), _conv2d_bias_checker),
+            ('tidl.conv2d_add', _conv2d_add_pattern(), _conv2d_add_checker),
+            ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
+            ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
         ]
 
         # additional patterns required by J7
