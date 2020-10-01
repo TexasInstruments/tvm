@@ -1742,7 +1742,26 @@ class TIDLAnnotation:
             reshape_out2 = is_op('reshape')(transpose_out)
             return reshape_out2
         def _transpose_reshape_checker(extract):
-            return not self._user_denied('reshape', 'transpose')
+            if self._user_denied('reshape', 'transpose'):
+                return False
+            reshape_2 = extract
+            transpose = extract.args[0]
+            reshape_1 = extract.args[0].args[0]
+            resh1 = reshape_1.attrs.newshape
+            resh2 = reshape_2.attrs.newshape
+            tran = transpose.attrs.axes
+            #pattern (reshape, transpose, reshape) is supported with constraints
+            is_shuffle = len(resh1) == 5 and len(tran) == 5 and len(resh2) == 4 and \
+                         resh1[4] == resh2[3] and resh1[3] == resh2[2] and \
+                         tran[4] == 4 and tran[3] == 3 and tran[2] == 1 and tran[1] == 2
+            is_space = len(resh1) == 6 and len(tran) == 6 and len(resh2) == 4 and \
+                       resh1[4]*resh1[2] == resh2[2] and resh1[3]*resh1[5] == resh2[3] and \
+                       resh1[1] == resh2[1] and resh1[2] == resh1[3] and tran[5] == 3 and \
+                       tran[4] == 5 and tran[3] == 2 and tran[2] == 4 and tran[1] == 1
+            if is_shuffle or is_space:
+                return True
+            else:
+                return False
 
         #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense, or mean
         def _reshape_avg_pool_pattern():
