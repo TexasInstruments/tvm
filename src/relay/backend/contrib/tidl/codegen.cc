@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <streambuf>
 
+#include "../../utils.h"
 #include "../../../../runtime/contrib/tidl/tidl_runtime.h"
 #include "../codegen_c/codegen_c.h"
 #include "picojson.h"
@@ -45,6 +46,8 @@
 namespace tvm {
 namespace relay {
 namespace contrib {
+
+using namespace backend;
 
 /*!
  * \brief TIDLContextNode contains the information that a pass can rely on,
