@@ -1702,8 +1702,8 @@ class TIDLAnnotation:
             self._register_supported_op("maximum")
             self._register_supported_op("minimum")
             self._register_supported_op("multiply")
-            self._register_supported_op("split")
-            self._register_supported_op("strided_slice")
+            self._register_constrained_op("split")
+            self._register_constrained_op("strided_slice")
             self._register_constrained_op("image.resize")
             # "clip" is supported with constraints in J7 but unsupported standalone in J6
             self._register_constrained_op("clip")
