@@ -2408,8 +2408,8 @@ class TIDLCompiler:
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
         # Removing redundant outputs
         mod = relay.transform.EliminateCommonSubexpr()(mod)
-        #print("----------- original graph-----------")
-        #print(mod.astext(show_meta_data=False))
+        print("----------- original graph-----------")
+        print(mod.astext(show_meta_data=False))
 
         #============= Graph annotation ==============
         mod = tidl_annotation.merge_sequential_ops(mod)
