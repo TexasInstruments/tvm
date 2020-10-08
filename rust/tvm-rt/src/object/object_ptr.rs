@@ -22,6 +22,7 @@ use std::ffi::CString;
 use std::ptr::NonNull;
 use std::sync::atomic::AtomicI32;
 
+use tvm_macros::Object;
 use tvm_sys::ffi::{self, TVMObjectFree, TVMObjectRetain, TVMObjectTypeKey2Index};
 use tvm_sys::{ArgValue, RetValue};
 
@@ -35,10 +36,12 @@ type Deleter = unsafe extern "C" fn(object: *mut Object) -> ();
 /// table, an atomic reference count, and a customized deleter which
 /// will be invoked when the reference count is zero.
 ///
-#[derive(Debug)]
+#[derive(Debug, Object)]
+#[ref_name = "ObjectRef"]
+#[type_key = "runtime.Object"]
 #[repr(C)]
 pub struct Object {
-    /// The index into into TVM's runtime type information table.
+    /// The index into TVM's runtime type information table.
     pub(self) type_index: u32,
     // TODO(@jroesch): pretty sure Rust and C++ atomics are the same, but not sure.
     // NB: in general we should not touch this in Rust.
@@ -57,10 +60,10 @@ pub struct Object {
 /// trait magic here to get a monomorphized deleter for each object
 /// "subtype".
 ///
-/// This function just transmutes the pointer to the correct type
+/// This function just converts the pointer to the correct type
 /// and invokes the underlying typed delete function.
 unsafe extern "C" fn delete<T: IsObject>(object: *mut Object) {
-    let typed_object: *mut T = std::mem::transmute(object);
+    let typed_object: *mut T = object as *mut T;
     T::typed_delete(typed_object);
 }
 
@@ -98,13 +101,13 @@ impl Object {
         let type_key = T::TYPE_KEY;
         let cstring = CString::new(type_key).expect("type key must not contain null characters");
 
-        if type_key == "Object" {
+        // TODO(@jroesch): look into TVMObjectTypeKey2Index.
+        if type_key == "runtime.Object" {
             return 0;
         } else {
             let mut index = 0;
             unsafe {
-                let index_ptr = std::mem::transmute(&mut index);
-                if TVMObjectTypeKey2Index(cstring.as_ptr(), index_ptr) != 0 {
+                if TVMObjectTypeKey2Index(cstring.as_ptr(), &mut index) != 0 {
                     panic!(crate::get_last_error())
                 }
             }
@@ -115,7 +118,7 @@ impl Object {
     pub fn count(&self) -> i32 {
         // need to do atomic read in C++
         // ABI compatible atomics is funky/hard.
-        self.ref_count.load(std::sync::atomic::Ordering::SeqCst)
+        self.ref_count.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Allocates a base object value for an object subtype of type T.
@@ -129,16 +132,16 @@ impl Object {
 
     /// Increases the object's reference count by one.
     pub(self) fn inc_ref(&self) {
+        let raw_ptr = self as *const Object as *mut Object as *mut std::ffi::c_void;
         unsafe {
-            let raw_ptr = std::mem::transmute(self);
             assert_eq!(TVMObjectRetain(raw_ptr), 0);
         }
     }
 
     /// Decreases the object's reference count by one.
     pub(self) fn dec_ref(&self) {
+        let raw_ptr = self as *const Object as *mut Object as *mut std::ffi::c_void;
         unsafe {
-            let raw_ptr = std::mem::transmute(self);
             assert_eq!(TVMObjectFree(raw_ptr), 0);
         }
     }
@@ -151,22 +154,12 @@ impl Object {
 /// index, a method for accessing the base object given the
 /// subtype, and a typed delete method which is specialized
 /// to the subtype.
-pub unsafe trait IsObject {
+pub unsafe trait IsObject: AsRef<Object> {
     const TYPE_KEY: &'static str;
-
-    fn as_object<'s>(&'s self) -> &'s Object;
 
     unsafe extern "C" fn typed_delete(object: *mut Self) {
         let object = Box::from_raw(object);
         drop(object)
-    }
-}
-
-unsafe impl IsObject for Object {
-    const TYPE_KEY: &'static str = "Object";
-
-    fn as_object<'s>(&'s self) -> &'s Object {
-        self
     }
 }
 
@@ -179,16 +172,8 @@ pub struct ObjectPtr<T: IsObject> {
     pub ptr: NonNull<T>,
 }
 
-fn inc_ref<T: IsObject>(ptr: NonNull<T>) {
-    unsafe { ptr.as_ref().as_object().inc_ref() }
-}
-
-fn dec_ref<T: IsObject>(ptr: NonNull<T>) {
-    unsafe { ptr.as_ref().as_object().dec_ref() }
-}
-
 impl ObjectPtr<Object> {
-    fn from_raw(object_ptr: *mut Object) -> Option<ObjectPtr<Object>> {
+    pub fn from_raw(object_ptr: *mut Object) -> Option<ObjectPtr<Object>> {
         let non_null = NonNull::new(object_ptr);
         non_null.map(|ptr| {
             debug_assert!(unsafe { ptr.as_ref().count() } >= 0);
@@ -199,14 +184,14 @@ impl ObjectPtr<Object> {
 
 impl<T: IsObject> Clone for ObjectPtr<T> {
     fn clone(&self) -> Self {
-        inc_ref(self.ptr);
+        unsafe { self.ptr.as_ref().as_ref().inc_ref() }
         ObjectPtr { ptr: self.ptr }
     }
 }
 
 impl<T: IsObject> Drop for ObjectPtr<T> {
     fn drop(&mut self) {
-        dec_ref(self.ptr);
+        unsafe { self.ptr.as_ref().as_ref().dec_ref() }
     }
 }
 
@@ -219,34 +204,42 @@ impl<T: IsObject> ObjectPtr<T> {
     }
 
     pub fn new(object: T) -> ObjectPtr<T> {
+        object.as_ref().inc_ref();
         let object_ptr = Box::new(object);
         let object_ptr = Box::leak(object_ptr);
         let ptr = NonNull::from(object_ptr);
-        inc_ref(ptr);
         ObjectPtr { ptr }
     }
 
     pub fn count(&self) -> i32 {
         // need to do atomic read in C++
         // ABI compatible atomics is funky/hard.
-        self.as_object()
+        self.as_ref()
             .ref_count
-            .load(std::sync::atomic::Ordering::SeqCst)
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn as_object<'s>(&'s self) -> &'s Object {
-        unsafe { self.ptr.as_ref().as_object() }
+    /// This method avoid running the destructor on self once it's dropped, so we don't accidentally release the memory
+    unsafe fn cast<U: IsObject>(self) -> ObjectPtr<U> {
+        let ptr = self.ptr.cast();
+        std::mem::forget(self);
+        ObjectPtr { ptr }
     }
 
-    pub fn upcast(&self) -> ObjectPtr<Object> {
-        ObjectPtr {
-            ptr: self.ptr.cast(),
-        }
+    pub fn upcast<U>(self) -> ObjectPtr<U>
+    where
+        U: IsObject,
+        T: AsRef<U>,
+    {
+        unsafe { self.cast() }
     }
 
-    pub fn downcast<U: IsObject>(&self) -> Result<ObjectPtr<U>, Error> {
+    pub fn downcast<U>(self) -> Result<ObjectPtr<U>, Error>
+    where
+        U: IsObject + AsRef<T>,
+    {
         let child_index = Object::get_type_index::<U>();
-        let object_index = self.as_object().type_index;
+        let object_index = self.as_ref().type_index;
 
         let is_derived = if child_index == object_index {
             true
@@ -256,9 +249,7 @@ impl<T: IsObject> ObjectPtr<T> {
         };
 
         if is_derived {
-            let ptr = self.ptr.cast();
-            inc_ref(ptr);
-            Ok(ObjectPtr { ptr })
+            Ok(unsafe { self.cast() })
         } else {
             Err(Error::downcast("TODOget_type_key".into(), U::TYPE_KEY))
         }
@@ -275,9 +266,9 @@ impl<T: IsObject> std::ops::Deref for ObjectPtr<T> {
 
 impl<'a, T: IsObject> From<ObjectPtr<T>> for RetValue {
     fn from(object_ptr: ObjectPtr<T>) -> RetValue {
-        let raw_object_ptr = ObjectPtr::leak(object_ptr);
-        let void_ptr = unsafe { std::mem::transmute(raw_object_ptr) };
-        RetValue::ObjectHandle(void_ptr)
+        let raw_object_ptr = ObjectPtr::leak(object_ptr) as *mut T as *mut std::ffi::c_void;
+        assert!(!raw_object_ptr.is_null());
+        RetValue::ObjectHandle(raw_object_ptr)
     }
 }
 
@@ -287,9 +278,9 @@ impl<'a, T: IsObject> TryFrom<RetValue> for ObjectPtr<T> {
     fn try_from(ret_value: RetValue) -> Result<ObjectPtr<T>, Self::Error> {
         match ret_value {
             RetValue::ObjectHandle(handle) => {
-                let handle: *mut Object = unsafe { std::mem::transmute(handle) };
-                let optr = ObjectPtr::from_raw(handle).ok_or(Error::Null)?;
+                let optr = ObjectPtr::from_raw(handle as *mut Object).ok_or(Error::Null)?;
                 debug_assert!(optr.count() >= 1);
+                // println!("back to type {}", optr.count());
                 optr.downcast()
             }
             _ => Err(Error::downcast(format!("{:?}", ret_value), "ObjectHandle")),
@@ -300,10 +291,9 @@ impl<'a, T: IsObject> TryFrom<RetValue> for ObjectPtr<T> {
 impl<'a, T: IsObject> From<ObjectPtr<T>> for ArgValue<'a> {
     fn from(object_ptr: ObjectPtr<T>) -> ArgValue<'a> {
         debug_assert!(object_ptr.count() >= 1);
-        let raw_object_ptr = ObjectPtr::leak(object_ptr);
-
-        let void_ptr = unsafe { std::mem::transmute(raw_object_ptr) };
-        ArgValue::ObjectHandle(void_ptr)
+        let raw_ptr = ObjectPtr::leak(object_ptr) as *mut T as *mut std::ffi::c_void;
+        assert!(!raw_ptr.is_null());
+        ArgValue::ObjectHandle(raw_ptr)
     }
 }
 
@@ -313,9 +303,9 @@ impl<'a, T: IsObject> TryFrom<ArgValue<'a>> for ObjectPtr<T> {
     fn try_from(arg_value: ArgValue<'a>) -> Result<ObjectPtr<T>, Self::Error> {
         match arg_value {
             ArgValue::ObjectHandle(handle) => {
-                let handle = unsafe { std::mem::transmute(handle) };
-                let optr = ObjectPtr::from_raw(handle).ok_or(Error::Null)?;
+                let optr = ObjectPtr::from_raw(handle as *mut Object).ok_or(Error::Null)?;
                 debug_assert!(optr.count() >= 1);
+                // println!("count: {}", optr.count());
                 optr.downcast()
             }
             _ => Err(Error::downcast(format!("{:?}", arg_value), "ObjectHandle")),
@@ -339,8 +329,29 @@ mod tests {
     }
 
     #[test]
+    fn test_leak() -> anyhow::Result<()> {
+        let ptr = ObjectPtr::new(Object::base_object::<Object>());
+        assert_eq!(ptr.count(), 1);
+        let object = ObjectPtr::leak(ptr);
+        assert_eq!(object.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_clone() -> anyhow::Result<()> {
+        let ptr = ObjectPtr::new(Object::base_object::<Object>());
+        assert_eq!(ptr.count(), 1);
+        let ptr2 = ptr.clone();
+        assert_eq!(ptr2.count(), 2);
+        drop(ptr);
+        assert_eq!(ptr2.count(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn roundtrip_retvalue() -> Result<()> {
         let ptr = ObjectPtr::new(Object::base_object::<Object>());
+        assert_eq!(ptr.count(), 1);
         let ret_value: RetValue = ptr.clone().into();
         let ptr2: ObjectPtr<Object> = ret_value.try_into()?;
         assert_eq!(ptr.count(), ptr2.count());
@@ -353,14 +364,22 @@ mod tests {
             ptr.fdeleter == ptr2.fdeleter,
             "objects have different deleters"
         );
+        // After dropping the second pointer we should only see only refcount.
+        drop(ptr2);
+        assert_eq!(ptr.count(), 1);
         Ok(())
     }
 
     #[test]
     fn roundtrip_argvalue() -> Result<()> {
         let ptr = ObjectPtr::new(Object::base_object::<Object>());
-        let arg_value: ArgValue = ptr.clone().into();
+        assert_eq!(ptr.count(), 1);
+        let ptr_clone = ptr.clone();
+        assert_eq!(ptr.count(), 2);
+        let arg_value: ArgValue = ptr_clone.into();
+        assert_eq!(ptr.count(), 2);
         let ptr2: ObjectPtr<Object> = arg_value.try_into()?;
+        assert_eq!(ptr2.count(), 2);
         assert_eq!(ptr.count(), ptr2.count());
         assert_eq!(ptr.count(), 2);
         ensure!(
@@ -371,32 +390,61 @@ mod tests {
             ptr.fdeleter == ptr2.fdeleter,
             "objects have different deleters"
         );
+        // After dropping the second pointer we should only see only refcount.
+        drop(ptr2);
+        assert_eq!(ptr.count(), 1);
         Ok(())
     }
 
     fn test_fn(o: ObjectPtr<Object>) -> ObjectPtr<Object> {
         // The call machinery adds at least 1 extra count while inside the call.
-        assert_eq!(o.count(), 2);
+        assert_eq!(o.count(), 3);
         return o;
     }
 
+    // #[test]
+    // fn test_ref_count_boundary() {
+    //     use super::*;
+    //     use crate::function::{register, Function, Result};
+    //     // 1
+    //     let ptr = ObjectPtr::new(Object::base_object::<Object>());
+    //     assert_eq!(ptr.count(), 1);
+    //     // 2
+    //     let stay = ptr.clone();
+    //     assert_eq!(ptr.count(), 2);
+    //     register(test_fn, "my_func").unwrap();
+    //     let func = Function::get("my_func").unwrap();
+    //     let func = func.to_boxed_fn::<dyn Fn(ObjectPtr<Object>) -> Result<ObjectPtr<Object>>>();
+    //     let same = func(ptr).unwrap();
+    //     drop(func);
+    //     assert_eq!(stay.count(), 4);
+    //     assert_eq!(same.count(), 4);
+    //     drop(same);
+    //     assert_eq!(stay.count(), 3);
+    // }
+
+    // fn test_fn2(o: ArgValue<'static>) -> RetValue {
+    //     // The call machinery adds at least 1 extra count while inside the call.
+    //     match o {
+    //         ArgValue::ObjectHandle(ptr) => RetValue::ObjectHandle(ptr),
+    //         _ => panic!()
+    //     }
+    // }
+
     #[test]
-    fn test_ref_count_boundary() {
+    fn test_ref_count_boundary2() {
         use super::*;
-        use crate::function::{register, Function, Result};
-        // 1
+        use crate::function::{register, Function};
         let ptr = ObjectPtr::new(Object::base_object::<Object>());
         assert_eq!(ptr.count(), 1);
-        // 2
         let stay = ptr.clone();
         assert_eq!(ptr.count(), 2);
-        register(test_fn, "my_func").unwrap();
-        let func = Function::get("my_func").unwrap();
-        let func = func.to_boxed_fn::<dyn Fn(ObjectPtr<Object>) -> Result<ObjectPtr<Object>>>();
-        let same = func(ptr).unwrap();
-        assert_eq!(stay.count(), 2);
-        assert_eq!(same.count(), 2);
+        register(test_fn, "my_func2").unwrap();
+        let func = Function::get("my_func2").unwrap();
+        let same = func.invoke(vec![ptr.into()]).unwrap();
+        let same: ObjectPtr<Object> = same.try_into().unwrap();
+        // TODO(@jroesch): normalize RetValue ownership assert_eq!(same.count(), 2);
         drop(same);
-        assert_eq!(stay.count(), 1);
+        assert_eq!(stay.count(), 3);
     }
 }

@@ -67,6 +67,15 @@ TVM_DLL Kind KindCheck(const Type& t, const IRModule& mod);
 TVM_DLL bool ConstantCheck(const Expr& e);
 
 /*!
+ * \brief Check whether an expression is in the basic block normal form.
+ *
+ * \param e the expression.
+ *
+ * \return whether the expression is in the basic block normal form.
+ */
+TVM_DLL bool BasicBlockNormalFormCheck(const Expr& e);
+
+/*!
  * \brief Check that each Var is only bound once.
  *
  * For example, the expression `let x = 1 in let x = 2 in 3` bound x twice.
@@ -253,6 +262,17 @@ TVM_DLL IRModule GetCalibrateModule(IRModule mod);
  * \return The mapping between a subgraph name and its postition in the output tuple.
  */
 TVM_DLL Map<GlobalVar, Array<Integer>> GetCalibrateOutputMap(const IRModule& mod);
+
+/*!
+ * \brief Analyze the device context of each IR node in a given relay module.
+ *
+ * \param mod The module for analysis.
+ * \param default_context The default context used by unassigned IR nodes.
+ *
+ * \return The mapping between an IR node and its associated context.
+ */
+TVM_DLL std::unordered_map<Expr, TVMContext, runtime::ObjectPtrHash, runtime::ObjectPtrEqual>
+ContextAnalysis(const IRModule& mod, const TVMContext& default_context);
 
 }  // namespace relay
 }  // namespace tvm

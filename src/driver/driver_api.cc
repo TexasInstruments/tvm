@@ -56,20 +56,20 @@ bool LLVMEnabled() {
 
 /*! \return The default host target for a given device target */
 Target DefaultTargetHost(Target target) {
-  if (target.defined() && target->id->device_type == kDLCPU) {
+  if (target.defined() && target->kind->device_type == kDLCPU) {
     return target;
   } else {
     if (LLVMEnabled()) {
-      return target::llvm();
+      return Target("llvm");
     } else {
-      return target::stackvm();
+      return Target("stackvm");
     }
   }
 }
 
 tir::Buffer BufferWithOffsetAlignment(Array<PrimExpr> shape, DataType dtype, std::string name,
                                       int data_alignment, int offset_factor, bool compact) {
-  auto data = tir::Var(name, DataType::Handle());
+  auto data = tir::Var(name, PointerType(PrimType(dtype)));
   bool has_any = false;
   if (!compact) {
     for (const auto& it : shape) {
@@ -239,7 +239,7 @@ std::pair<IRModule, IRModule> SplitDevHostFuncs(IRModule mod_mixed, const Target
                  << " but cannot find device code. Did you forget to bind?";
   }
 
-  if (target->id->device_type == kDLCPU && target_host == target) {
+  if (target->kind->device_type == kDLCPU && target_host == target) {
     CHECK(mdevice->functions.empty()) << "No device code should be generated when target "
                                       << "and host_target are both llvm target."
                                       << "\n";
@@ -256,7 +256,7 @@ runtime::Module build(const Map<Target, IRModule>& inputs, const Target& target_
   Target target_host_val = target_host;
   if (!target_host.defined()) {
     for (const auto& it : inputs) {
-      if (it.first->id->device_type == kDLCPU || it.first->id->device_type == kDLMicroDev) {
+      if (it.first->kind->device_type == kDLCPU || it.first->kind->device_type == kDLMicroDev) {
         target_host_val = it.first;
         break;
       }
@@ -294,10 +294,10 @@ runtime::Module build(const Map<Target, IRModule>& inputs, const Target& target_
 runtime::Module build(const Map<String, IRModule>& inputs, const Target& target_host) {
   Map<Target, IRModule> updated_input;
   for (const auto& it : inputs) {
-    auto target = Target::Create(it.first);
+    auto target = Target(it.first);
     Optional<String> device = target->GetAttr<String>("device");
     if (device.defined() && device.value() == "vta") {
-      target = Target::Create("ext_dev");
+      target = Target("ext_dev");
     }
     updated_input.Set(target, it.second);
   }

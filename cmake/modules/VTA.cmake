@@ -25,11 +25,14 @@ else()
   set(VTA_HW_PATH $ENV{VTA_HW_PATH})
 endif()
 
-message(STATUS "VTA build with VTA_HW_PATH=" ${VTA_HW_PATH})
-
 if(MSVC)
   message(STATUS "VTA build is skipped in Windows..")
+elseif(NOT EXISTS ${VTA_HW_PATH})
+  if (USE_VTA_TSIM OR USE_VTA_FSIM OR USE_UFPGA)
+    message(FATAL_ERROR "VTA path " ${VTA_HW_PATH} " does not exist")
+  endif()
 elseif(PYTHON)
+  message(STATUS "VTA build with VTA_HW_PATH=" ${VTA_HW_PATH})
   set(VTA_CONFIG ${PYTHON} ${VTA_HW_PATH}/config/vta_config.py)
 
   if(EXISTS ${CMAKE_CURRENT_BINARY_DIR}/vta_config.json)
@@ -103,13 +106,13 @@ elseif(PYTHON)
     # Target lib: vta
     add_library(vta SHARED ${FPGA_RUNTIME_SRCS})
     target_include_directories(vta PUBLIC vta/runtime)
+    target_include_directories(vta PUBLIC ${VTA_HW_PATH}/include)
     foreach(__def ${VTA_DEFINITIONS})
       string(SUBSTRING ${__def} 3 -1 __strip_def)
       target_compile_definitions(vta PUBLIC ${__strip_def})
     endforeach()
     if(${VTA_TARGET} STREQUAL "pynq" OR
        ${VTA_TARGET} STREQUAL "ultra96")
-      target_include_directories(vta PUBLIC ${VTA_HW_PATH}/include)
       target_link_libraries(vta ${__cma_lib})
     elseif(${VTA_TARGET} STREQUAL "de10nano")  # DE10-Nano rules
      #target_compile_definitions(vta PUBLIC VTA_MAX_XFER=2097152) # (1<<21)

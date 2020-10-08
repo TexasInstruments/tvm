@@ -32,15 +32,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tvm/runtime/c_runtime_api.h>
-#include <tvm/runtime/crt/internal/common/logging.h>
+#include <tvm/runtime/crt/error_codes.h>
 #include <tvm/runtime/crt/internal/common/memory.h>
+#include <tvm/runtime/crt/logging.h>
 #include <tvm/runtime/crt/memory.h>
 #include <tvm/runtime/crt/platform.h>
-
-/**
- * \brief Memory pool for virtual dynamic memory allocation
- */
-static uint8_t g_memory_pool[TVM_CRT_VIRT_MEM_SIZE];
 
 // construct a new page
 Page PageCreate(uint8_t* memory_pool, size_t page_size_bytes, tvm_index_t ptable_begin,
@@ -144,8 +140,8 @@ void* MemoryManager_Alloc(MemoryManager* mgr, tvm_index_t size) {
   } else {
     start = ptable->num_pages;
     CHECK_LE((unsigned)(start + npage), ptable->max_pages,
-             "insufficient memory, start=%" PRId64 ", npage=%" PRId64 ", total=%" PRId64 "", start,
-             npage, start + npage);
+             "insufficient memory, start=%" PRId32 ", npage=%" PRId32 ", total=%" PRId32 " / %zu",
+             (int32_t)start, (int32_t)npage, (int32_t)(start + npage), mgr->pmap.max_pages);
     /* insert page entry */
     Page p = PageCreate(ptable->memory_pool, ptable->page_size_bytes, start, npage);
     ptable->resize(ptable, start + npage, &p);
@@ -262,6 +258,9 @@ void MemoryManager_Free(MemoryManager* mgr, void* ptr) {
 
 #define ROUND_UP(qty, modulo) (((qty) + ((modulo)-1)) / (modulo) * (modulo))
 
+static bool g_memory_manager_initialized = 0;
+static MemoryManager g_memory_manager;
+
 void MemoryManagerCreate(MemoryManager* manager, uint8_t* memory_pool,
                          size_t memory_pool_size_bytes, size_t page_size_bytes_log2) {
   memset(manager, 0, sizeof(MemoryManager));
@@ -278,8 +277,6 @@ void MemoryManagerCreate(MemoryManager* manager, uint8_t* memory_pool,
   size_t bytes_needed_per_page = page_size_bytes + metadata_bytes_per_page;
   size_t num_pages = memory_pool_size_bytes / bytes_needed_per_page;
 
-  size_t metadata_pages_bytes = ROUND_UP(metadata_bytes_per_page * num_pages, page_size_bytes);
-  size_t metadata_num_pages = metadata_pages_bytes >> page_size_bytes_log2;
   uint8_t* metadata_cursor = memory_pool + (num_pages << page_size_bytes_log2);
 
   manager->ptable.memory_pool = memory_pool;
@@ -310,16 +307,22 @@ void MemoryManagerCreate(MemoryManager* manager, uint8_t* memory_pool,
   manager->free_map.insert = MultiMap_Insert;
 }
 
-MemoryManager* TVMGetGlobalMemoryManager() {
-  /* initialize once */
-  static uint32_t initialized = 0;
-  static MemoryManager mgr;
-  if (!initialized) {
-    memset(g_memory_pool, 0, sizeof(g_memory_pool));
-    MemoryManagerCreate(&mgr, g_memory_pool, TVM_CRT_VIRT_MEM_SIZE, TVM_CRT_PAGE_BYTES_LOG);
-    initialized = 1;
+tvm_crt_error_t TVMInitializeGlobalMemoryManager(uint8_t* memory_pool,
+                                                 size_t memory_pool_size_bytes,
+                                                 size_t page_size_bytes_log2) {
+  if (g_memory_manager_initialized) {
+    return kTvmErrorPlatformMemoryManagerInitialized;
   }
-  return &mgr;
+
+  MemoryManagerCreate(&g_memory_manager, memory_pool, memory_pool_size_bytes, page_size_bytes_log2);
+
+  g_memory_manager_initialized = true;
+  return kTvmErrorNoError;
+}
+
+MemoryManager* TVMGetGlobalMemoryManager() {
+  CHECK(g_memory_manager_initialized);
+  return &g_memory_manager;
 }
 
 /** \brief Allocate memory from manager */

@@ -32,7 +32,6 @@
 #include <gtest/gtest.h>
 #include <spawn.h>
 #include <sys/wait.h>
-#include <topi/generic/injective.h>
 #include <tvm/driver/driver_api.h>
 #include <tvm/relay/analysis.h>
 #include <tvm/relay/expr.h>
@@ -43,14 +42,15 @@
 #include <tvm/runtime/packed_func.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/te/operation.h>
+#include <tvm/topi/generic/injective.h>
 
 TVM_REGISTER_GLOBAL("test.sch").set_body([](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-  *rv = topi::generic::schedule_injective(args[0], args[1]);
+  *rv = ::tvm::topi::generic::schedule_injective(args[0], args[1]);
 });
 
 TEST(MicroStandaloneRuntime, BuildModule) {
   using namespace tvm;
-  auto tensor_type = relay::TensorType({2, 3}, ::tvm::Float(32));
+  auto tensor_type = relay::TensorType({2, 3}, ::tvm::runtime::DataType::Float(32));
   auto a = relay::Var("a", tensor_type);
   auto b = relay::Var("b", tensor_type);
   auto add_op = relay::Op::Get("add");
@@ -89,7 +89,7 @@ TEST(MicroStandaloneRuntime, BuildModule) {
   auto mod_f = build_mod.GetFunction("get_module", false);
   Map<tvm::Integer, tvm::Target> targets;
 
-  Target llvm_tgt = Target::Create("llvm");
+  Target llvm_tgt = Target("llvm");
   targets.Set(0, llvm_tgt);
   build_f(func, targets, llvm_tgt);
   std::string json = json_f();

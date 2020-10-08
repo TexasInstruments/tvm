@@ -198,6 +198,9 @@ tvm_t.*
 .local
 cmake-build-debug
 
+# Visual Studio
+.vs
+
 # Visual Studio Code
 .vscode
 
@@ -230,7 +233,3 @@ conda/pkg
 # nix files
 .envrc
 *.nix
-
-# antlr files
-*.tokens
-*.interp

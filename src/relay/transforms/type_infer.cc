@@ -26,16 +26,16 @@
  * most efficient code we need to obtain type information for the
  * IR.
  *
- * Like computation graphs the IR leaves most type information
- * implicit and relies performing analysis of the program to
- * generate this information.
+ * Similar to previous computation graph based IRs, the Relay IR leaves
+ * type information implicit and computes types by performing program
+ * analysis.
  *
- * This pass given an expression `e` will infer a type `t` for
- * the expression simultaneous checking the property `e : t`
- * (i.e we can show e has type t).
+ * Given an expression `e` this pass infers a type `t` for
+ * the expression as well as simultaneously checking the property `e : t`
+ * (i.e., we can show e has type t).
  *
- * If we can not infer a type or there are conflicting typing
- * constraints we will trigger an error.
+ * If we can not infer a type or there is a conflicting
+ * constraint it will emit errors.
  */
 #include <tvm/ir/error.h>
 #include <tvm/ir/type_functor.h>
@@ -369,12 +369,10 @@ class TypeInferencer : private ExprFunctor<Type(const Expr&)>,
 
     // Build a subsitituion map up from the function type and type arguments.
     // Eventually allow the type vars to be passed in.
+    CHECK(fn_ty->type_params.size() == ty_args.size())
+        << "number of type parameters does not match expected";
     for (size_t i = 0; i < ty_args.size(); ++i) {
       subst_map.Set(fn_ty->type_params[i], ty_args[i]);
-    }
-
-    for (size_t i = ty_args.size(); i < fn_ty->type_params.size(); ++i) {
-      subst_map.Set(fn_ty->type_params[i], IncompleteType(Kind::kType));
     }
 
     Type ret_type = fn_ty->ret_type;
@@ -444,6 +442,9 @@ class TypeInferencer : private ExprFunctor<Type(const Expr&)>,
                                  << "Incorrect number of type args in " << call->span << ": "
                                  << "Expected " << fn_ty_node->type_params.size() << "but got "
                                  << type_args.size());
+    }
+    for (size_t i = type_args.size(); i < fn_ty_node->type_params.size(); i++) {
+      type_args.push_back(IncompleteType(TypeKind::kType));
     }
 
     FuncType fn_ty = InstantiateFuncType(fn_ty_node, type_args);

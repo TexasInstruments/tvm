@@ -36,6 +36,12 @@
 
 namespace tvm {
 namespace runtime {
+
+/*! \brief Function pointer to custom allocator memalign. */
+using MemalignFunctionPtr = void* (*)(size_t, size_t);
+/*! \brief Function pointer to custom allocator free. */
+using FreeFunctionPtr = void (*)(void*);
+
 class CPUDeviceAPI final : public DeviceAPI {
  public:
   void SetDevice(TVMContext ctx) final {}
@@ -47,6 +53,12 @@ class CPUDeviceAPI final : public DeviceAPI {
   void* AllocDataSpace(TVMContext ctx, size_t nbytes, size_t alignment,
                        DLDataType type_hint) final {
     void* ptr;
+    // Use custom allocator if it is set.
+    if (custom_memalign_fn_ != nullptr) {
+      ptr = custom_memalign_fn_(alignment, nbytes);
+      if (ptr == nullptr) throw std::bad_alloc();
+      return ptr;
+    }
 #if _MSC_VER
     ptr = _aligned_malloc(nbytes, alignment);
     if (ptr == nullptr) throw std::bad_alloc();
@@ -62,6 +74,11 @@ class CPUDeviceAPI final : public DeviceAPI {
   }
 
   void FreeDataSpace(TVMContext ctx, void* ptr) final {
+    // Use custom allocator free if it is set.
+    if (custom_free_fn_ != nullptr) {
+      custom_free_fn_(ptr);
+      return;
+    }
 #if _MSC_VER
     _aligned_free(ptr);
 #else
@@ -80,10 +97,17 @@ class CPUDeviceAPI final : public DeviceAPI {
   void* AllocWorkspace(TVMContext ctx, size_t size, DLDataType type_hint) final;
   void FreeWorkspace(TVMContext ctx, void* data) final;
 
-  static const std::shared_ptr<CPUDeviceAPI>& Global() {
-    static std::shared_ptr<CPUDeviceAPI> inst = std::make_shared<CPUDeviceAPI>();
+  static CPUDeviceAPI* Global() {
+    // NOTE: explicitly use new to avoid exit-time destruction of global state
+    // Global state will be recycled by OS as the process exits.
+    static auto* inst = new CPUDeviceAPI();
     return inst;
   }
+
+  /*! \brief Optional custom memalign function. */
+  MemalignFunctionPtr custom_memalign_fn_ = nullptr;
+  /*! \brief Optional custom free function. */
+  FreeFunctionPtr custom_free_fn_ = nullptr;
 };
 
 struct CPUWorkspacePool : public WorkspacePool {
@@ -99,8 +123,16 @@ void CPUDeviceAPI::FreeWorkspace(TVMContext ctx, void* data) {
 }
 
 TVM_REGISTER_GLOBAL("device_api.cpu").set_body([](TVMArgs args, TVMRetValue* rv) {
-  DeviceAPI* ptr = CPUDeviceAPI::Global().get();
+  DeviceAPI* ptr = CPUDeviceAPI::Global();
   *rv = static_cast<void*>(ptr);
 });
+
+TVM_REGISTER_GLOBAL("runtime.contrib.set_custom_cpu_allocator")
+    .set_body([](TVMArgs args, TVMRetValue* ret) {
+      CPUDeviceAPI* ptr = CPUDeviceAPI::Global();
+      ptr->custom_memalign_fn_ = reinterpret_cast<MemalignFunctionPtr>(args[0].operator void*());
+      ptr->custom_free_fn_ = reinterpret_cast<FreeFunctionPtr>(args[1].operator void*());
+    });
+
 }  // namespace runtime
 }  // namespace tvm

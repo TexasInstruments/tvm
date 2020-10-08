@@ -103,10 +103,11 @@ class DeviceAPIManager {
   std::mutex mutex_;
   // constructor
   DeviceAPIManager() { std::fill(api_.begin(), api_.end(), nullptr); }
+  ~DeviceAPIManager() { std::fill(api_.begin(), api_.end(), nullptr); }
   // Global static variable.
   static DeviceAPIManager* Global() {
-    static DeviceAPIManager inst;
-    return &inst;
+    static DeviceAPIManager* inst = new DeviceAPIManager();
+    return inst;
   }
   // Get or initialize API.
   DeviceAPI* GetAPI(int type, bool allow_missing) {

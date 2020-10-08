@@ -195,7 +195,8 @@ class HexagonModuleNode final : public runtime::ModuleNode {
                     std::unordered_map<std::string, FunctionInfo> fmap, std::string asm_str,
                     std::string obj_str, std::string ir_str, std::string bc_str,
                     const std::set<std::string>& packed_c_abi)
-      : hexagon_device_(hexagon::Device::Global()),
+      : hexagon_device_(),
+        dl_handle_(nullptr),
         data_(data),
         fmt_(fmt),
         fmap_(fmap),
@@ -203,9 +204,8 @@ class HexagonModuleNode final : public runtime::ModuleNode {
         obj_(obj_str),
         ir_(ir_str),
         bc_(bc_str),
-        packed_c_abi_funcs_(packed_c_abi) {
-    dl_handle_ = hexagon_device_->Load(data, fmt);
-  }
+        packed_c_abi_funcs_(packed_c_abi) {}
+
   ~HexagonModuleNode() {
     if (dl_handle_) {
       hexagon_device_->Unload(dl_handle_);
@@ -213,6 +213,7 @@ class HexagonModuleNode final : public runtime::ModuleNode {
   }
 
   PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& sptr_to_self) final;
+  std::string GetSource(const std::string& format) final;
 
   const char* type_key() const final { return "hexagon"; }
 
@@ -333,6 +334,9 @@ PackedFunc HexagonModuleNode::GetFunction(const std::string& name,
   auto f = fmap_.find(name);
   if (f == fmap_.end()) return PackedFunc(nullptr);
 
+  if (!hexagon_device_) hexagon_device_ = hexagon::Device::Global();
+  if (!dl_handle_) dl_handle_ = hexagon_device_->Load(data_, fmt_);
+
   // Get function pointer from device.
   void* pf = hexagon_device_->Resolve(name);
   // The cast result and the original share ownership. Do the cast here
@@ -353,6 +357,16 @@ PackedFunc HexagonModuleNode::GetFunction(const std::string& name,
       hm->CallRemoteDirect(pf, args, rv);
     });
   }
+}
+
+std::string HexagonModuleNode::GetSource(const std::string& format) {
+  if (format == "s" || format == "asm") {
+    return asm_;
+  }
+  if (format == "ll") {
+    return ir_;
+  }
+  return "";
 }
 
 void HexagonModuleNode::RemapArgs(const TVMArgs& args, std::vector<TVMValue>& values,
@@ -428,17 +442,18 @@ void* HexagonModuleNode::CreateRemoteTensor(const DLTensor* t) const {
   uint32_t remote_as_int = reinterpret_cast<uintptr_t>(remote);
   void* remote_ss = reinterpret_cast<void*>(remote_as_int + size_ht);
 
-  HexagonDLTensor local = {.data = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(t->data)),
-                           .ctx_device_type = uint8_t(t->ctx.device_type),
-                           .pad0 = {0, 0, 0},
-                           .ctx_device_id = t->ctx.device_id,
-                           .ndim = t->ndim,
-                           .dtype_code = t->dtype.code,
-                           .dtype_bits = t->dtype.bits,
-                           .dtype_lanes = t->dtype.lanes,
-                           .shape = remote_as_int + size_ht,
-                           .strides = t->strides ? remote_as_int + size_ht + size_s : 0u,
-                           .byte_offset = t->byte_offset};
+  HexagonDLTensor local;
+  local.data = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(t->data));
+  local.ctx_device_type = uint8_t(t->ctx.device_type);
+  local.pad0[0] = local.pad0[1] = local.pad0[2] = 0;
+  local.ctx_device_id = t->ctx.device_id;
+  local.ndim = t->ndim;
+  local.dtype_code = t->dtype.code;
+  local.dtype_bits = t->dtype.bits;
+  local.dtype_lanes = t->dtype.lanes;
+  local.shape = remote_as_int + size_ht;
+  local.strides = t->strides ? remote_as_int + size_ht + size_s : 0u;
+  local.byte_offset = t->byte_offset;
 
   std::vector<uint64_t> local_ss(size_ss / 8);
   for (int i = 0; i != ndim; ++i) local_ss[i] = t->shape[i];

@@ -21,11 +21,11 @@
  * \file unary.cc
  * \brief Unary operators.
  */
-#include <topi/elemwise.h>
-#include <topi/transform.h>
 #include <tvm/relay/attrs/transform.h>
 #include <tvm/relay/expr.h>
 #include <tvm/relay/op.h>
+#include <tvm/topi/elemwise.h>
+#include <tvm/topi/transform.h>
 
 #include "../make_op.h"
 #include "../op_common.h"
@@ -290,6 +290,29 @@ This function takes a tensor, a minimum value `a_min`, and a maximum value `a_ma
     .set_attrs_type<ClipAttrs>()
     .set_support_level(3);
 
+// relay.fixed_point_multiply
+TVM_REGISTER_NODE_TYPE(FixedPointMultiplyAttrs);
+
+TVM_REGISTER_GLOBAL("relay.op._make.fixed_point_multiply")
+    .set_body_typed([](Expr a, int32_t multiplier, int32_t shift) {
+      auto attrs = make_object<FixedPointMultiplyAttrs>();
+      attrs->multiplier = multiplier;
+      attrs->shift = shift;
+      static const Op& op = Op::Get("fixed_point_multiply");
+      return Call(op, {a}, Attrs(attrs), {});
+    });
+
+RELAY_REGISTER_OP("fixed_point_multiply")
+    .describe(R"code(fixed point multiplication)code" TVM_ADD_FILELINE)
+    .set_num_inputs(1)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .add_type_rel("Identity", IdentityRel)
+    .set_attr<TOpPattern>("TOpPattern", kElemWise)
+    .set_attr<TOpIsStateful>("TOpIsStateful", false)
+    .set_attr<FInferCorrectLayout>("FInferCorrectLayout", ElemwiseArbitraryLayout)
+    .set_attrs_type<FixedPointMultiplyAttrs>()
+    .set_support_level(10);
+
 RELAY_REGISTER_UNARY_OP("floor")
     .describe(R"code(Returns the floor of input array, computed element-wise.
 )code" TVM_ADD_FILELINE)
@@ -426,7 +449,6 @@ RELAY_REGISTER_OP("shape_of")
     // Use kOpaque for shape_of op for now since it won't be performance critic,
     // and it makes things easier for dynamic shape func
     .set_attr<TOpPattern>("TOpPattern", kOpaque)
-    .set_attr<FInferCorrectLayout>("FInferCorrectLayout", ElemwiseArbitraryLayout)
     .set_support_level(10)
     .set_attr<FTVMCompute>("FTVMCompute", ShapeOfCompute);
 
@@ -439,7 +461,7 @@ bool NdarraySizeRel(const Array<Type>& types, int num_inputs, const Attrs& attrs
   CHECK(tt != nullptr);
   const auto* param = attrs.as<NdarraySizeAttrs>();
   CHECK(param != nullptr);
-  reporter->Assign(types[1], TensorType({1}, param->dtype));
+  reporter->Assign(types[1], TensorType({}, param->dtype));
   return true;
 }
 

@@ -26,7 +26,10 @@ def verify_reduction_grad(red_fn, d_shape, axis=None, keepdims=False, exclude=Fa
 
 
 def test_reduction_grad():
-    for op in (relay.sum, relay.variance, relay.mean):
+    def _unbiased_variance(x, axis=None, keepdims=False, exclude=False):
+        return relay.variance(x, axis=axis, keepdims=keepdims, exclude=exclude, unbiased=True)
+
+    for op in (relay.sum, relay.variance, _unbiased_variance, relay.mean):
         verify_reduction_grad(op, (4, 2))
         verify_reduction_grad(op, (4, 2), axis=-1, keepdims=True)
         verify_reduction_grad(op, (4, 2, 1), axis=(1, 2), exclude=True)
@@ -35,7 +38,9 @@ def test_reduction_grad():
 
 def verify_max_grad(d_shape, axis=None, keepdims=False, exclude=False):
     data = relay.var("data", relay.TensorType(d_shape, "float32"))
-    fwd_func = relay.Function([data], relay.max(data, axis=axis, keepdims=keepdims, exclude=exclude))
+    fwd_func = relay.Function(
+        [data], relay.max(data, axis=axis, keepdims=keepdims, exclude=exclude)
+    )
     check_grad(fwd_func, scale=1e-3)
 
 

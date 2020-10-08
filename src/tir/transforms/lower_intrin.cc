@@ -40,8 +40,15 @@ class IntrinInjecter : public tvm::arith::IRMutatorWithAnalyzer {
   using IRMutatorWithAnalyzer::VisitExpr_;
   using IRMutatorWithAnalyzer::VisitStmt_;
 
-  IntrinInjecter(arith::Analyzer* analyzer, std::string target) : IRMutatorWithAnalyzer(analyzer) {
+  IntrinInjecter(arith::Analyzer* analyzer, std::string target, std::string mtriple = "")
+      : IRMutatorWithAnalyzer(analyzer) {
     patterns_.push_back("tvm.intrin.rule." + target + ".");
+
+    bool is_llvm_aarch64 = (mtriple.find("aarch64") != std::string::npos);
+    if (is_llvm_aarch64) {
+      patterns_.push_back("tvm.intrin.rule." + target + "." + "aarch64.");
+    }
+
     patterns_.push_back("tvm.intrin.rule.default.");
     fma_ = runtime::Registry::Get(patterns_[0] + "fma");
     if (target == "stackvm") {
@@ -105,14 +112,22 @@ class IntrinInjecter : public tvm::arith::IRMutatorWithAnalyzer {
         }
       }
     } else {
-      // uncommon case
-      DLOG(INFO) << "LowerFloorDiv: Cannot decide the sign of divisor";
-      // b >= 0 => (rmod >=0 ? rdiv : rdiv - 1)
-      // b < 0  => (rmod <= 0 ? rdiv : rdiv - 1)
-      PrimExpr rdiv = truncdiv(op->a, op->b);
-      PrimExpr rmod = truncmod(op->a, op->b);
-      return tir::Select((op->b >= 0 && rmod >= 0) || (op->b < 0 && rmod <= 0), rdiv,
-                         rdiv - make_const(dtype, 1));
+      if (dtype.is_float()) {
+        // floor(a / b)
+        return VisitExpr_(tvm::floor(op->a / op->b).as<CallNode>());
+      } else {
+        // uncommon case
+        DLOG(INFO) << "LowerFloorDiv: Cannot decide the sign of divisor";
+        auto rmod = tir::Var("rmod", dtype);
+        auto rdiv = tir::Var("rdiv", dtype);
+        // b >= 0 => (rmod >=0 ? rdiv : rdiv - 1)
+        // b < 0  => (rmod <= 0 ? rdiv : rdiv - 1)
+        PrimExpr let_rdiv =
+            tir::Let(rdiv, truncdiv(op->a, op->b),
+                     tir::Select((op->b >= 0 && rmod >= 0) || (op->b < 0 && rmod <= 0), rdiv,
+                                 rdiv - make_const(dtype, 1)));
+        return Let(rmod, truncmod(op->a, op->b), let_rdiv);
+      }
     }
   }
 
@@ -151,14 +166,21 @@ class IntrinInjecter : public tvm::arith::IRMutatorWithAnalyzer {
         }
       }
     } else {
-      // uncommon case
-      DLOG(INFO) << "LowerFloorMod: Cannot decide the sign of divsor and divident";
-      PrimExpr rmod = truncmod(op->a, op->b);
-      // b > 0 && rmod >= 0 -> rmod
-      // b > 0 && rmod < 0  -> rmod + b
-      // b < 0 && rmod < 0 -> rmod
-      // b < 0 && rmod > 0 -> rmod + b
-      return tir::Select((op->b >= 0 && rmod >= 0) || (op->b < 0 && rmod <= 0), rmod, rmod + op->b);
+      if (dtype.is_float()) {
+        // a - floor(a / b) * b
+        return op->a - (VisitExpr_(tvm::floor(op->a / op->b).as<CallNode>()) * op->b);
+      } else {
+        // uncommon case
+        DLOG(INFO) << "LowerFloorMod: Cannot decide the sign of divsor and divident";
+        auto rmod = tir::Var("rmod", dtype);
+        // b > 0 && rmod >= 0 -> rmod
+        // b > 0 && rmod < 0  -> rmod + b
+        // b < 0 && rmod < 0 -> rmod
+        // b < 0 && rmod > 0 -> rmod + b
+        return Let(
+            rmod, truncmod(op->a, op->b),
+            Select((op->b >= 0 && rmod >= 0) || (op->b < 0 && rmod <= 0), rmod, rmod + op->b));
+      }
     }
   }
 
@@ -287,7 +309,9 @@ Pass LowerIntrin() {
     auto target = f->GetAttr<Target>(tvm::attr::kTarget);
     CHECK(target.defined()) << "LowerIntrin: Require the target attribute";
     arith::Analyzer analyzer;
-    n->body = IntrinInjecter(&analyzer, target.value()->id->name)(std::move(n->body));
+    auto mtriple = target.value()->GetAttr<runtime::String>("mtriple", "");
+    n->body =
+        IntrinInjecter(&analyzer, target.value()->kind->name, mtriple.value())(std::move(n->body));
     return f;
   };
   return CreatePrimFuncPass(pass_func, 0, "tir.LowerIntrin", {});

@@ -18,8 +18,6 @@
  */
 
 #include <gtest/gtest.h>
-#include <topi/broadcast.h>
-#include <topi/generic/injective.h>
 #include <tvm/driver/driver_api.h>
 #include <tvm/ir/module.h>
 #include <tvm/node/structural_equal.h>
@@ -32,6 +30,8 @@
 #include <tvm/runtime/packed_func.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/te/operation.h>
+#include <tvm/topi/broadcast.h>
+#include <tvm/topi/generic/injective.h>
 
 using namespace tvm;
 
@@ -95,7 +95,7 @@ TEST(Relay, Sequential) {
   pass_ctx->config.Set("relay.fallback_device_type", Integer(1));
   {
     tvm::With<relay::transform::PassContext> ctx_scope(pass_ctx);
-    tvm::With<tvm::Target> tctx(tvm::Target::Create("llvm"));
+    tvm::With<tvm::Target> tctx(tvm::Target("llvm"));
     mod = seq(mod);
   }
 

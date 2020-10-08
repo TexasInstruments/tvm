@@ -25,12 +25,14 @@
 #include <dmlc/memory_io.h>
 #include <tvm/runtime/c_runtime_api.h>
 #include <tvm/runtime/registry.h>
-#include <tvm/runtime/vm.h>
+#include <tvm/runtime/vm/executable.h>
+#include <tvm/runtime/vm/vm.h>
 
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -248,6 +250,13 @@ void Executable::SaveConstantSection(dmlc::Stream* strm) {
   for (const auto& it : arrays) {
     runtime::SaveDLTensor(strm, it);
   }
+
+  // Save the const to device mapping.
+  std::vector<size_t> const_device_type;
+  for (auto dev_type : this->const_device_type) {
+    const_device_type.push_back(static_cast<size_t>(dev_type));
+  }
+  strm->Write(const_device_type);
 }
 
 void Executable::SavePrimitiveOpNames(dmlc::Stream* strm) {
@@ -350,6 +359,7 @@ VMInstructionSerializer SerializeInstruction(const Instruction& instr) {
       fields.push_back(dtype.code);
       fields.push_back(dtype.bits);
       fields.push_back(dtype.lanes);
+      fields.push_back(instr.alloc_storage.device_type);
       fields.push_back(instr.dst);
       break;
     }
@@ -422,6 +432,16 @@ VMInstructionSerializer SerializeInstruction(const Instruction& instr) {
       fields.assign({instr.shape_of.tensor, instr.dst});
       break;
     }
+    case Opcode::ReshapeTensor: {
+      // Number of fields = 3
+      fields.assign({instr.reshape_tensor.tensor, instr.reshape_tensor.newshape, instr.dst});
+      break;
+    }
+    case Opcode::DeviceCopy: {
+      // Number of fields = 4
+      fields.assign({instr.src, instr.src_device_type, instr.dst_device_type, instr.dst});
+      break;
+    }
     default:
       LOG(FATAL) << "Invalid opcode" << static_cast<int>(instr.op);
       break;
@@ -436,7 +456,7 @@ void Executable::SaveCodeSection(dmlc::Stream* strm) {
   for (const auto& func : this->functions) {
     // Save the function info.
     VMFunctionSerializer func_format(func.name, func.register_file_size, func.instructions.size(),
-                                     func.params);
+                                     func.params, func.params_device_type);
     func_format.Save(strm);
 
     // Serialize each instruction.
@@ -502,6 +522,14 @@ void Executable::LoadConstantSection(dmlc::Stream* strm) {
     runtime::NDArray constant;
     STREAM_CHECK(constant.Load(strm), "constant");
     this->constants.push_back(constant);
+  }
+
+  // Load the const to device mapping.
+  std::vector<size_t> const_device_type;
+  STREAM_CHECK(strm->Read(&const_device_type), "constant");
+  CHECK_EQ(size, const_device_type.size());
+  for (auto dev : const_device_type) {
+    this->const_device_type.push_back(static_cast<Index>(dev));
   }
 }
 
@@ -616,7 +644,8 @@ Instruction DeserializeInstruction(const VMInstructionSerializer& instr) {
       return Instruction::AllocClosure(clo_index, num_freevar, free_vars, dst);
     }
     case Opcode::AllocStorage: {
-      DCHECK_GE(instr.fields.size(), 6U);
+      // Number of fields = 7
+      DCHECK_GE(instr.fields.size(), 7U);
       Index allocation_size = instr.fields[0];
       Index alignment = instr.fields[1];
 
@@ -625,9 +654,10 @@ Instruction DeserializeInstruction(const VMInstructionSerializer& instr) {
       dtype.bits = instr.fields[3];
       dtype.lanes = instr.fields[4];
 
-      RegName dst = instr.fields[5];
+      Index device_type = instr.fields[5];
+      RegName dst = instr.fields[6];
 
-      return Instruction::AllocStorage(allocation_size, alignment, dtype, dst);
+      return Instruction::AllocStorage(allocation_size, alignment, dtype, device_type, dst);
     }
     case Opcode::If: {
       // Number of fields = 4
@@ -693,6 +723,17 @@ Instruction DeserializeInstruction(const VMInstructionSerializer& instr) {
       DCHECK_EQ(instr.fields.size(), 2U);
       return Instruction::ShapeOf(instr.fields[0], instr.fields[1]);
     }
+    case Opcode::ReshapeTensor: {
+      // Number of fields = 3
+      DCHECK_EQ(instr.fields.size(), 3U);
+      return Instruction::ReshapeTensor(instr.fields[0], instr.fields[1], instr.fields[2]);
+    }
+    case Opcode::DeviceCopy: {
+      // Number of fields = 4
+      DCHECK_EQ(instr.fields.size(), 4U);
+      return Instruction::DeviceCopy(instr.fields[0], instr.fields[1], instr.fields[2],
+                                     instr.fields[3]);
+    }
     default:
       LOG(FATAL) << "Invalid opcode" << instr.opcode;
       return Instruction();
@@ -722,7 +763,7 @@ void Executable::LoadCodeSection(dmlc::Stream* strm) {
 
     // Create the VM function.
     VMFunction vm_func = VMFunction(loaded_func.name, loaded_func.params, instructions,
-                                    loaded_func.register_file_size);
+                                    loaded_func.register_file_size, loaded_func.params_device_type);
     auto it = this->global_map.find(loaded_func.name);
     CHECK(it != this->global_map.end());
     CHECK_LE(it->second, this->global_map.size());

@@ -18,8 +18,6 @@
  */
 
 #include <gtest/gtest.h>
-#include <topi/broadcast.h>
-#include <topi/generic/injective.h>
 #include <tvm/driver/driver_api.h>
 #include <tvm/ir/module.h>
 #include <tvm/relay/analysis.h>
@@ -32,6 +30,8 @@
 #include <tvm/runtime/packed_func.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/te/operation.h>
+#include <tvm/topi/broadcast.h>
+#include <tvm/topi/generic/injective.h>
 
 using namespace tvm;
 using namespace tvm::relay;
@@ -113,7 +113,7 @@ TEST(Relay, BuildModule) {
   auto json_f = build_mod.GetFunction("get_graph_json", false);
   auto mod_f = build_mod.GetFunction("get_module", false);
   Map<tvm::Integer, tvm::Target> targets;
-  Target llvm_tgt = Target::Create("llvm");
+  Target llvm_tgt = Target("llvm");
   targets.Set(0, llvm_tgt);
   auto relay_mod = tvm::IRModule::FromExpr(func);
   build_f(relay_mod, targets, llvm_tgt);

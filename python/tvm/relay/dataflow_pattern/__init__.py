@@ -22,6 +22,7 @@ import tvm._ffi
 from tvm.relay.expr import RelayExpr as Expr
 
 from ... import _ffi as tvm_ffi
+from ... import ir as _ir
 from ...ir import make_node
 from ...ir.base import Node
 from ...runtime import Object
@@ -38,14 +39,12 @@ def register_df_node(type_key=None):
         The type key of the node.
     """
     if not isinstance(type_key, str):
-        return tvm._ffi.register_object(
-            "relay.dataflow_pattern." + type_key.__name__)(type_key)
+        return tvm._ffi.register_object("relay.dataflow_pattern." + type_key.__name__)(type_key)
     return tvm._ffi.register_object(type_key)
 
 
 class DFPattern(Node):
-    """Base class of all Patterns.
-    """
+    """Base class of all Patterns."""
 
     def __call__(self, *args):
         return CallPattern(self, list(args))
@@ -145,10 +144,12 @@ class DFPattern(Node):
         """
         return match(self, expr)
 
-    def partition(self,
-                  expr: Expr,
-                  attrs: Optional[Dict[str, Object]] = None,
-                  check: Callable[[Expr], bool] = lambda x: True) -> Expr:
+    def partition(
+        self,
+        expr: Expr,
+        attrs: Optional[Dict[str, Object]] = None,
+        check: Callable[[Expr], bool] = lambda x: True,
+    ) -> Expr:
         """
         Parition the expression into functions defined by this pattern
 
@@ -485,8 +486,8 @@ class VarPattern(DFPattern):
 
 @register_df_node
 class ConstantPattern(DFPattern):
-    """A pattern matching a Relay Constant.
-    """
+    """A pattern matching a Relay Constant."""
+
     def __init__(self):
         self.__init_handle_by_constructor__(ffi.ConstantPattern)
 
@@ -511,11 +512,13 @@ class CallPattern(DFPattern):
         used in advanced usecase of template functions.
     """
 
-    def __init__(self,
-                 op: "DFPattern",
-                 args: List["DFPattern"],
-                 attrs: Optional[tvm.ir.attrs.Attrs] = None,
-                 type_args: Optional[List[tvm.ir.type.Type]] = None):
+    def __init__(
+        self,
+        op: "DFPattern",
+        args: List["DFPattern"],
+        attrs: Optional[tvm.ir.attrs.Attrs] = None,
+        type_args: Optional[List[tvm.ir.type.Type]] = None,
+    ):
         if not type_args:
             type_args = []
         self.__init_handle_by_constructor__(ffi.CallPattern, op, args, attrs, type_args)
@@ -582,8 +585,7 @@ class AltPattern(DFPattern):
 
 @register_df_node
 class WildcardPattern(DFPattern):
-    """A pattern which matches anything.
-    """
+    """A pattern which matches anything."""
 
     def __init__(self):
         self.__init_handle_by_constructor__(ffi.WildcardPattern)
@@ -687,7 +689,16 @@ class DFPatternCallback:
     the callback returns.
 
     Users are expect to inherit from this class and provide a "self.pattern" to match
+
+    Parameters
+    ----------
+    require_type: bool
+        Whether InferType is required to be run before the callback.
     """
+
+    def __init__(self, require_type=False):
+        self.pattern = None
+        self.require_type = require_type
 
     def rewrite(self, expr: Expr) -> Expr:
         """
@@ -725,13 +736,15 @@ class DFPatternCallback:
         """
         raise "Unimplemented"
 
+
 class _DFPatternCallback(Object):
     """C++ implemenation"""
-    def __init__(self, pattern, callback):
-        self.__init_handle_by_constructor__(ffi.DFPatternCallback, pattern, callback)
+
+    def __init__(self, pattern, callback, require_type):
+        self.__init_handle_by_constructor__(ffi.DFPatternCallback, pattern, callback, require_type)
 
 
-def rewrite(callbacks, expr: Expr) -> Expr:
+def rewrite(callbacks, expr: Expr, mod: Optional[_ir.IRModule] = None) -> Expr:
     """
     Rewrite expression with the given callbacks.
 
@@ -741,26 +754,31 @@ def rewrite(callbacks, expr: Expr) -> Expr:
         The input callback or list of callbacks.
     expr : tvm.relay.Expr
         The expression to rewrite.
+    mod : Optional[tvm.ir.IRModule]
+        The module that associates with the expression.
 
     Returns
     -------
     result : tvm.relay.Expr
         The Expression with matched subgraphs rewritten by the callbacks.
     """
-    if isinstance(callbacks, DFPatternCallback):
-        tmp = [_DFPatternCallback(callbacks.pattern, callbacks.callback)]
-    else:
-        tmp = []
-        for callback in callbacks:
-            tmp.append(_DFPatternCallback(callback.pattern, callback.callback))
+    if mod is None:
+        mod = _ir.IRModule()
+    callbacks = [callbacks] if isinstance(callbacks, DFPatternCallback) else callbacks
+    tmp = []
+    for callback in callbacks:
+        assert callback.pattern is not None
+        tmp.append(_DFPatternCallback(callback.pattern, callback.callback, callback.require_type))
 
-    return ffi.rewrite(tmp, expr)
+    return ffi.rewrite(tmp, expr, mod)
 
 
-def partition(pattern: "DFPattern",
-              expr: Expr,
-              attrs: Optional[Dict[str, Object]] = None,
-              check: Callable[[Expr], bool] = lambda x: True) -> Expr:
+def partition(
+    pattern: "DFPattern",
+    expr: Expr,
+    attrs: Optional[Dict[str, Object]] = None,
+    check: Callable[[Expr], bool] = lambda x: True,
+) -> Expr:
     """
     Parition the expression into a series of functions that match the pattern
 

@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import pytest
 import numpy as np
 import tvm
 from tvm import te
@@ -26,6 +27,7 @@ from tvm.relay import TensorType, Tuple, If, Clause, PatternConstructor, Pattern
 from tvm.relay import GlobalVar, Call
 from tvm.relay.transform import gradient
 from tvm.relay.testing import add_nat_definitions, make_nat_expr, run_infer_type
+
 
 def check_eval(expr, expected_result, mod=None, rtol=1e-07):
     ctx = tvm.context("llvm", 0)
@@ -40,19 +42,17 @@ def run_opt_pass(expr, passes):
     mod = tvm.IRModule.from_expr(expr)
     seq = tvm.transform.Sequential(passes)
     with tvm.transform.PassContext(opt_level=3):
-       mod = seq(mod)
+        mod = seq(mod)
     entry = mod["main"]
     return entry if isinstance(expr, relay.Function) else entry.body
 
 
 def tipe(expr):
-    return run_opt_pass(expr, [transform.PartialEvaluate(),
-                               transform.InferType()])
+    return run_opt_pass(expr, [transform.PartialEvaluate(), transform.InferType()])
 
 
 def dcpe(expr, mod=None, grad=False):
-    passes = [transform.PartialEvaluate(),
-              transform.DeadCodeElimination(inline_once=True)]
+    passes = [transform.PartialEvaluate(), transform.DeadCodeElimination(inline_once=True)]
     if grad:
         expr = gradient(run_infer_type(expr))
     if mod:
@@ -173,10 +173,9 @@ def test_function_invalidate():
 def test_head_cons():
     mod = tvm.IRModule()
     p = Prelude(mod)
-    hd = p.hd
     t = TypeVar("t")
     x = Var("x", t)
-    body = hd(p.cons(x, p.nil()))
+    body = p.hd(p.cons(x, p.nil()))
     f = Function([x], body, None, [t])
     res = dcpe(f, mod)
     assert tvm.ir.structural_equal(res, Function([x], x, t, [t]))
@@ -339,24 +338,5 @@ def test_tuple_match():
     tvm.ir.assert_structural_equal(dcpe(x), const(2))
 
 
-if __name__ == '__main__':
-    test_nat_update()
-    test_ref()
-    test_tuple()
-    test_empty_ad()
-    test_const_inline()
-    test_ad()
-    test_if_ref()
-    test_function_invalidate()
-    test_head_cons()
-    test_map()
-    test_loop()
-    test_swap_loop()
-    test_abs_diff()
-    test_double()
-    test_nat_id()
-    test_global_match_nat_id()
-    test_match_nat_id()
-    test_concat()
-    test_triangle_number()
-    test_tuple_match()
+if __name__ == "__main__":
+    pytest.main([__file__])

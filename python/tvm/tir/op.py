@@ -26,19 +26,19 @@ from . import _ffi_api
 
 
 def _pack_buffer(buf):
-    """Build intrinsics that packs the buffer.
-    """
-    assert buf.shape
+    """Build intrinsics that packs the buffer."""
     shape = Call("handle", "tir.tvm_stack_make_shape", buf.shape)
     strides = Call("handle", "tir.tvm_stack_make_shape", buf.strides) if buf.strides else 0
-    pack_args = [buf.data,
-                 shape,
-                 strides,
-                 len(buf.shape),
-                 const(0, dtype=buf.dtype),
-                 buf.elem_offset]
-    return Call("handle", Op.get("tir.tvm_stack_make_array"),
-                pack_args)
+    pack_args = [
+        buf.data,
+        shape,
+        strides,
+        len(buf.shape),
+        const(0, dtype=buf.dtype),
+        buf.elem_offset,
+    ]
+    return Call("handle", Op.get("tir.tvm_stack_make_array"), pack_args)
+
 
 def call_packed(*args):
     """Build expression by call an external packed function.
@@ -65,8 +65,7 @@ def call_packed(*args):
     te.extern : Create tensor with extern function call.
     """
     call_args = [_pack_buffer(x) if isinstance(x, Buffer) else x for x in args]
-    return Call(
-        "int32", Op.get("tir.tvm_call_packed"), call_args)
+    return Call("int32", Op.get("tir.tvm_call_packed"), call_args)
 
 
 def call_intrin(dtype, func_name, *args):
@@ -91,8 +90,7 @@ def call_intrin(dtype, func_name, *args):
     call : PrimExpr
         The call expression.
     """
-    return Call(
-        dtype, func_name, convert(args))
+    return Call(dtype, func_name, convert(args))
 
 
 def call_pure_extern(dtype, func_name, *args):
@@ -114,8 +112,7 @@ def call_pure_extern(dtype, func_name, *args):
     call : PrimExpr
         The call expression.
     """
-    return Call(
-        dtype, Op.get("tir.call_pure_extern"), convert((StringImm(func_name),) + args))
+    return Call(dtype, Op.get("tir.call_pure_extern"), convert((StringImm(func_name),) + args))
 
 
 def call_extern(dtype, func_name, *args):
@@ -137,8 +134,7 @@ def call_extern(dtype, func_name, *args):
     call : PrimExpr
         The call expression.
     """
-    return Call(
-        dtype, Op.get("tir.call_extern"), convert((StringImm(func_name),) + args))
+    return Call(dtype, Op.get("tir.call_extern"), convert((StringImm(func_name),) + args))
 
 
 def call_llvm_intrin(dtype, name, *args):
@@ -162,11 +158,12 @@ def call_llvm_intrin(dtype, name, *args):
     """
     # pylint: disable=import-outside-toplevel
     from tvm.target import codegen
+
     llvm_id = codegen.llvm_lookup_intrinsic_id(name)
     assert llvm_id != 0, "%s is not an LLVM intrinsic" % name
     return call_intrin(
-        dtype, Op.get("tir.call_llvm_intrin"),
-        tvm.tir.const(llvm_id, 'uint32'), *args)
+        dtype, Op.get("tir.call_llvm_intrin"), tvm.tir.const(llvm_id, "uint32"), *args
+    )
 
 
 def call_llvm_pure_intrin(dtype, name, *args):
@@ -190,11 +187,12 @@ def call_llvm_pure_intrin(dtype, name, *args):
     """
     # pylint: disable=import-outside-toplevel
     from tvm.target import codegen
+
     llvm_id = codegen.llvm_lookup_intrinsic_id(name)
     assert llvm_id != 0, "%s is not an LLVM intrinsic" % name
     return call_intrin(
-        dtype, Op.get("tir.call_llvm_pure_intrin"),
-        tvm.tir.const(llvm_id, 'uint32'), *args)
+        dtype, Op.get("tir.call_llvm_pure_intrin"), tvm.tir.const(llvm_id, "uint32"), *args
+    )
 
 
 def any(*args):
@@ -248,6 +246,7 @@ def all(*args):
 def _tvm_default_trace_action(*args):
     print(list(args))
 
+
 def trace(args, trace_action="tvm.default_trace_action"):
     """Trace tensor data at the runtime.
 
@@ -277,9 +276,7 @@ def trace(args, trace_action="tvm.default_trace_action"):
         raise Exception("tvm.tir.trace consumes the args as list type")
     call_args = [_pack_buffer(x) if isinstance(x, Buffer) else x for x in args]
     call_args.insert(0, trace_action)
-    return tvm.tir.Call(
-        args[-1].dtype, Op.get("tir.tvm_call_trace_packed"), call_args)
-
+    return tvm.tir.Call(args[-1].dtype, Op.get("tir.tvm_call_trace_packed"), call_args)
 
 
 def min_value(dtype):
@@ -965,6 +962,36 @@ def popcount(x):
     """
     return call_intrin(x.dtype, "tir.popcount", x)
 
+
+def q_multiply_shift(x, y, q, s):
+    """Execute a multiplication between two Q-numbers x and y
+    followed by a right shift s. The mathematical expression is:
+
+       out = round(x*y*2^-s)
+
+    More about Q-numbers here: https://en.wikipedia.org/wiki/Q_(number_format)
+    The rounding rule is to the nearest value, rounding half up
+    (i.e., round(x.1) = x and round (x.5) = x+1)
+
+    Parameters
+    ----------
+    x : PrimExpr
+        First Q-number
+    y : PrimExpr
+        Second Q-number
+    q : PrimExpr
+        Number of fractional bits in x and y. Needs to be > 0
+    s : PrimExpr
+        Integer shift
+
+    Returns
+    -------
+    y : PrimExpr
+        The result.
+    """
+    return call_intrin("int32", "tir.q_multiply_shift", x, y, q, s)
+
+
 def fmod(x, y):
     """Return the remainder of x divided by y with the same sign as x.
 
@@ -1202,20 +1229,23 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
         k = te.reduce_axis((0, m), name="k")
         B = te.compute((n,), lambda i: mysum(A[i, k], axis=k), name="B")
     """
+
     def _reduce_directly(*args):
         num = len(args)
         # process `where` is None
         if num == 3 and args[2] is None:
             num = 2
         res = args[0]
-        for i in range(num-1):
-            res = fcombine(res, args[i+1])
+        for i in range(num - 1):
+            res = fcombine(res, args[i + 1])
         return res
 
-    def _make_reduce(expr, axis, where=None):
+    def _make_reduce(expr, axis, where=None, init=None):
         code = fcombine.__code__
         assert fcombine.__code__.co_argcount == 2
         expr = convert(expr)
+        if init is not None:
+            init = convert(init)
         if isinstance(expr, Array):
             size = len(expr)
             larr = []
@@ -1228,6 +1258,17 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
                 larr.append(Var(lname, dtype))
                 rname = code.co_varnames[1] + "_" + str(i)
                 rarr.append(Var(rname, dtype))
+            if init is not None:
+                init = convert(init)
+                assert isinstance(init, Array)
+                assert len(init) == size
+                for init_i in range(size):
+                    init_i = convert(init_i)
+                    assert isinstance(
+                        init_i, (tvm.tir.ProducerLoad, tvm.tir.IntImm, tvm.tir.FloatImm)
+                    )
+            else:
+                init = convert([])
             lhs = convert(larr)
             rhs = convert(rarr)
             result = fcombine(lhs, rhs)
@@ -1243,21 +1284,30 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
             lhs = convert([lvar])
             rhs = convert([rvar])
             expr = convert([expr])
+            if init is not None:
+                assert isinstance(init, (tvm.tir.ProducerLoad, tvm.tir.IntImm, tvm.tir.FloatImm))
+                init = convert([init])
         result = convert(result)
         id_elem = convert(id_elem)
         combiner = CommReducer(lhs, rhs, result, id_elem)
         axis = convert(axis if isinstance(axis, (list, tuple)) else [axis])
         if where is None:
             where = convert(True)
-        outputs = tuple(tvm.tir.Reduce(combiner, expr, axis, where, i)
-                        for i in range(size))
+        if init is None:
+            outputs = tuple(
+                tvm.tir.Reduce(combiner, expr, axis, where, i, convert([])) for i in range(size)
+            )
+        else:
+            outputs = tuple(
+                tvm.tir.Reduce(combiner, expr, axis, where, i, init) for i in range(size)
+            )
         return outputs[0] if size == 1 else outputs
 
     # pylint: disable=keyword-arg-before-vararg
-    def reducer(expr, axis, where=None, *args):
+    def reducer(expr, axis, where=None, init=None, *args):
         if isinstance(axis, (tvm.tir.IterVar, list, tuple)):
             assert not args
-            return _make_reduce(expr, axis, where)
+            return _make_reduce(expr, axis, where, init)
         if where is None:
             assert not args
             return _reduce_directly(expr, axis)
@@ -1298,7 +1348,8 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
     reducer.__doc__ = doc_str.format(name)
     return reducer
 
+
 # pylint: disable=unnecessary-lambda
-sum = comm_reducer(lambda x, y: x+y, lambda t: const(0, dtype=t), name="sum")
+sum = comm_reducer(lambda x, y: x + y, lambda t: const(0, dtype=t), name="sum")
 min = comm_reducer(lambda x, y: _ffi_api._OpMin(x, y), max_value, name="min")
 max = comm_reducer(lambda x, y: _ffi_api._OpMax(x, y), min_value, name="max")

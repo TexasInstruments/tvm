@@ -28,6 +28,7 @@
 #include <tvm/runtime/c_runtime_api.h>
 #include <tvm/runtime/crt/crt.h>
 #include <tvm/runtime/crt/func_registry.h>
+#include <tvm/runtime/crt/internal/common/memory.h>
 #include <tvm/runtime/crt/internal/common/ndarray.h>
 #include <tvm/runtime/crt/internal/graph_runtime/graph_runtime.h>
 #include <tvm/runtime/crt/memory.h>
@@ -259,9 +260,7 @@ int TVMModGetFunction(TVMModuleHandle mod, const char* func_name, int query_impo
 
 int ModuleGetFunction(TVMValue* args, int* type_codes, int num_args, TVMValue* ret_value,
                       int* ret_type_codes) {
-  int function_index;
   TVMModuleHandle mod;
-  int module_index;
   const char* name;
   int to_return;
   int query_imports;
@@ -308,9 +307,16 @@ int TVMFuncFree(TVMFunctionHandle func) {
   return 0;
 }
 
-tvm_crt_error_t TVMInitializeRuntime() {
+tvm_crt_error_t TVMInitializeRuntime(uint8_t* memory_pool, size_t memory_pool_size_bytes,
+                                     size_t page_size_bytes_log2) {
   int idx;
-  int error;
+  tvm_crt_error_t error;
+
+  error =
+      TVMInitializeGlobalMemoryManager(memory_pool, memory_pool_size_bytes, page_size_bytes_log2);
+  if (error != kTvmErrorNoError) {
+    return error;
+  }
 
   system_lib_handle = kTVMModuleHandleUninitialized;
 
@@ -322,14 +328,14 @@ tvm_crt_error_t TVMInitializeRuntime() {
   }
 
   error = TVMFuncRegisterGlobal("runtime.SystemLib", &SystemLibraryCreate, 0);
-  if (error != 0) {
+  if (error != kTvmErrorNoError) {
     return error;
   }
 
   error = TVMFuncRegisterGlobal("tvm.rpc.server.ModuleGetFunction", &ModuleGetFunction, 0);
-  if (error != 0) {
+  if (error != kTvmErrorNoError) {
     return error;
   }
 
-  return 0;
+  return kTvmErrorNoError;
 }
