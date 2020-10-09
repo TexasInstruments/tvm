@@ -151,8 +151,10 @@ def find_out_nodes(all_nodes, this_node):
     output_nodes = []
     for node, node_idx in all_nodes.items():
         if isinstance(node, relay.expr.Call):
-            if this_node in node.args:
-                output_nodes.append(str(node_idx))
+            # Count multiple times for uses: e.g. tflite_nasnet_mobile, %110 = add(%109, %109)
+            for node_arg in node.args:
+                if this_node == node_arg:
+                    output_nodes.append(str(node_idx))
         elif isinstance(node, relay.expr.TupleGetItem):
             if this_node == node.tuple_value:
                 output_nodes = output_nodes + find_out_nodes(all_nodes, node)
