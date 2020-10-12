@@ -1699,11 +1699,12 @@ class TIDLAnnotation:
         # Register J7 specific operators, or those supported standalone by J7 but not J6,
         # or those for which there are no whitelist functions.
         if self.tidl_platform == 'J7':
-            self._register_supported_op("add")
-            self._register_supported_op("nn.bias_add")
-            self._register_supported_op("maximum")
-            self._register_supported_op("minimum")
-            self._register_supported_op("multiply")
+            self._register_constrained_op("add")
+            self._register_constrained_op("nn.bias_add")
+            self._register_constrained_op("maximum")
+            self._register_constrained_op("minimum")
+            self._register_constrained_op("multiply")
+            self._register_constrained_op("divide")
             self._register_constrained_op("split")
             self._register_constrained_op("strided_slice")
             self._register_constrained_op("image.resize")
@@ -2408,8 +2409,8 @@ class TIDLCompiler:
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
         # Removing redundant outputs
         mod = relay.transform.EliminateCommonSubexpr()(mod)
-        print("----------- original graph-----------")
-        print(mod.astext(show_meta_data=False))
+        #print("----------- original graph-----------")
+        #print(mod.astext(show_meta_data=False))
 
         #============= Graph annotation ==============
         mod = tidl_annotation.merge_sequential_ops(mod)
