@@ -1815,11 +1815,6 @@ class TIDLAnnotation:
             return self.whitelist_check_func('nn.softmax', extract.attrs, extract.args)
 
         #pad has to precede conv2d, (conv2d, bias_add), or (conv2d, add)
-        def _pad_checker(pad_op):
-            pad_supported = (float(pad_op.attrs.pad_value) == 0.0 and \
-                             pad_op.attrs.pad_mode == 'constant')
-            return pad_supported
-
         def _pad_conv2d_pattern():
             pad_out = is_op('nn.pad')(wildcard())
             conv2d_out = is_op('nn.conv2d')(pad_out, is_constant())
@@ -1827,7 +1822,8 @@ class TIDLAnnotation:
         def _pad_conv2d_checker(extract):
             if self._user_denied('nn.pad', 'nn.conv2d'):
                 return False
-            pad_supported = _pad_checker(extract.args[0])
+            pad_op = extract.args[0]
+            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
             conv2d_supported = self.whitelist_check_func('nn.conv2d', extract.attrs, extract.args)
             return conv2d_supported and pad_supported
 
@@ -1871,7 +1867,8 @@ class TIDLAnnotation:
         def _pad_conv2d_bias_checker(extract):
             if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add'):
                 return False
-            pad_supported = _pad_checker(extract.args[0].args[0])
+            pad_op = extract.args[0].args[0]
+            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
             conv2d_bias_supported = _conv2d_bias_checker(extract)
             return conv2d_bias_supported and pad_supported
 
@@ -1882,7 +1879,8 @@ class TIDLAnnotation:
         def _pad_conv2d_add_checker(extract):
             if _user_denied('nn.pad', 'nn.conv2d', 'add'):
                return False
-            pad_supported = _pad_checker(extract.args[0].args[0])
+            pad_op = extract.args[0].args[0]
+            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
             conv2d_add_supported = _conv2d_add_checker(extract)
             return conv2d_add_supported and pad_supported
 
@@ -2016,7 +2014,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'clip'):
                 return False
             pad_op = extract.args[0].args[0]
-            pad_supported = _pad_checker(pad_op)
+            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_relu6_checker(extract)
 
         def _pad_conv2d_bias_relu6_pattern():
@@ -2027,7 +2025,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add', 'clip'):
                 return False
             pad_op = extract.args[0].args[0].args[0]
-            pad_supported = _pad_checker(pad_op)
+            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_bias_relu6_checker(extract)
 
         def _pad_conv2d_add_relu6_pattern():
@@ -2038,7 +2036,7 @@ class TIDLAnnotation:
             if _user_denied('nn.pad', 'nn.conv2d', 'add', 'clip'):
                 return False
             pad_op = extract.args[0].args[0].args[0]
-            pad_supported = _pad_checker(pad_op)
+            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_add_relu6_checker(extract)
 
         # additional patterns required by J6
@@ -2071,7 +2069,8 @@ class TIDLAnnotation:
         def _pad_avg_pool_checker(extract):
             if self._user_denied('nn.pad', 'nn.avg_pool2d'):
                 return False
-            pad_supported = _pad_checker(extract.args[0])
+            pad_op = extract.args[0]
+            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
             pool_supported = self.whitelist_check_func('nn.avg_pool2d', extract.attrs, extract.args)
             return pool_supported and pad_supported
 
@@ -2263,6 +2262,9 @@ class TIDLAnnotation:
         def mean_whitelist_fn(attrs, args):
             return max_whitelist_fn(attrs, args)  # same constraints as "max"
 
+        def pad_whitelist_fn(attrs, args):
+            return (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
+
         whitelist_funcs = {"argmax": argmax_whitelist_fn,
                            "max": max_whitelist_fn,
                            "mean": mean_whitelist_fn,
@@ -2276,6 +2278,7 @@ class TIDLAnnotation:
                            "nn.max_pool2d": max_pool_whitelist_fn,
                            "nn.softmax": softmax_whitelist_fn,
                            "concatenate": concatenate_whitelist_fn,
+                           "nn.pad": pad_whitelist_fn,
                           }
         #print("Whitelisting " + op_name)
         return whitelist_funcs[op_name](attrs, args)
