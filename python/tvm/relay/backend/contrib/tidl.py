@@ -1835,6 +1835,33 @@ class TIDLAnnotation:
         # Register J7/J6 common operators which are always supported
         self._register_supported_op("nn.relu")
 
+        # Register J7/J6 common operators which are supported with same constraints
+        @tvm.ir.register_op_attr("reshape", "target.tidl")
+        def reshape_whitelist_fn(attrs, args):
+            """Register standalone reshape if it is a flattening function """
+            if len(attrs.newshape) != 2:
+                return False
+            inshape = args[0].checked_type.shape
+            newshape = [attrs.newshape[0], attrs.newshape[1]]
+            # Find total size of input tensor
+            total_size = 1
+            for dim in inshape:
+                total_size = total_size * dim
+            for i in range(len(newshape)):
+                # If newshape[i] is 0, copy this dimension from the input to the output shape
+                if newshape[i] == 0:
+                    newshape[i] = inshape[i]
+            for i in range(len(newshape)):
+                # If newshape[i] is -1: infers the dimension of the output shape by using the
+                # remainder of input dimensions and keeping the size of output same as input.
+                # At most one dimension of shape can be -1.
+                if newshape[i] == -1:
+                    newshape[i] = tvm.te.div(total_size, newshape[(i+1)%2])
+            if newshape[0] == 1 and newshape[1] == total_size: # reshape op performs flattening
+                return True
+            else:
+                return False
+
         # Register J7/J6 common operators which are supported with different constraints
         self._register_constrained_op("argmax")
         self._register_constrained_op("nn.avg_pool2d")
@@ -1885,14 +1912,6 @@ class TIDLAnnotation:
     def merge_sequential_ops(self, mod):
         """Fuse sequential ops for op registration."""
 
-        # Squeeze has to be followed by reshape.
-        def _squeeze_reshape_pattern():
-            squeeze_out = is_op('squeeze')(wildcard())
-            reshape_out = is_op('reshape')(squeeze_out)
-            return reshape_out
-        def _squeeze_reshape_checker(extract):
-            return not self._user_denied('squeeze', 'reshape')
-
         #transpose has to be preceded and followed by reshape
         def _transpose_reshape_pattern():
             reshape_out1 = is_op('reshape')(wildcard())
@@ -1921,54 +1940,6 @@ class TIDLAnnotation:
             else:
                 return False
 
-        #reshape has to be preceded by avg_pool2d, global_avg_pool2d, dense, or mean
-        def _reshape_avg_pool_pattern():
-            avg_pool_out = is_op('nn.avg_pool2d')(wildcard())
-            reshape_out = is_op('reshape')(avg_pool_out)
-            return reshape_out
-        def _reshape_avg_pool_checker(extract):
-            if self._user_denied('nn.avg_pool2d', 'reshape'):
-                return False
-            op = extract.args[0]
-            return self.whitelist_check_func('nn.avg_pool2d', op.attrs, op.args)
-        def _reshape_global_avg_pool_pattern():
-            global_avg_pool_out = is_op('nn.global_avg_pool2d')(wildcard())
-            reshape_out = is_op('reshape')(global_avg_pool_out)
-            return reshape_out
-        def _reshape_global_avg_pool_checker(extract):
-            if self._user_denied('nn.global_avg_pool2d', 'reshape'):
-                return False
-            op = extract.args[0]
-            return self.whitelist_check_func('nn.global_avg_pool2d', op.attrs, op.args)
-        def _reshape_dense_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            reshape_out = is_op('reshape')(dense_out)
-            return reshape_out
-        def _reshape_dense_checker(extract):
-            if self._user_denied('nn.dense', 'reshape'):
-                return False
-            op = extract.args[0]
-            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
-        def _reshape_mean_pattern():
-            mean_out = is_op('mean')(wildcard())
-            reshape_out = is_op('reshape')(mean_out)
-            return reshape_out
-        def _reshape_mean_checker(extract):
-            if self._user_denied('mean', 'reshape'):
-                return False
-            op = extract.args[0]
-            return self.whitelist_check_func('mean', op.attrs, op.args)
-
-        #reshape has to be followed by softmax
-        def _reshape_softmax_pattern():
-            reshape_out = is_op('reshape')(wildcard())
-            softmax_out = is_op('nn.softmax')(reshape_out)
-            return softmax_out
-        def _reshape_softmax_checker(extract):
-            if self._user_denied('reshape', 'nn.softmax'):
-                return False
-            return self.whitelist_check_func('nn.softmax', extract.attrs, extract.args)
-
         #pad has to precede conv2d, (conv2d, bias_add), or (conv2d, add)
         def _pad_conv2d_pattern():
             pad_out = is_op('nn.pad')(wildcard())
@@ -1984,13 +1955,6 @@ class TIDLAnnotation:
 
         # common patterns required by J7 or J6
         pattern_table_common = [
-            ('tidl.squeeze_reshape', _squeeze_reshape_pattern(), _squeeze_reshape_checker),
-            ('tidl.reshape_avgpool', _reshape_avg_pool_pattern(), _reshape_avg_pool_checker),
-            ('tidl.reshape_globalavgpool', _reshape_global_avg_pool_pattern(),
-                                           _reshape_global_avg_pool_checker),
-            ('tidl.reshape_dense', _reshape_dense_pattern(), _reshape_dense_checker),
-            ('tidl.reshape_mean', _reshape_mean_pattern(), _reshape_mean_checker),
-            ('tidl.reshape_softmax', _reshape_softmax_pattern(), _reshape_softmax_checker),
             ('tidl.pad_conv2d', _pad_conv2d_pattern(), _pad_conv2d_checker),
         ]
 
