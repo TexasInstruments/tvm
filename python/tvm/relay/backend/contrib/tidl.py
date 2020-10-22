@@ -501,6 +501,47 @@ class CalibrationGraphMutator(ExprMutator):
         # Create new function with added subgraph inputs + outputs
         return relay.Function(expr.params, relay.Tuple(outputs + self.additional_outputs))
 
+class CalibrationPerLayerMutator(ExprMutator):
+    """
+    This mutator collects all per-tidl-layer outputs and add them as additional graph outputs.
+    Rewrite let as original expression.
+    """
+    def __init__(self, compiler):
+        ExprMutator.__init__(self)
+        self.num_original_outputs = 1
+        self.additional_outputs = []
+        self.compiler = compiler
+        # Will map index in output to tensor name
+        self.name_map = {}
+
+    def visit_let(self, let):
+        var_name = let.var.name_hint
+        if var_name.startswith(self.compiler):
+            let_value = super().visit(let.value)
+            self.name_map[self.num_original_outputs + len(self.additional_outputs)] = var_name
+            self.additional_outputs.append(let_value)
+            return let_value
+        else:
+            return super().visit_let(let)
+
+    def make_calibration_graph(self, expr):
+        """Builds calibration graph for expr"""
+
+        if isinstance(expr.body.checked_type, relay.TupleType):
+            self.num_original_outputs = len(expr.body.checked_type.fields)
+        for i in range(self.num_original_outputs):
+            self.name_map[i] = f"graph_output_{i}" 
+        visit_body = super().visit(expr.body)
+        # Get original output(s)
+        outputs = []
+        if isinstance(visit_body, Tuple):
+            for out in visit_body.fields:
+                outputs.append(out)
+        else:
+            outputs.append(visit_body)
+        # Create new function with added subgraph inputs + outputs
+        return relay.Function(expr.params, relay.Tuple(outputs + self.additional_outputs))
+
 class RemoveMultiplyByOne(ExprMutator):
     """
     Removes multiply by 1.0f. This pass when followed by
@@ -570,6 +611,44 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
         subgraph_tensors_list.append(subgraph_tensors)
 
     return subgraph_tensors_list
+
+def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp_folder,
+                                data_layout):
+    """Creates per-tidl-layer tensors to compare with tidl calibration per-layer output.
+       If original model/graph data_laytout is "NHWC", transpose 4D tensors to "NCHW" before
+       saving to file, so that comparing with TIDL calibration per-layer output in "NCHW"
+       is easy.  1D, 2D and 3D tensors are left alone without any tranposing.
+    """
+
+    # From partitioned module, create a "calibration model" which can be
+    # executed on CPU and will give additional outputs for per-tidl-layer tensors.
+    mod_tvm = relay.transform.InferType()(mod)
+    mod_tvm = relay.transform.Inline()(mod_tvm)
+    mod_tvm["main"] = CalibrationGraphMutator(tidl_target).visit(mod_tvm["main"])
+    print("----------- after call rewriting -----------")
+    print(mod_tvm.astext(show_meta_data=False))
+    calib_perlayer_mutator = CalibrationPerLayerMutator(tidl_target)
+    mod_tvm["main"] = calib_perlayer_mutator.make_calibration_graph(mod_tvm["main"])
+    #print("----------- after additional outputs -----------")
+    #print(mod_tvm.astext(show_meta_data=False))
+
+    # Build and execute calibration graph to get outputs
+    # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
+    with relay.build_config(opt_level=0):
+        graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
+    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    mod.set_input(**params)
+
+    graph_input = graph_input_list[-1]
+    mod.set_input(**graph_input)
+    mod.run()
+
+    for i in range(mod.get_num_outputs()):
+        tensor = mod.get_output(i).asnumpy()
+        if data_layout == "NHWC" and len(tensor.shape) == 4:
+            tensor = tensor.transpose(0, 3, 1, 2)
+        file_name = os.path.join(temp_folder, calib_perlayer_mutator.name_map[i] + ".npy")
+        np.save(file_name, tensor)
 
 class VarRenamer(ExprMutator):
     """
@@ -1635,6 +1714,8 @@ class TIDLImport:
             self.info_dict['subgraphs'].append(subgraph_info_dict)
             if self.tidl_platform == "J7":
                 if status:
+                    mod[tidl_subgraph] = self.mark_tidl_layers(subgraph, subgraph_id,
+                                                               all_nodes_tidl)
                     continue  # import next subgraph
                 else:
                     return import_fail
@@ -1674,6 +1755,67 @@ class TIDLImport:
             node_dict[op_name] += 1
         else:
             node_dict[op_name] = 1
+
+    def mark_tidl_layers(self, subgraph, subgraph_id, all_nodes_tidl):
+        """ mark Relay IR Call Node that corresponds to tidl layers by using a "let"
+            expression with a "tidl_<subgraph_id>_layer<layer_index>" var name
+        """
+
+        class CallMarker(ExprMutator):
+            """ mark Call Node with tidl layers info """
+            def __init__(self, subgraph_id, all_nodes_tidl, layer_info):
+                ExprMutator.__init__(self)
+                self.subgraph_id = subgraph_id
+                self.all_nodes_tidl = all_nodes_tidl
+                self.layer_info = layer_info
+
+            def get_tidl_layer_varname(self, node):
+                node_name = str(self.all_nodes_tidl[node])
+                for l in self.layer_info:
+                    if l[2] == node_name:
+                        return f"tidl_{self.subgraph_id}_layer{int(l[0]):04d}"
+                return None
+
+            def mark_with_let(self, var_name, value_expr):
+                sb = relay.ScopeBuilder()
+                layer_var = sb.let(var_name, value_expr)
+                sb.ret(layer_var)
+                return sb.get()
+
+            def visit_call(self, call):
+                visited_call = super().visit_call(call)
+                if call in self.all_nodes_tidl and \
+                   not isinstance(call.checked_type, tvm.ir.TupleType):
+                    var_name = self.get_tidl_layer_varname(call)
+                    if var_name != None:
+                        return self.mark_with_let(var_name, visited_call)
+                return visited_call
+
+            def visit_tuple_getitem(self, getitem):
+                """ BatchNorm in Relay has 3 outputs in a tuple.  When imported into TIDL,
+                    it has only 1 output.  Need to mark batchnorm.%0 as TIDL layer output """
+                visited_getitem = super().visit_tuple_getitem(getitem)
+                if getitem.tuple_value in self.all_nodes_tidl and \
+                   isinstance(getitem.tuple_value, relay.expr.Call) and \
+                   getitem.tuple_value.op.name == 'nn.batch_norm' and \
+                   getitem.index == 0:
+                    var_name = self.get_tidl_layer_varname(getitem.tuple_value)
+                    if var_name != None:
+                        return self.mark_with_let(var_name, visited_getitem)
+                return visited_getitem
+
+        ### tempDir/subgraph<id>_net.bin.layer_info.txt always available, even DEBUG level 0
+        ### format of each line: layer_index data_id output_name
+        layer_info_file = os.path.join(self.temp_folder,
+                                       f"subgraph{subgraph_id}_net.bin.layer_info.txt")
+        layer_info = [ x.split(' ') for x in open(layer_info_file).readlines() ]
+        # rewrite outputs as "tidl_<subgraph_id>_o<output_id>" to match up with TIDL names
+        if isinstance(subgraph.body, Tuple):
+            for i, out in enumerate(subgraph.body.fields):
+                all_nodes_tidl[out] = f"tidl_{subgraph_id}_o{i}"
+        else:
+            all_nodes_tidl[subgraph.body] = f"tidl_{subgraph_id}_o0"
+        return CallMarker(subgraph_id, all_nodes_tidl, layer_info).visit(subgraph)
 
 class TIDLAnnotation:
     def __init__(self, platform, version, import_lib, denylist=None):
@@ -2338,7 +2480,6 @@ class TIDLCompiler:
             for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_tools_path', 'tidl_denylist'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
-            assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
             self.tidl_calib_tool = os.path.join(self.tidl_tools_path,
                                                 "eve_test_dl_algo_ref.out")
             self.tidl_import_lib = os.path.join(self.tidl_tools_path,
@@ -2359,13 +2500,15 @@ class TIDLCompiler:
                         'tidl_tools_path', 'tidl_tensor_bits', 'tidl_denylist'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
-            assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
             self.tidl_calib_tool = os.path.join(self.tidl_tools_path,
                                                 "PC_dsp_test_dl_algo.out")
             self.tidl_import_lib = os.path.join(self.tidl_tools_path,
                                                 "tidl_model_import_relay.so")
         else:
             sys.exit("Unsupported TIDL platform or version!")
+        assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
+        self.temp_folder = os.path.join(self.artifacts_folder, 'tempDir/')
+        self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
 
     def enable(self, mod_orig, params, graph_input_list):
         """ Enable TIDL compilation
@@ -2465,11 +2608,14 @@ class TIDLCompiler:
                                          self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
                                          data_layout, self.tidl_tensor_bits)
-                subgraph_tensors_list = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input_list, self.artifacts_folder)
+                subgraph_tensors_list = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input_list, self.temp_folder)
                 import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list)
                 _ctypes.dlclose(import_lib._handle)
                 if import_status == 1:
                     print("TIDL import of Relay IR graph succeeded.")
+                    if self.tidl_relay_import_debug == "4":
+                        generate_tidl_layer_tensors(self.tidl_target, mod, params,
+                                                    graph_input_list, self.temp_folder, data_layout)
                     print("TIDL artifacts are stored at " + self.artifacts_folder)
                     mod_final, status = mod, 1        # TIDL Compilation success
                 elif import_status == -1:
