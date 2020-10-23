@@ -178,7 +178,7 @@ if __name__ == '__main__':
                          [0.017125, 0.017507, 0.017429], True,
                          img_file, [256,256], [224,224])
 
-    output2p = run_module("pytorch_mobilenet_v2", "data", [123.675, 116.28, 103.53],
+    output2p = run_module("pytorch_mobilenetv2", "data", [123.675, 116.28, 103.53],
                          [0.017125, 0.017507, 0.017429], True,
                          img_file, [256,256], [224,224])
 

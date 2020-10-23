@@ -402,7 +402,8 @@ def test_tidl_pytorch(model_name, img_file_list):
 
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
-    status = model_compile(model_name, pytorch_mod, pytorch_params, input_dict_list)
+    status = model_compile(model_name, pytorch_mod, pytorch_params, input_dict_list, 
+                           num_tidl_subgraphs=2)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
 def test_tidl_tflite_deeplabv3(img_file_list):
