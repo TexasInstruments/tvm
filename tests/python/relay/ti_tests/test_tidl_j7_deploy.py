@@ -178,6 +178,10 @@ if __name__ == '__main__':
                          [0.017125, 0.017507, 0.017429], True,
                          img_file, [256,256], [224,224])
 
+    output2p = run_module("pytorch_mobilenet_v2", "data", [123.675, 116.28, 103.53],
+                         [0.017125, 0.017507, 0.017429], True,
+                         img_file, [256,256], [224,224])
+
     if args.input is None:
         img_file = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
                                      'gluoncv/detection/street_small.jpg?raw=true',
@@ -190,6 +194,8 @@ if __name__ == '__main__':
     print_top5(output1)
     print("ONNX MobileNetV2 output: (index of 1000)")
     print_top5(output2)
+    print("Pytorch MobileNetV2 output: (index of 1000)")
+    print_top5(output2p)
     print("deeplabv3 output shape: {}".format(output3.shape))
     output3 = np.squeeze(output3, axis=0)
     np.savetxt("deeplabv3.results", np.argmax(output3, axis=2).astype(int), "%2d", "")

@@ -371,6 +371,40 @@ def test_tidl_onnx(model_name, img_file_list):
     status = model_compile(model_name, onnx_mod, onnx_params, input_dict_list)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
+def test_tidl_pytorch(model_name, img_file_list):
+    import torch
+    import torchvision.models as models
+
+    input_node = "data"
+    input_shape = (1, 3, 224, 224)
+    input_data_list = [ load_image(1, img_file, [256, 256], [224, 224],
+                            [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True)
+                            for img_file in img_file_list ]
+    if input_data_list[0].shape != input_shape:
+        sys.exit("Input data shape is not correct!")
+    print("input_data shape: {}".format(input_data_list[0].shape))
+
+    #============= Create a Relay graph from Pytorch model ===============
+    # from https://pytorch.org/docs/stable/torchvision/models.html
+    model = None
+    if model_name == "pytorch_mobilenetv2":
+        model = models.mobilenet_v2(pretrained=True)
+    #other models:
+    # resnet50 = models.resnet50(pretrained=True)
+    # fcn_resnet50 = models.segmentation.fcn_resnet50(pretrained=True)
+    # deeplab_resnet50 = models.segmentation.deeplabv3_resnet50(pretrained=True)
+    # maskrcnn_resnet50 = models.detection.maskrcnn_resnet50_fpn(pretrained=True)
+    assert model, "Unknown pytorch model"
+    script_data = torch.randn(input_shape)
+    scripted_model = torch.jit.trace(model, script_data).eval()
+    shape_list = [(input_node, input_shape)]
+    pytorch_mod, pytorch_params = relay.frontend.from_pytorch(scripted_model, shape_list)
+
+    #======================== TIDL code generation ====================
+    input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
+    status = model_compile(model_name, pytorch_mod, pytorch_params, input_dict_list)
+    assert status != -1, "TIDL compilation failed"   # For CI test
+
 def test_tidl_tflite_deeplabv3(img_file_list):
     model_name = "deeplabv3"
     data_layout = "NHWC"
@@ -417,3 +451,6 @@ if __name__ == '__main__':
     #test_tidl_classification()
     #test_tidl_object_detection()
     #test_tidl_segmentation()
+
+    test_tidl_pytorch("pytorch_mobilenetv2", [ img_airshow, img_cat, img_cat2 ])
+
