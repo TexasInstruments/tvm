@@ -520,6 +520,19 @@ class RemoveMultiplyByOne(ExprMutator):
                     return call.args[1]
         return super().visit_call(call)
 
+class RemoveTrainingOperators(ExprMutator):
+    """
+    Removes operators that apply to network training but not to inference.
+    """
+    # Dropout layer produces a tuple
+    def visit_tuple_getitem(self, t):
+        expr = t.tuple_value
+        if t.index == 0  and \
+           isinstance(expr, relay.expr.Call) and \
+           expr.op.name in ["nn.dropout", "nn.dropout_raw"]:
+            return expr.args[0]
+        return super().visit_tuple_getitem(t)
+
 def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_folder, save_output=False):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
     """
@@ -1678,7 +1691,6 @@ class TIDLAnnotation:
             return
 
         # Register J7/J6 common operators which are always supported
-        self._register_supported_op("nn.dropout")
         self._register_supported_op("nn.relu")
 
         # Register J7/J6 common operators which are supported with different constraints
@@ -1717,6 +1729,7 @@ class TIDLAnnotation:
 
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
+            self._register_supported_op("nn.dropout")
             self._register_constrained_op("max")           # 'max' mapped to max_pooling layer
             @tvm.ir.register_op_attr("add", "target.tidl")
             def add_whitelist_fn(attrs, args):
@@ -2410,6 +2423,7 @@ class TIDLCompiler:
         mod['main'] = relay.build_module.bind_params_by_name(mod['main'], params)
         mod = relay.transform.FoldConstant()(mod)
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
+        mod['main'] = RemoveTrainingOperators().visit(mod['main'])
         # Removing redundant outputs
         mod = relay.transform.EliminateCommonSubexpr()(mod)
         #print("----------- original graph-----------")
