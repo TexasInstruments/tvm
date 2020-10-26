@@ -743,6 +743,41 @@ def prune_subgraphs_with_multiple_inputs(mod, compiler="tidl"):
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
     return new_mod
 
+def prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=16, compiler="tidl"):
+    """Removes subgraphs which have more than 16 inputs or outputs.
+
+    Parameters
+    ----------
+    mod : tvm.IRModule
+        Module containing subgraphs using external codegen "compiler"
+    in_out_limit : int
+        Limit on number of inputs/outputs per subgraph
+    compiler : str
+        Only subgraphs from this external codegen compiler will be modified.
+
+    Returns
+    -------
+    ret : tvm.IRModule
+        New module with subgraphs only with inputs and outputs below limit.
+    """
+    subgraph_names_to_remove = []
+    for subgraph in mod.get_global_vars():
+        name = subgraph.name_hint
+        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
+            continue
+        # Remove subgraphs with inputs or outputs over limit.
+        #   - mod[name].params has the input tensors
+        #   - mod[name].body has the output tensors
+        if len(mod[name].params) > in_out_limit \
+           or (isinstance(mod[name].params[0].checked_type, relay.TupleType) \
+              and len(mod[name].params[0].checked_type.fields) > in_out_limit) \
+           or (isinstance(mod[name].body.checked_type, relay.TupleType) \
+              and len(mod[name].body.checked_type.fields) > in_out_limit):
+            subgraph_names_to_remove.append(name)
+    new_mod = tvm.IRModule()
+    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
+    return new_mod
+
 def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_threshold=None):
     """Removes subgraphs from mod and returns them to the regular TVM compilation path.
     The subgraphs with the highest number of multiply-accumulates are kept.
@@ -2551,6 +2586,10 @@ class TIDLCompiler:
             mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
             mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
                                        max_total_memory_mb=self.max_total_memory_mb)
+        if self.tidl_platform == "J7":
+            mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
+                                                                compiler=self.tidl_target)
+
         mod = unpack_composites(mod)
         mod = prune_subgraphs(mod, compiler=self.tidl_target,
                               num_subgraphs_to_keep=self.num_tidl_subgraphs,
