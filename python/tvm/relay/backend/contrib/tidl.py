@@ -1947,6 +1947,14 @@ class TIDLAnnotation:
     def merge_sequential_ops(self, mod):
         """Fuse sequential ops for op registration."""
 
+        # Squeeze has to be followed by reshape.
+        def _squeeze_reshape_pattern():
+            squeeze_out = is_op('squeeze')(wildcard())
+            reshape_out = is_op('reshape')(squeeze_out)
+            return reshape_out
+        def _squeeze_reshape_checker(extract):
+            return not self._user_denied('squeeze', 'reshape')
+
         #transpose has to be preceded and followed by reshape
         def _transpose_reshape_pattern():
             reshape_out1 = is_op('reshape')(wildcard())
@@ -1990,6 +1998,7 @@ class TIDLAnnotation:
 
         # common patterns required by J7 or J6
         pattern_table_common = [
+            ('tidl.squeeze_reshape', _squeeze_reshape_pattern(), _squeeze_reshape_checker),
             ('tidl.pad_conv2d', _pad_conv2d_pattern(), _pad_conv2d_checker),
         ]
 
