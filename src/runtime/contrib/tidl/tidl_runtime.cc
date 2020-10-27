@@ -271,6 +271,20 @@ class TIDLJ7Module : public runtime::ModuleNode {
     if(!tidl_handle) {
       // Load TIDL shared library
       dlerror();
+      /*
+       * The current TIOVX stack is designed in a way that everytime this
+       * library is loaded, a new set of files are opened for IPC among
+       * cores, without closing the existing ones. Soon the process runs
+       * out of file descriptors and the most recently opened models fail
+       * in TIDL_create.
+       *
+       * As a temporary workaround, opening the library two times and throwing
+       * one handle away, so as to bump up the reference count on dlOpen()
+       * and to prevent a future dlClose() from actually unloading the library.
+       *
+       * Very ugly hack, but need to maintain this as of now.
+       */
+      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
       tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
       const char *dlsym_error1 = dlerror();
       if (dlsym_error1) {
