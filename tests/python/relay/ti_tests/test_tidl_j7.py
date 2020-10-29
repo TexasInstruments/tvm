@@ -111,6 +111,7 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
                                       artifacts_folder=tidl_artifacts_folder,
                                       tidl_tools_path=get_tidl_tools_path(),
                                       tidl_tensor_bits=16,
+                                      tidl_calib_option=0,
                                       tidl_denylist=args.denylist)
 
     if args.nooffload:
