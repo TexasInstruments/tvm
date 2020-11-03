@@ -447,7 +447,7 @@ class TIDLJ7Module : public runtime::ModuleNode {
       rt_arg->dataOffset = 0;
 
       // If ConvertLayout("NCHW") pass is called on the entire graph
-      // and only transpose or NCHW operators are whitelisted as TIDL
+      // and only transpose or NCHW operators are allowed as TIDL
       // nodes, then TIDLRT do not need to perform any layout conversions.
       rt_arg->layout = info.is_nchw ? TIDLRT_LT_NCHW : TIDLRT_LT_NHWC;
       TIDL_LOG << "#TVM# layout: " << rt_arg->layout;

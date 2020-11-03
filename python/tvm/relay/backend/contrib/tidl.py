@@ -1861,7 +1861,7 @@ class TIDLAnnotation:
         self.import_lib = import_lib
         self.denylist = denylist
 
-    def register_whitelist_ops(self):
+    def register_allowed_ops(self):
         """ TIDL operators registration """
 
         # Can't register annotations more than once.
@@ -1874,7 +1874,7 @@ class TIDLAnnotation:
 
         # Register J7/J6 common operators which are supported with same constraints
         @tvm.ir.register_op_attr("reshape", "target.tidl")
-        def reshape_whitelist_fn(attrs, args):
+        def reshape_allow_fn(attrs, args):
             """Register standalone reshape if it is a flattening function """
             if len(attrs.newshape) != 2:
                 return False
@@ -1915,7 +1915,7 @@ class TIDLAnnotation:
         self._register_constrained_op("mean")          # 'mean' mapped to avg_pooling layer
 
         # Register J7 specific operators, or those supported standalone by J7 but not J6,
-        # or those for which there are no whitelist functions.
+        # or those for which there are no allow functions.
         if self.tidl_platform == 'J7':
             self._register_constrained_op("add")
             self._register_constrained_op("nn.bias_add")
@@ -1938,7 +1938,7 @@ class TIDLAnnotation:
             self._register_supported_op("nn.dropout")
             self._register_constrained_op("max")           # 'max' mapped to max_pooling layer
             @tvm.ir.register_op_attr("add", "target.tidl")
-            def add_whitelist_fn(attrs, args):
+            def add_allow_fn(attrs, args):
                 if any([isinstance(arg, tvm.relay.expr.Constant) for arg in args]):
                     # This is the same as "bias_add" which is not supported standalone.
                     return False
@@ -1994,8 +1994,8 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d'):
                 return False
             pad_op = extract.args[0]
-            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
-            conv2d_supported = self.whitelist_check_func('nn.conv2d', extract.attrs, extract.args)
+            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            conv2d_supported = self.allow_check_func('nn.conv2d', extract.attrs, extract.args)
             return conv2d_supported and pad_supported
 
         # common patterns required by J7 or J6
@@ -2014,7 +2014,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.conv2d', 'nn.bias_add'):
                 return False
             op = extract.args[0]
-            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
+            return self.allow_check_func('nn.conv2d', op.attrs, op.args)
         def _conv2d_add_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
             add_out = is_op('add')(conv2d_out, is_constant())
@@ -2023,7 +2023,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.conv2d', 'add'):
                 return False
             op = extract.args[0]
-            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args)
+            return self.allow_check_func('nn.conv2d', op.attrs, op.args)
 
         def _pad_conv2d_bias_pattern():
             pad_conv2d_out = _pad_conv2d_pattern()
@@ -2033,7 +2033,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add'):
                 return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
             conv2d_bias_supported = _conv2d_bias_checker(extract)
             return conv2d_bias_supported and pad_supported
 
@@ -2045,7 +2045,7 @@ class TIDLAnnotation:
             if _user_denied('nn.pad', 'nn.conv2d', 'add'):
                return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
             conv2d_add_supported = _conv2d_add_checker(extract)
             return conv2d_add_supported and pad_supported
 
@@ -2058,7 +2058,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.dense', 'nn.bias_add'):
                 return False
             op = extract.args[0]
-            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+            return self.allow_check_func('nn.dense', op.attrs, op.args)
 
         def _dense_add_pattern():
             dense_out = is_op('nn.dense')(wildcard(), is_constant())
@@ -2068,7 +2068,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.dense', 'add'):
                 return False
             op = extract.args[0]
-            return self.whitelist_check_func('nn.dense', op.attrs, op.args)
+            return self.allow_check_func('nn.dense', op.attrs, op.args)
 
         #relu6 has to be preceded by conv2d or (conv2d, bias_add)
         def _relu6_check_fun(attrs): # clip(0, 6) is not supported standalone
@@ -2084,7 +2084,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0]
-            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
+            return self.allow_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
 
         def _conv2d_bias_relu6_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
@@ -2096,7 +2096,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0].args[0]
-            return self.whitelist_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
+            return self.allow_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
 
         def _conv2d_add_relu6_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
@@ -2132,7 +2132,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             bn_op = extract.args[0].tuple_value
-            bn_supported = self.whitelist_check_func('nn.batch_norm', bn_op.attrs, bn_op.args)
+            bn_supported = self.allow_check_func('nn.batch_norm', bn_op.attrs, bn_op.args)
             return bn_supported and relu6_supported
 
         def _dense_relu6_pattern():
@@ -2144,7 +2144,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0]
-            return self.whitelist_check_func('nn.dense', op.attrs, op.args) and relu6_supported
+            return self.allow_check_func('nn.dense', op.attrs, op.args) and relu6_supported
 
         #relu6 can also be preceded by (dense, bias_add): 
         #  (dense, bias_add, relu6) -> (dense, relu6) -> dense
@@ -2158,7 +2158,7 @@ class TIDLAnnotation:
                 return False
             dense_op = extract.args[0].args[0]
             relu6_supported = _relu6_check_fun(extract.attrs)
-            dense_supported = self.whitelist_check_func('nn.dense', dense_op.attrs, dense_op.args)
+            dense_supported = self.allow_check_func('nn.dense', dense_op.attrs, dense_op.args)
             return relu6_supported and dense_supported
 
         def _dense_add_relu6_pattern():
@@ -2179,7 +2179,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'clip'):
                 return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_relu6_checker(extract)
 
         def _pad_conv2d_bias_relu6_pattern():
@@ -2190,7 +2190,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add', 'clip'):
                 return False
             pad_op = extract.args[0].args[0].args[0]
-            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_bias_relu6_checker(extract)
 
         def _pad_conv2d_add_relu6_pattern():
@@ -2201,7 +2201,7 @@ class TIDLAnnotation:
             if _user_denied('nn.pad', 'nn.conv2d', 'add', 'clip'):
                 return False
             pad_op = extract.args[0].args[0].args[0]
-            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_add_relu6_checker(extract)
 
         # additional patterns required by J6
@@ -2235,8 +2235,8 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.avg_pool2d'):
                 return False
             pad_op = extract.args[0]
-            pad_supported = self.whitelist_check_func('nn.pad', pad_op.attrs, pad_op.args)
-            pool_supported = self.whitelist_check_func('nn.avg_pool2d', extract.attrs, extract.args)
+            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pool_supported = self.allow_check_func('nn.avg_pool2d', extract.attrs, extract.args)
             return pool_supported and pad_supported
 
         pattern_table_j7 = [
@@ -2280,18 +2280,18 @@ class TIDLAnnotation:
         def _func_wrapper(attrs, args):
             if self._user_denied(op_name):
                 return False
-            return self.whitelist_check_func(op_name, attrs, args)
+            return self.allow_func(op_name, attrs, args)
         return _func_wrapper
 
-    def whitelist_check_func(self, op_name, attrs, args):
-        """ Whitelist check function for operators with different constraints for J7 and J6 """
+    def allow_func(self, op_name, attrs, args):
+        """ Allow function for operators with different constraints for J7 and J6 """
         if self.tidl_platform == "J7":
-            return self.whitelist_fn_j7(op_name, attrs, args)
+            return self.allow_fn_j7(op_name, attrs, args)
         else:
-            return self.whitelist_fn_j6(op_name, attrs, args)
+            return self.allow_fn_j6(op_name, attrs, args)
 
-    def whitelist_fn_j7(self, op_name, attrs, args):
-        """ Whitelisting function for J7: constraint checking is delegated to the import library """
+    def allow_fn_j7(self, op_name, attrs, args):
+        """ Allow function for J7: constraint checking is delegated to the import library """
 
         if self.import_lib is None:
             # For CI testing which doesn't have import library - still run TVM passes
@@ -2300,14 +2300,14 @@ class TIDLAnnotation:
         # Invoke TIDL import library call to check if this op can be supported
         op = tvm.ir.Op.get(op_name)
         callnode = tvm.relay.Call(op, args, attrs)
-        #print(f"Invoking TIDL Relay Import whitelisting function for {op_name}")
-        whitelist_fn = tvm.get_global_func("TIDL_relayWhitelistNode")
-        return whitelist_fn(callnode)
+        #print(f"Invoking TIDL Relay Import allow function for {op_name}")
+        allow_fn = tvm.get_global_func("TIDL_relayAllowNode")
+        return allow_fn(callnode)
 
-    def whitelist_fn_j6(self, op_name, attrs, args):
-        """ Whitelisting function for J6: checking operator attributes against constraints """
+    def allow_fn_j6(self, op_name, attrs, args):
+        """ Allow function for J6: checking operator attributes against constraints """
 
-        def argmax_whitelist_fn(attrs, args):
+        def argmax_allow_fn(attrs, args):
             keepdims = attrs.keepdims
             exclude = attrs.exclude
             axis = attrs.axis
@@ -2316,7 +2316,7 @@ class TIDLAnnotation:
             supported = (int(data_shape[1]) <= 15 and keepdims == 1 and axis == 1 and exclude == 0)
             return supported
 
-        def avg_pool_whitelist_fn(attrs, args):
+        def avg_pool_allow_fn(attrs, args):
             pool_size = get_const_tuple(attrs.pool_size)
             strides = get_const_tuple(attrs.strides)
             supported = (pool_size[0] <= 9 and pool_size[1] <= 9 \
@@ -2332,7 +2332,7 @@ class TIDLAnnotation:
                 supported = True
             return supported
 
-        def batch_norm_whitelist_fn(attrs, args):
+        def batch_norm_allow_fn(attrs, args):
             data1 = args[1]
             if data1.checked_type.dtype != 'float32':
                 supported = False
@@ -2352,7 +2352,7 @@ class TIDLAnnotation:
                 (num_in_channels, num_out_channels) = (weight_shape[3], weight_shape[2])
             return (num_in_channels, num_out_channels)
 
-        def conv2d_whitelist_fn(attrs, args):
+        def conv2d_allow_fn(attrs, args):
             weight = args[1]
             if weight.checked_type.dtype != 'float32':
                 return False
@@ -2375,7 +2375,7 @@ class TIDLAnnotation:
                         and kernel_supported and groups_supported
             return supported
 
-        def conv2d_transpose_whitelist_fn(attrs, args):
+        def conv2d_transpose_allow_fn(attrs, args):
             if attrs.kernel_layout not in ('OIHW', 'HWIO', 'HWOI'):
                 return False
             weight = args[1]
@@ -2386,14 +2386,14 @@ class TIDLAnnotation:
                         and (strides[1] == 2)
             return supported
 
-        def dense_whitelist_fn(attrs, args):
+        def dense_allow_fn(attrs, args):
             weight = args[1]
             weight_shape = weight.data.shape
             (w_in, w_out) = (weight_shape[1], weight_shape[0])
             supported = (w_in <= 65536) and (w_out <= 16384) and (w_in * w_out <= 67108864)
             return supported
 
-        def global_avg_pool_whitelist_fn(attrs, args):
+        def global_avg_pool_allow_fn(attrs, args):
             shape = list(map(int, args[0].checked_type.shape))
             layout = attrs.layout
             if layout == "NCHW":
@@ -2403,50 +2403,50 @@ class TIDLAnnotation:
             supported = height * width <= 4096
             return supported
 
-        def max_pool_whitelist_fn(attrs, args):
+        def max_pool_allow_fn(attrs, args):
             pool_size = get_const_tuple(attrs.pool_size)
             strides = get_const_tuple(attrs.strides)
             supported = (pool_size[0] <= 9) and (pool_size[1] <= 9) and (strides[0] <= 3) \
                         and (strides[1] <= 2)
             return supported
 
-        def softmax_whitelist_fn(attrs, args):
+        def softmax_allow_fn(attrs, args):
             return (attrs.axis == -1)  # only support 1-D array softmax
 
-        def concatenate_whitelist_fn(attrs, args):
+        def concatenate_allow_fn(attrs, args):
             # Only support concatenate across channel
             return (attrs.axis == 1) or (attrs.axis == 3)
 
-        def max_whitelist_fn(attrs, args):
+        def max_allow_fn(attrs, args):
             axis = attrs.axis
             supported = (attrs.exclude == False) and isinstance(axis, tvm.ir.container.Array) and \
                         (len(axis) == 2) and ((int(axis[0]) == 1 and int(axis[1]) == 2) or \
                                               (int(axis[0]) == 2 and int(axis[1]) == 3))
             return supported
 
-        def mean_whitelist_fn(attrs, args):
-            return max_whitelist_fn(attrs, args)  # same constraints as "max"
+        def mean_allow_fn(attrs, args):
+            return max_allow_fn(attrs, args)  # same constraints as "max"
 
-        def pad_whitelist_fn(attrs, args):
+        def pad_allow_fn(attrs, args):
             return (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
 
-        whitelist_funcs = {"argmax": argmax_whitelist_fn,
-                           "max": max_whitelist_fn,
-                           "mean": mean_whitelist_fn,
-                           "nn.avg_pool2d": avg_pool_whitelist_fn,
-                           "nn.batch_flatten": batch_flatten_fn,
-                           "nn.batch_norm": batch_norm_whitelist_fn,
-                           "nn.conv2d": conv2d_whitelist_fn,
-                           "nn.conv2d_transpose": conv2d_transpose_whitelist_fn,
-                           "nn.dense": dense_whitelist_fn,
-                           "nn.global_avg_pool2d": global_avg_pool_whitelist_fn,
-                           "nn.max_pool2d": max_pool_whitelist_fn,
-                           "nn.softmax": softmax_whitelist_fn,
-                           "concatenate": concatenate_whitelist_fn,
-                           "nn.pad": pad_whitelist_fn,
-                          }
-        #print("Whitelisting " + op_name)
-        return whitelist_funcs[op_name](attrs, args)
+        allow_funcs = {"argmax": argmax_allow_fn,
+                       "max": max_allow_fn,
+                       "mean": mean_allow_fn,
+                       "nn.avg_pool2d": avg_pool_allow_fn,
+                       "nn.batch_flatten": batch_flatten_fn,
+                       "nn.batch_norm": batch_norm_allow_fn,
+                       "nn.conv2d": conv2d_allow_fn,
+                       "nn.conv2d_transpose": conv2d_transpose_allow_fn,
+                       "nn.dense": dense_allow_fn,
+                       "nn.global_avg_pool2d": global_avg_pool_allow_fn,
+                       "nn.max_pool2d": max_pool_allow_fn,
+                       "nn.softmax": softmax_allow_fn,
+                       "concatenate": concatenate_allow_fn,
+                       "nn.pad": pad_allow_fn,
+                       }
+        #print("allowing " + op_name)
+        return allow_funcs[op_name](attrs, args)
 
 class TIDLCompiler:
     """TIDL compiler module.
@@ -2570,7 +2570,7 @@ class TIDLCompiler:
         # Register TIDL annotation functions
         tidl_annotation = TIDLAnnotation(self.tidl_platform, self.version, import_lib, 
                                          self.tidl_denylist)
-        tidl_annotation.register_whitelist_ops()
+        tidl_annotation.register_allowed_ops()
 
         #============= Prepare graph for partitioning =============
         mod = relay.transform.RemoveUnusedFunctions()(mod_orig)
