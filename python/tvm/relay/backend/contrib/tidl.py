@@ -1994,8 +1994,8 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d'):
                 return False
             pad_op = extract.args[0]
-            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
-            conv2d_supported = self.allow_check_func('nn.conv2d', extract.attrs, extract.args)
+            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
+            conv2d_supported = self.allow_func('nn.conv2d', extract.attrs, extract.args)
             return conv2d_supported and pad_supported
 
         # common patterns required by J7 or J6
@@ -2014,7 +2014,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.conv2d', 'nn.bias_add'):
                 return False
             op = extract.args[0]
-            return self.allow_check_func('nn.conv2d', op.attrs, op.args)
+            return self.allow_func('nn.conv2d', op.attrs, op.args)
         def _conv2d_add_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
             add_out = is_op('add')(conv2d_out, is_constant())
@@ -2023,7 +2023,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.conv2d', 'add'):
                 return False
             op = extract.args[0]
-            return self.allow_check_func('nn.conv2d', op.attrs, op.args)
+            return self.allow_func('nn.conv2d', op.attrs, op.args)
 
         def _pad_conv2d_bias_pattern():
             pad_conv2d_out = _pad_conv2d_pattern()
@@ -2033,7 +2033,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add'):
                 return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
             conv2d_bias_supported = _conv2d_bias_checker(extract)
             return conv2d_bias_supported and pad_supported
 
@@ -2045,7 +2045,7 @@ class TIDLAnnotation:
             if _user_denied('nn.pad', 'nn.conv2d', 'add'):
                return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
             conv2d_add_supported = _conv2d_add_checker(extract)
             return conv2d_add_supported and pad_supported
 
@@ -2058,7 +2058,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.dense', 'nn.bias_add'):
                 return False
             op = extract.args[0]
-            return self.allow_check_func('nn.dense', op.attrs, op.args)
+            return self.allow_func('nn.dense', op.attrs, op.args)
 
         def _dense_add_pattern():
             dense_out = is_op('nn.dense')(wildcard(), is_constant())
@@ -2068,7 +2068,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.dense', 'add'):
                 return False
             op = extract.args[0]
-            return self.allow_check_func('nn.dense', op.attrs, op.args)
+            return self.allow_func('nn.dense', op.attrs, op.args)
 
         #relu6 has to be preceded by conv2d or (conv2d, bias_add)
         def _relu6_check_fun(attrs): # clip(0, 6) is not supported standalone
@@ -2084,7 +2084,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0]
-            return self.allow_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
+            return self.allow_func('nn.conv2d', op.attrs, op.args) and relu6_supported
 
         def _conv2d_bias_relu6_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
@@ -2096,7 +2096,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0].args[0]
-            return self.allow_check_func('nn.conv2d', op.attrs, op.args) and relu6_supported
+            return self.allow_func('nn.conv2d', op.attrs, op.args) and relu6_supported
 
         def _conv2d_add_relu6_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
@@ -2132,7 +2132,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             bn_op = extract.args[0].tuple_value
-            bn_supported = self.allow_check_func('nn.batch_norm', bn_op.attrs, bn_op.args)
+            bn_supported = self.allow_func('nn.batch_norm', bn_op.attrs, bn_op.args)
             return bn_supported and relu6_supported
 
         def _dense_relu6_pattern():
@@ -2144,7 +2144,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0]
-            return self.allow_check_func('nn.dense', op.attrs, op.args) and relu6_supported
+            return self.allow_func('nn.dense', op.attrs, op.args) and relu6_supported
 
         #relu6 can also be preceded by (dense, bias_add): 
         #  (dense, bias_add, relu6) -> (dense, relu6) -> dense
@@ -2158,7 +2158,7 @@ class TIDLAnnotation:
                 return False
             dense_op = extract.args[0].args[0]
             relu6_supported = _relu6_check_fun(extract.attrs)
-            dense_supported = self.allow_check_func('nn.dense', dense_op.attrs, dense_op.args)
+            dense_supported = self.allow_func('nn.dense', dense_op.attrs, dense_op.args)
             return relu6_supported and dense_supported
 
         def _dense_add_relu6_pattern():
@@ -2179,7 +2179,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'clip'):
                 return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_relu6_checker(extract)
 
         def _pad_conv2d_bias_relu6_pattern():
@@ -2190,7 +2190,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add', 'clip'):
                 return False
             pad_op = extract.args[0].args[0].args[0]
-            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_bias_relu6_checker(extract)
 
         def _pad_conv2d_add_relu6_pattern():
@@ -2201,7 +2201,7 @@ class TIDLAnnotation:
             if _user_denied('nn.pad', 'nn.conv2d', 'add', 'clip'):
                 return False
             pad_op = extract.args[0].args[0].args[0]
-            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
             return pad_supported and _conv2d_add_relu6_checker(extract)
 
         # additional patterns required by J6
@@ -2235,8 +2235,8 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.avg_pool2d'):
                 return False
             pad_op = extract.args[0]
-            pad_supported = self.allow_check_func('nn.pad', pad_op.attrs, pad_op.args)
-            pool_supported = self.allow_check_func('nn.avg_pool2d', extract.attrs, extract.args)
+            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
+            pool_supported = self.allow_func('nn.avg_pool2d', extract.attrs, extract.args)
             return pool_supported and pad_supported
 
         pattern_table_j7 = [
@@ -2323,7 +2323,7 @@ class TIDLAnnotation:
                          and strides[0] <= 3 and strides[1] <= 2)
             return supported
 
-        def batch_flatten_fn(attrs, args):
+        def batch_flatten_allow_fn(attrs, args):
             data = args[0]
             data_shape = data.checked_type.shape
             if len(data_shape) == 4:
@@ -2434,7 +2434,7 @@ class TIDLAnnotation:
                        "max": max_allow_fn,
                        "mean": mean_allow_fn,
                        "nn.avg_pool2d": avg_pool_allow_fn,
-                       "nn.batch_flatten": batch_flatten_fn,
+                       "nn.batch_flatten": batch_flatten_allow_fn,
                        "nn.batch_norm": batch_norm_allow_fn,
                        "nn.conv2d": conv2d_allow_fn,
                        "nn.conv2d_transpose": conv2d_transpose_allow_fn,
