@@ -869,7 +869,7 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
 def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_signed,
                          temp_folder,
                          net_file, params_file, platform="AM57", tidl_tensor_bits=8,
-                         tidl_calib_option=0):
+                         tidl_calib_option=0, tidl_bias_calib_iters=50):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Save quantized input vector to a file for calib tool to read
@@ -895,7 +895,8 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_si
 
     if platform == "J7":
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
-        import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_option)
+        import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_option,
+                                            tidl_bias_calib_iters)
         return (import_ret == 0), 123  ## TODO: do we need dataQ for J7?
 
     output_tmp_file = temp_folder + 'precalib_net.bin'
@@ -1039,7 +1040,7 @@ class TIDLImport:
     """
     def __init__(self, import_lib, calib_tool, artifacts_folder,
                  tidl_target="tidl", tidl_platform="AM57", data_layout="NCHW",
-                 tidl_tensor_bits=8, tidl_calib_option=0):
+                 tidl_tensor_bits=8, tidl_calib_option=0, tidl_bias_calib_iters=50):
         self.import_lib = import_lib
         self.calib_tool = calib_tool
         self.artifacts_folder = artifacts_folder
@@ -1048,6 +1049,7 @@ class TIDLImport:
         self.data_layout = data_layout
         self.tidl_tensor_bits = tidl_tensor_bits
         self.tidl_calib_option = tidl_calib_option
+        self.tidl_bias_calib_iters = tidl_bias_calib_iters
         self.info_dict = {}
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
 
@@ -1746,7 +1748,8 @@ class TIDLImport:
             status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
                                      input_quant_vec_list, input_signed, self.temp_folder,
                                      net_file, par_file, self.tidl_platform,
-                                     self.tidl_tensor_bits, self.tidl_calib_option)
+                                     self.tidl_tensor_bits, self.tidl_calib_option,
+                                     self.tidl_bias_calib_iters)
 
             self.info_dict['subgraphs'].append(subgraph_info_dict)
             if self.tidl_platform == "J7":
@@ -2472,6 +2475,17 @@ class TIDLCompiler:
             Force-annotate Relay operators as unsupported
     """
 
+    default_calib_options = {  8 :  { 'activation_range' : 'on',     # Histogram method
+                                      'weight_range' : 'on',         # Median method
+                                      'bias_calibration' : 'on',
+                                      'per_channel_weight' : 'off',
+                                      'iterations' : 50 },
+                              16 :  { 'activation_range' : 'on',
+                                      'weight_range' : 'on',
+                                      'bias_calibration' : 'off',
+                                      'per_channel_weight' : 'off',
+                                      'iterations' : 1 } }
+
     def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=448, **kwargs):
         self.tidl_platform = platform
         self.version = version
@@ -2481,6 +2495,7 @@ class TIDLCompiler:
             self.num_tidl_subgraphs = 1
             self.artifacts_folder = None
             self.tidl_calib_option = 0
+            self.tidl_bias_calib_iters = 50
             self.tidl_tools_path = None
             self.tidl_tensor_bits = 8
             self.tidl_denylist = []
@@ -2500,7 +2515,7 @@ class TIDLCompiler:
             self.tidl_target = "tidl"
             self.num_tidl_subgraphs = 1
             self.artifacts_folder = None
-            self.tidl_calib_option = 0
+            self.tidl_calibration_options = {}
             self.tidl_tools_path = None
             self.tidl_tensor_bits = 16
             self.tidl_denylist = []
@@ -2508,7 +2523,7 @@ class TIDLCompiler:
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
             # Read arguments provided through **kwargs
-            for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_calib_option',
+            for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_calibration_options',
                         'tidl_tools_path', 'tidl_tensor_bits', 'tidl_denylist'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
@@ -2516,6 +2531,17 @@ class TIDLCompiler:
                                                 "PC_dsp_test_dl_algo.out")
             self.tidl_import_lib = os.path.join(self.tidl_tools_path,
                                                 "tidl_model_import_relay.so")
+
+            calib_options = self.default_calib_options[self.tidl_tensor_bits]
+            if isinstance(self.tidl_calibration_options, dict):
+                for key in self.tidl_calibration_options:
+                    if key in calib_options:
+                        calib_options[key] = self.tidl_calibration_options[key]
+            self.tidl_calib_option = ((1 if (calib_options['activation_range'] == 'on') else 0) +
+                                      (2 if (calib_options['weight_range'] == 'on') else 0) +
+                                      (4 if (calib_options['bias_calibration'] == 'on') else 0) +
+                                      (8 if (calib_options['per_channel_weight'] == 'on') else 0))
+            self.tidl_bias_calib_iters = calib_options['iterations']
         else:
             sys.exit("Unsupported TIDL platform or version!")
         assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
@@ -2624,7 +2650,7 @@ class TIDLCompiler:
                                          self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
                                          data_layout, self.tidl_tensor_bits,
-                                         self.tidl_calib_option)
+                                         self.tidl_calib_option, self.tidl_bias_calib_iters)
                 subgraph_tensors_list = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input_list, self.temp_folder)
                 import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list)
                 _ctypes.dlclose(import_lib._handle)
