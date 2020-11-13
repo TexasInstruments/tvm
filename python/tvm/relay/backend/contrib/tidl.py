@@ -2480,8 +2480,8 @@ class TIDLCompiler:
                                       'bias_calibration' : 'on',
                                       'per_channel_weight' : 'off',
                                       'iterations' : 50 },
-                              16 :  { 'activation_range' : 'on',
-                                      'weight_range' : 'on',
+                              16 :  { 'activation_range' : 'off',
+                                      'weight_range' : 'off',
                                       'bias_calibration' : 'off',
                                       'per_channel_weight' : 'off',
                                       'iterations' : 1 } }
