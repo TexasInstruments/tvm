@@ -446,7 +446,7 @@ PackedFunc GraphRuntime::GetFunction(const std::string& name,
       if(func == nullptr)
         *rv = nullptr;
       else
-        *rv = func(args[1]);
+        *rv = func();
     });
   }
   else if (name == "set_input") {

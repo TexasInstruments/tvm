@@ -130,7 +130,7 @@ class TIDLJ6Module : public runtime::ModuleNode {
       return PackedFunc(nullptr);
     }
 
-    if (name.find("tidl_getinfo_") != std::string::npos) {
+    if (name.find("tidl_get_custom_data_") != std::string::npos) {
       return PackedFunc(nullptr);
     }
 
@@ -299,6 +299,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
       TIDLRT_setParamsDefault_ = LoadSymbol<decltype(TIDLRT_setParamsDefault_)>(
                                                     "TIDLRT_setParamsDefault");
       TIDLRT_setTensorDefault_ = LoadSymbol<decltype(TIDLRT_setTensorDefault_)>(                                                    "TIDLRT_setTensorDefault");
+      TIDLRT_getDdrStats_ = LoadSymbol<decltype(TIDLRT_getDdrStats_)>(
+                                                    "TIDLRT_getDdrStats");
     }
   }
 
@@ -325,25 +327,30 @@ class TIDLJ7Module : public runtime::ModuleNode {
       return PackedFunc(nullptr);
     }
 
-    if (name.find("tidl_getinfo_") != std::string::npos) {
+    if (name.find("tidl_get_custom_data_") != std::string::npos) {
+      if(name.substr(21) == "ddrstats")
+        return PackedFunc([this](tvm::TVMArgs args, tvm::TVMRetValue *rv) {
+          uint64_t read = 0, write = 0;
+          TIDLRT_getDdrStats_(&read, &write);
+          std::pair<uint64_t, uint64_t> *v = new std::pair<uint64_t, uint64_t>(read, write);
+          *rv = static_cast<void *>(v);
+        });
+
       if(tidlrt_perfstats == 0)
         return PackedFunc(nullptr);
 
-      int tmp_id = std::stoi(name.substr(13));
+      int tmp_id = std::stoi(name.substr(21));
       if(tmp_id == subgraph_id && subgraph_id != -1)
         return PackedFunc([this](tvm::TVMArgs args, tvm::TVMRetValue *rv) {
-          float f[3];
-          NDArray ret;
+          std::vector<uint64_t> *v = new std::vector<uint64_t>();
 
-          f[0] = stats.cpIn_time_end - stats.cpIn_time_start;
-          f[1] = stats.proc_time_end - stats.proc_time_start;
-          f[2] = stats.cpOut_time_end - stats.cpOut_time_start;
-          ret = NDArray::Empty(
-                          std::vector<int64_t>{1, 3},
-                          DLDataType{kDLFloat, 32, 1},
-                          TVMContext{DLDeviceType::kDLCPU, 0});
-          ret.CopyFromBytes((const void *)f, 3 * sizeof(float));
-          *rv = ret;
+          v->push_back(uint64_t(stats.cpIn_time_start));
+          v->push_back(uint64_t(stats.cpIn_time_end));
+          v->push_back(uint64_t(stats.proc_time_start));
+          v->push_back(uint64_t(stats.proc_time_end));
+          v->push_back(uint64_t(stats.cpOut_time_start));
+          v->push_back(uint64_t(stats.cpOut_time_end));
+          *rv = static_cast<void *>(v);
         });
 
       return PackedFunc(nullptr);
@@ -643,6 +650,7 @@ private:
   decltype(&TIDLRT_deactivate) TIDLRT_deactive_ = nullptr;
   decltype(&TIDLRT_setParamsDefault) TIDLRT_setParamsDefault_ = nullptr;
   decltype(&TIDLRT_setTensorDefault) TIDLRT_setTensorDefault_ = nullptr;
+  decltype(&TIDLRT_getDdrStats) TIDLRT_getDdrStats_ = nullptr;
 };
 
 
