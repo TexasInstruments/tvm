@@ -20,14 +20,28 @@ import sys
 import numpy as np
 import argparse
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--dlr', action='store_true')
-parser.add_argument('--cv', action='store_true')
-parser.add_argument('--target', action='store_true')
+parser = argparse.ArgumentParser(epilog='e.g. python3 ./test_tidl_j7_deploy.py input_img.jpg')
+parser.add_argument('--dlr', action='store_true',
+                    default=True,
+                    help='run inference with DLR runtime (Default)')
+parser.add_argument('--tvm', action='store_false',
+                    dest='dlr',
+                    help='run inference with TVM runtime')
+parser.add_argument('--cv', action='store_true',
+                    default=True,
+                    help='pre-process image with OpenCV (Default)')
+parser.add_argument('--pil', action='store_false',
+                    dest='cv',
+                    help='pre-process image with Pillow/PIL (Python Image Library)')
+parser.add_argument('--target', action='store_true',
+                    default=True,
+                    help='run inference on target device (ARM core) (Default)')
+parser.add_argument('--host', action='store_false',
+                    dest='target',
+                    help='run inference on host with host emulation (e.g. x86_64)')
 parser.add_argument('input', nargs='?')
 args = parser.parse_args()
 
-from tvm.contrib.download import download_testdata
 if args.dlr:
     from dlr import DLRModel
 else:
@@ -70,18 +84,15 @@ def load_image_cv(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop
     import cv2
 
     img = cv2.imread(img_file)
-
-    # Resize to 299xH or Wx299
-    orig_height, orig_width, _ = img.shape
-    new_height = orig_height * 299 // min(img.shape[:2])
-    new_width = orig_width * 299 // min(img.shape[:2])
-    img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-
-    # Center crop to 299x299
-    height, width, _ = img.shape
-    startx = width//2 - (224//2)
-    starty = height//2 - (224//2)
-    img = img[starty:starty+224,startx:startx+224]
+    resized_img = cv2.resize(img, (resize_wh[0], resize_wh[1]), interpolation=cv2.INTER_CUBIC)
+    assert(resize_wh[0] >= crop_wh[0] and resize_wh[1] >= crop_wh[1]), \
+           "resize size needs to be bigger than crop size"
+    if resize_wh[0] > crop_wh[0] or resize_wh[1] > crop_wh[1]:
+        wh_start = [ int((x - y) / 2) for x, y in zip(resize_wh, crop_wh)]
+        wh_end   = [ int(x + y) for x, y in zip(wh_start, crop_wh)]
+        img = resized_img[wh_start[1]:wh_end[1], wh_start[0]:wh_end[0]]
+    else:
+        img = resized_img
 
     # OpenCV loads as BGR, convert to RGB by swapping channels
     img = img[:,:,::-1]
@@ -113,11 +124,16 @@ def run_module(model_name, input_tensor, mean, scale, is_nchw, img_file, resize_
         module = DLRModel(artifacts_dir)
         results = module.run({input_tensor : input_data})
         tvm_output = results[0]
-        for c in range(16):
-            arr, status = module.get_custom_data('tidl_getinfo_%d' % c, np.zeros((1,3)).astype('float32'))
-            if not status:
-                break
-            print(arr)
+
+        # get optional tidl info
+        #for c in range(16):
+        #    try:
+        #        arr, status = module.get_custom_data222('tidl_getinfo_%d' % c, np.zeros((1,3)).astype('float32'))
+        #    except AttributeError as e:
+        #        break
+        #    if not status:
+        #        break
+        #    print(arr)
 
     else:
         loaded_json = open(artifacts_dir + "deploy_graph.json").read()
@@ -138,14 +154,15 @@ def run_module(model_name, input_tensor, mean, scale, is_nchw, img_file, resize_
 
         # get output
         tvm_output = module.get_output(0).asnumpy()
-        for c in range(16):
-            try:
-                func = loaded_lib.get_function('tidl_getinfo_%d' % c)
-            except AttributeError as e:
-                break
 
-            arr = func()
-            print(arr)
+        # get optional tidl info
+        #for c in range(16):
+        #    try:
+        #        func = loaded_lib.get_function('tidl_getinfo_%d' % c)
+        #    except AttributeError as e:
+        #        break
+        #    arr = func()
+        #    print(arr)
 
     print(model_name + " execution finished")
     return tvm_output
@@ -163,12 +180,11 @@ def print_top5(output):
 
 if __name__ == '__main__':
 
-    img_file = download_testdata(
-         'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true',
-         'cat.png', module='data')
-    #img_file = "./airshow.jpg"
-    if args.input is not None:
-        img_file = args.input
+    #img_file = "~/.tvm_test_data/data/airshow.jpg"
+    assert(args.input is not None), "Please specify an input image"
+    assert(os.path.exists(args.input)), f"Input file, {args.input}, does not exists"
+    img_file = args.input
+    print(f"Input image file: {img_file}")
 
     output1 = run_module("MobileNetV1", "input", [128, 128, 128],
                          [0.0078125, 0.0078125, 0.0078125], False,
@@ -182,10 +198,6 @@ if __name__ == '__main__':
                          [0.017125, 0.017507, 0.017429], True,
                          img_file, [256,256], [224,224])
 
-    if args.input is None:
-        img_file = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
-                                     'gluoncv/detection/street_small.jpg?raw=true',
-                                     'street_small.jpg', module='data')
     output3 = run_module("deeplabv3", "sub_7", [128, 128, 128],
                          [0.0078125, 0.0078125, 0.0078125], False,
                          img_file, [257,257], [257,257])

@@ -30,7 +30,11 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--target', action='store_true',
-                    help='generate code for target device (ARM core')
+                    default=True,
+                    help='generate code for target device (ARM core) (Default)')
+parser.add_argument('--host', action='store_false',
+                    dest="target",
+                    help='generate code for host emulation (e.g. x86_64 core)')
 parser.add_argument('--deny', dest='denylist', action='append',
                     help='force Relay operator to be unsupported by TIDL')
 parser.add_argument('--nooffload', action='store_true',
