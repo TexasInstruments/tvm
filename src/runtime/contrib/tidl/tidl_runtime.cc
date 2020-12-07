@@ -370,6 +370,7 @@ class TIDLJ7Module : public runtime::ModuleNode {
     //     it is okay to dlopen() same library multiple times
     LoadTIDLRT();
 
+    std::string trace_base_name = "./tidl_trace_subgraph_" + std::to_string(subgraph_id) + "_";
     // Call TIDLRT_create() to initialize the subgraph
     sTIDLRT_Params_t params;
     TIDLRT_setParamsDefault_(&params);
@@ -378,8 +379,9 @@ class TIDLJ7Module : public runtime::ModuleNode {
     params.ioBufDescPtr = (void *) info.params_data.data();
     params.net_capacity = info.net_data.size();
     params.io_capacity  = info.params_data.size();
+    params.traceBaseName = const_cast<char *>(trace_base_name.c_str());
     params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
-    params.traceWriteLevel = (tidlrt_debuglevel > 3) ? 1 : 0;
+    params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
     params.TIDLVprintf = TIDLVprintf;
     TIDL_LOG << "#TVM# net size: " << info.net_data.size();
     TIDL_LOG << "#TVM# ioparams size: " << info.params_data.size();
