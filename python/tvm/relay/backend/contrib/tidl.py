@@ -272,18 +272,29 @@ def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
         max_value = max(abs(min_values[i]), max_values[i])
         if max_value == 0:
             max_value = 1.0  # arbitrary number if input tensor is all 0's
+        '''
+        ideally a 16-bit scale should be 32768 / 65535, but that leads
+        to bias clipping in certain 16-bit models which have layers with
+        a very big difference between weightScale and biasScale
+
+        We use a 2-bit reduced bit depth to prevent bias saturation on
+        these models
+        '''
         abs_signed_max   = 128.0 if (tensor_bits == 8) else 32768.0
         abs_unsigned_max = 255.0 if (tensor_bits == 8) else 65535.0
+
+        scale_signed_max = 32.0 if tensor_bits == 8 else 8192.0
+        scale_unsigned_max = 64.0 if tensor_bits == 8 else 16384.0
 
         if min_values[i] >= 0:
             # quantize to Uint8 or Uint16
             sign = 0
-            scale = abs_unsigned_max/max_value
+            scale = min(abs_unsigned_max/max_value, scale_unsigned_max)
             quant_min, quant_max = 0.0, abs_unsigned_max
         else:
             # quantize to Int8 or Int16
             sign = 1
-            scale = abs_signed_max/max_value
+            scale = min(abs_signed_max/max_value, scale_signed_max)
             quant_min, quant_max = (- abs_signed_max), (abs_signed_max - 1.0)
 
         if tensor_bits == 32:
