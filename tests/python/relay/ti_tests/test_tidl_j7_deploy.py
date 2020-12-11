@@ -51,7 +51,8 @@ else:
 ######################################################################
 # Load a test image
 # ---------------------------------------------
-def load_image_pillow(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop_wh):
+def load_image_pillow(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop_wh,
+                      needs_quant):
     from PIL import Image
     #from matplotlib import pyplot as plt
 
@@ -68,19 +69,22 @@ def load_image_pillow(batch_size, img_file, mean, scale, needs_nchw, resize_wh, 
     # plt.imshow(cropped_img)
     # plt.show()
 
-    # Normalize input data to (-1, 1)
-    norm_img = np.asarray(cropped_img).astype("float32")
-    norm_img[:, :, 0] = (norm_img[:, :, 0] - mean[0]) * scale[0]
-    norm_img[:, :, 1] = (norm_img[:, :, 1] - mean[1]) * scale[1]
-    norm_img[:, :, 2] = (norm_img[:, :, 2] - mean[2]) * scale[2]
-    #norm_img = norm_img / np.amax(np.abs(norm_img))
+    if needs_quant:
+        norm_img = np.asarray(cropped_img).astype("uint8")
+    else:
+        # Normalize input data to (-1, 1)
+        norm_img = np.asarray(cropped_img).astype("float32")
+        norm_img[:, :, 0] = (norm_img[:, :, 0] - mean[0]) * scale[0]
+        norm_img[:, :, 1] = (norm_img[:, :, 1] - mean[1]) * scale[1]
+        norm_img[:, :, 2] = (norm_img[:, :, 2] - mean[2]) * scale[2]
+        #norm_img = norm_img / np.amax(np.abs(norm_img))
     # Set batch_size of input data: NHWC
     input_data = np.concatenate([norm_img[np.newaxis, :, :]]*batch_size)
     if needs_nchw:
         input_data = input_data.transpose(0, 3, 1, 2)  # NCHW
     return input_data
 
-def load_image_cv(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop_wh):
+def load_image_cv(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop_wh, needs_quant):
     import cv2
 
     img = cv2.imread(img_file)
@@ -98,10 +102,14 @@ def load_image_cv(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop
     img = img[:,:,::-1]
 
     # convert HWC to NCHW
-    img = np.expand_dims(np.transpose(img, (2,0,1)),axis=0).astype(np.float32)
+    img = np.expand_dims(np.transpose(img, (2,0,1)),axis=0)
 
-    for mean, scale, ch in zip(mean, scale, range(img.shape[1])):
-        img[:,ch,:,:] = ((img[:,ch,:,:] - mean) * scale)
+    if needs_quant:
+        img = img.astype(np.uint8)
+    else:
+        img = img.astype(np.float32)
+        for mean, scale, ch in zip(mean, scale, range(img.shape[1])):
+            img[:,ch,:,:] = ((img[:,ch,:,:] - mean) * scale)
 
     if not needs_nchw:
         img = img.transpose(0, 2, 3, 1)
@@ -114,11 +122,12 @@ def load_image_cv(batch_size, img_file, mean, scale, needs_nchw, resize_wh, crop
 def run_module(model_name, input_tensor, mean, scale, is_nchw, img_file, resize_wh, crop_wh):
     # load deployable module
     artifacts_dir = "artifacts_" + model_name + ("_target" if args.target else "_host") + "/"
+    quant = model_name.endswith('_quant')
 
     if args.cv:
-        input_data = load_image_cv(1, img_file, mean, scale, is_nchw, resize_wh, crop_wh)
+        input_data = load_image_cv(1, img_file, mean, scale, is_nchw, resize_wh, crop_wh, quant)
     else:
-        input_data = load_image_pillow(1, img_file, mean, scale, is_nchw, resize_wh, crop_wh)
+        input_data = load_image_pillow(1, img_file, mean, scale, is_nchw, resize_wh, crop_wh, quant)
 
     if args.dlr:
         module = DLRModel(artifacts_dir)
@@ -190,6 +199,10 @@ if __name__ == '__main__':
                          [0.0078125, 0.0078125, 0.0078125], False,
                          img_file, [256,256], [224,224])
 
+    output1q = run_module("MobileNetV2_quant", "input", [128, 128, 128],
+                         [0.0078125, 0.0078125, 0.0078125], False,
+                         img_file, [256,256], [224,224])
+
     output2 = run_module("ONNX_MobileNetV2", "data", [123.675, 116.28, 103.53],
                          [0.017125, 0.017507, 0.017429], True,
                          img_file, [256,256], [224,224])
@@ -204,6 +217,8 @@ if __name__ == '__main__':
 
     print("TensorFlow MobileNetV1 output: (index of 1001)")
     print_top5(output1)
+    print("TFLite quantized MobileNetV2 output: (index of 1001)")
+    print_top5(output1q)
     print("ONNX MobileNetV2 output: (index of 1000)")
     print_top5(output2)
     print("Pytorch MobileNetV2 output: (index of 1000)")

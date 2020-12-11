@@ -461,9 +461,9 @@ class TIDLJ7Module : public runtime::ModuleNode {
       rt_arg->layout = info.is_nchw ? TIDLRT_LT_NCHW : TIDLRT_LT_NHWC;
       TIDL_LOG << "#TVM# layout: " << rt_arg->layout;
 
-      // Skip zeroPoint and scale for now since those are for quantized models.
-      rt_arg->zeroPoint = 0;
-      rt_arg->scale = 1.0f;
+      // Set zero point and tensor scale (_inv, used by TIDLRT) for input/output tensors
+      rt_arg->zeroPoint = info.inouts_zp[i];
+      rt_arg->scale = info.inouts_scale_inv[i];
       TIDL_LOG << "#TVM# zeroPoint: " << rt_arg->zeroPoint << ", scale: "
                << rt_arg->scale;
 
@@ -726,9 +726,11 @@ inline std::string Base64Encode(std::string s) {
 // Save a TIDLSubgraphInfo to JSON
 void TIDLSubgraphInfo::Save(dmlc::JSONWriter* writer) const {
   writer->BeginObject();
+  writer->WriteObjectKeyValue("is_nchw", is_nchw);
   writer->WriteObjectKeyValue("input_names", input_names);
   writer->WriteObjectKeyValue("num_outputs", num_outputs);
-  writer->WriteObjectKeyValue("is_nchw", is_nchw);
+  writer->WriteObjectKeyValue("inouts_zp", inouts_zp);
+  writer->WriteObjectKeyValue("inouts_scale_inv", inouts_scale_inv);
   writer->WriteObjectKeyValue("net_data", Base64Encode(net_data));
   writer->WriteObjectKeyValue("params_data", Base64Encode(params_data));
   writer->EndObject();
@@ -737,9 +739,11 @@ void TIDLSubgraphInfo::Save(dmlc::JSONWriter* writer) const {
 // Load a TIDLSubgraphInfo from JSON
 void TIDLSubgraphInfo::Load(dmlc::JSONReader* reader) {
   dmlc::JSONObjectReadHelper helper;
+  helper.DeclareField("is_nchw", &is_nchw);
   helper.DeclareField("input_names", &input_names);
   helper.DeclareField("num_outputs", &num_outputs);
-  helper.DeclareField("is_nchw", &is_nchw);
+  helper.DeclareField("inouts_zp", &inouts_zp);
+  helper.DeclareField("inouts_scale_inv", &inouts_scale_inv);
 
   std::string net_base64;
   helper.DeclareField("net_data", &net_base64);

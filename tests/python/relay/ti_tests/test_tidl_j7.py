@@ -267,10 +267,22 @@ def create_tf_relay_graph(model, input_node, input_shape, layout):
     return mod, params
 
 def create_tflite_relay_graph(model, input_node, input_shape, layout):
+    # TFLite input tensor name, shape and type
+    input_dtype = "float32"
+
     if model == "MobileNetV1":
         model = "./mobileNet1/mobilenet_v1_1.0_224.tflite"
     elif model == "MobileNetV2":
         model = "./mobileNet2/mobilenet_v2_1.0_224.tflite"
+    elif model == "MobileNetV2_quant":
+        model_tar = download_testdata(
+                'https://storage.googleapis.com/download.tensorflow.org/models/tflite_11_05_08/' +
+                'mobilenet_v2_1.0_224_quant.tgz', 'mobilenet_v2_1.0_224_quant.tgz', module='models')
+        model_dir = os.path.dirname(model_tar)
+        model = os.path.join(model_dir, 'mobilenet_v2_1.0_224_quant.tflite')
+        if not os.path.exists(model):
+            untar(model_tar, model_dir)
+        input_dtype = "uint8"
     elif model == "deeplabv3":
         model = download_testdata(
             'https://storage.googleapis.com/download.tensorflow.org/models/tflite/gpu/deeplabv3_257_mv_gpu.tflite?raw=true',
@@ -289,9 +301,6 @@ def create_tflite_relay_graph(model, input_node, input_shape, layout):
     # Load Neural Network in Relay
     # ----------------------------
 
-    # TFLite input tensor name, shape and type
-    input_dtype = "float32"
-
     # parse TFLite model and convert into Relay computation graph
     mod, params = relay.frontend.from_tflite(tflite_model,
                                          shape_dict={input_node: input_shape},
@@ -300,7 +309,7 @@ def create_tflite_relay_graph(model, input_node, input_shape, layout):
 
     return mod, params
 
-def load_image(batch_size, img_file, resize_wh, crop_wh, mean, scale, needs_nchw):
+def load_image(batch_size, img_file, resize_wh, crop_wh, mean, scale, needs_nchw, needs_quant):
     from PIL import Image
     orig_img = Image.open(img_file)  # HWC
     resized_img = orig_img.resize((resize_wh[0], resize_wh[1]))
@@ -312,12 +321,17 @@ def load_image(batch_size, img_file, resize_wh, crop_wh, mean, scale, needs_nchw
         cropped_img = resized_img.crop((wh_start[0], wh_start[1], wh_end[0], wh_end[1]))
     else:
         cropped_img = resized_img
-    # Normalize input data to (-1, 1)
-    norm_img = np.asarray(cropped_img).astype("float32")
-    norm_img[:, :, 0] = (norm_img[:, :, 0] - mean[0]) * scale[0]
-    norm_img[:, :, 1] = (norm_img[:, :, 1] - mean[1]) * scale[1]
-    norm_img[:, :, 2] = (norm_img[:, :, 2] - mean[2]) * scale[2]
-    #norm_img = norm_img / np.amax(np.abs(norm_img))
+
+    if needs_quant:
+        norm_img = np.asarray(cropped_img).astype("uint8")
+    else:
+        # Normalize input data to (-1, 1)
+        norm_img = np.asarray(cropped_img).astype("float32")
+        norm_img[:, :, 0] = (norm_img[:, :, 0] - mean[0]) * scale[0]
+        norm_img[:, :, 1] = (norm_img[:, :, 1] - mean[1]) * scale[1]
+        norm_img[:, :, 2] = (norm_img[:, :, 2] - mean[2]) * scale[2]
+        #norm_img = norm_img / np.amax(np.abs(norm_img))
+
     # Set batch_size of input data: NHWC
     input_data = np.concatenate([norm_img[np.newaxis, :, :]]*batch_size)
     if needs_nchw:
@@ -329,7 +343,8 @@ def test_tidl_tf_mobilenets(model_name, img_file_list, format="tf"):
     input_node = "input"
     input_shape = (1, 224, 224, 3)
     input_data_list = [ load_image(1, img_file, [256, 256], [224, 224],
-                            [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False)
+                            [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False,
+                            model_name.endswith('_quant'))
                             for img_file in img_file_list ]
     if input_data_list[0].shape != input_shape:
         sys.exit("Input data shape is not correct!")
@@ -355,7 +370,8 @@ def test_tidl_onnx(model_name, img_file_list):
     input_node = "data"
     input_shape = (1, 3, 224, 224)
     input_data_list = [ load_image(1, img_file, [256, 256], [224, 224],
-                            [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True)
+                            [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True,
+                            model_name.endswith('_quant'))
                             for img_file in img_file_list ]
     if input_data_list[0].shape != input_shape:
         sys.exit("Input data shape is not correct!")
@@ -383,7 +399,8 @@ def test_tidl_pytorch(model_name, img_file_list):
     input_node = "data"
     input_shape = (1, 3, 224, 224)
     input_data_list = [ load_image(1, img_file, [256, 256], [224, 224],
-                            [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True)
+                            [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True,
+                            model_name.endswith('_quant'))
                             for img_file in img_file_list ]
     if input_data_list[0].shape != input_shape:
         sys.exit("Input data shape is not correct!")
@@ -417,7 +434,7 @@ def test_tidl_tflite_deeplabv3(img_file_list):
     input_node = "sub_7"
     input_shape = (1, 257, 257, 3)
     input_data_list = [ load_image(1, img_file, [257, 257], [257, 257],
-                            [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False)
+                            [128, 128, 128], [0.0078125, 0.0078125, 0.0078125], False, False)
                             for img_file in img_file_list ]
     if input_data_list[0].shape != input_shape:
         sys.exit("Input data shape is not correct!")
@@ -447,6 +464,7 @@ if __name__ == '__main__':
     #test_tidl_tf_mobilenets("MobileNetV1", [ img_cat ], "tflite")
     #test_tidl_tf_mobilenets("MobileNetV2", [ img_cat ])
     #test_tidl_tf_mobilenets("MobileNetV2", [ img_cat ], "tflite")
+    test_tidl_tf_mobilenets("MobileNetV2_quant", [ img_cat ], "tflite")
     test_tidl_onnx("ONNX_MobileNetV2", [ img_airshow, img_cat2, img_cat ])
 
     img_street = download_testdata('https://github.com/dmlc/web-data/blob/master/' +

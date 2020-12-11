@@ -58,7 +58,8 @@ def find_data_layout(mod):
     relay.analysis.post_order_visit(mod['main'], traverse_func)
     data_layout = None
     for node in all_nodes:
-        if isinstance(node, relay.expr.Call) and node.op.name == 'nn.conv2d':
+        if isinstance(node, relay.expr.Call) and (node.op.name == 'nn.conv2d' or
+                                                  node.op.name == 'qnn.conv2d'):
             data_layout = node.attrs.data_layout
             break
     return data_layout
@@ -217,7 +218,7 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names):
 
     return in_out_nodes
 
-def obtain_subgraph_tensor(subgraph_tensors_list, tensor_name_prefix):
+def obtain_subgraph_tensor(subgraph_tensors_list, relay_quantization, tensor_name_prefix):
     r""" Obtain input/output tensor for a given subgraph"""
 
     tensors_list = []
@@ -232,7 +233,17 @@ def obtain_subgraph_tensor(subgraph_tensors_list, tensor_name_prefix):
         tensors_list.append(tensors)
         names_list.append(names)
 
-    return tensors_list, names_list
+    zp_list = []
+    scale_inv_list = []
+    for name in names_list[0]:
+        if name in relay_quantization:
+            zp, scale = relay_quantization[name]
+        else:
+            zp, scale = 0, 1.0
+        zp_list.append(zp)
+        scale_inv_list.append(1.0 / scale)  ### TIDL uses inverse of TVM/Relay scale
+
+    return tensors_list, names_list, zp_list, scale_inv_list
 
 def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
     r""" Convert float32 n-d array to int8/int16 or uint8/uint16 1-d array
@@ -249,7 +260,6 @@ def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
     quant_signs: signs for (multiple) subgraph inputs across all calibration images/data
     """
 
-
     # find min, max for each subgraph input across all calibration images/data
     min_values = []
     max_values = []
@@ -260,6 +270,7 @@ def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
             # only use 1 batch per input for calibration
             min_values_i.append(np.amin(input_tensors[i][0, :]))
             max_values_i.append(np.amax(input_tensors[i][0, :]))
+
         min_values.append(min(min_values_i))
         max_values.append(max(max_values_i))
 
@@ -588,20 +599,50 @@ class RemoveTrainingOperators(ExprMutator):
             return expr.args[0]
         return super().visit_tuple_getitem(t)
 
+def get_quantization(expr):
+    """ Get quantization (zp, scale) of the expr's output
+    """
+    if expr.checked_type.dtype != 'float32':
+        if isinstance(expr, relay.expr.Call):
+            if expr.op.name == 'qnn.requantize':
+                return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
+            elif expr.op.name == 'qnn.conv2d':
+                return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
+            elif expr.op.name == 'reshape':
+                return get_quantization(expr.args[0])
+            else:
+                assert False, f'Do not know how to get quantization for {expr.op.name}'
+        else:
+            assert False, 'Do not know how to get quantization for this expr'
+    else:
+        return 0, 1.0
+
+
 def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_folder, save_output=False):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
     """
 
+    #print("----------- Paritioned graph for generating subgraph boundary tensors -----------")
+    #print(mod.astext(show_meta_data=False))
     # From partitioned module, create a "calibration model" which can be
     # executed on CPU and will give additional outputs for boundary tensors.
     mod_tvm = relay.transform.InferType()(mod)
     mod_tvm = relay.transform.Inline()(mod_tvm)
     calib_mutator = CalibrationGraphMutator(tidl_target)
     mod_tvm["main"] = calib_mutator.make_calibration_graph(mod_tvm["main"])
+    #print("----------- CPU-only graph for generating subgraph boundary tensors -----------")
+    #print(mod_tvm.astext(show_meta_data=False))
 
-    # Build and execute calibration graph to get outputs
+    relay_quantization = {}
+    outputs_expr = mod_tvm["main"].body
+    for i, output_i_expr in enumerate(outputs_expr.fields):
+        if i in calib_mutator.name_map:
+            relay_quantization[calib_mutator.name_map[i]] = get_quantization(output_i_expr)
+
+    # Build and execute calibration graph on host to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
-    with relay.build_config(opt_level=0):
+    # Use opt_level=2 to support quantized models, which requires lowering at opt_level 2
+    with relay.build_config(opt_level=2):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
     mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
     mod.set_input(**params)
@@ -618,13 +659,39 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
         subgraph_tensors = {}
         for i, res in enumerate(results):
             if i in calib_mutator.name_map:
+
+                # TODO: if quantized output
+                # 1) post-process quantized data with zp, scale to float data
+                # Okay, do 1) first
+                # 2) if data type is "uint8"/"int8", then assume maximum range utilization,
+                #    compute tidl_scale from relay (zp, scale) if possible
+                #    Note: this assumption of maximum range utilization may not be correct!!!
+                #          in which case, need to determine maximum bits being used
+                # background for quantization:
+                # - TIDL activation tensor can only have zero point of 0 value,
+                #   while relay activation tensor can have non-0 zero point
+                # - TIDL can only have maximum 16-bit bias,
+                #   while relay bias can have maximum 32-bit bias
+                # - To avoid re-calibration in TIDL compilation/import flow, we need to provide
+                #   (minTensorValue, maxTensorValue) for the activation of each TIDL layer,
+                #   and set TIDL layer activation type to TIDL_Clip.  TIDL_updateScaleFactor()
+                #   in TIDL_init() will use these information to compute roundBits
+                #   and tensorScale for each layer.
+                #   - Avoiding re-calibration is possible if every corresponding relay layer
+                #     is of type "uint8"/"int8", and all bits are used
+                #     - we then compute (minTensorValue, maxTensorValue) from relay layer,
+                #       without any calibration data, set 
+                zp, scale = relay_quantization[calib_mutator.name_map[i]]
+                if zp != 0 or scale != 1.0:
+                    res = (res.astype('float32') - zp) * scale
+
                 subgraph_tensors[calib_mutator.name_map[i]] = res
                 if save_output:
                     file_name = os.path.join(temp_folder, calib_mutator.name_map[i] + ".txt")
                     np.savetxt(file_name, res.flatten(), fmt='%10.5f')
         subgraph_tensors_list.append(subgraph_tensors)
 
-    return subgraph_tensors_list
+    return subgraph_tensors_list, relay_quantization
 
 def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp_folder,
                                 data_layout):
@@ -646,9 +713,15 @@ def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp
     #print("----------- after additional outputs -----------")
     #print(mod_tvm.astext(show_meta_data=False))
 
-    # Build and execute calibration graph to get outputs
+    relay_quantization = {}
+    for i, output_i_expr in enumerate(mod_tvm["main"].body.fields):
+        if i in calib_perlayer_mutator.name_map:
+            relay_quantization[calib_perlayer_mutator.name_map[i]] = get_quantization(output_i_expr)
+
+    # Build and execute calibration graph on host to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
-    with relay.build_config(opt_level=0):
+    # Use opt_level=2 to support quantized models, which requires lowering at opt_level 2
+    with relay.build_config(opt_level=2):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
     mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
     mod.set_input(**params)
@@ -659,6 +732,9 @@ def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp
 
     for i in range(mod.get_num_outputs()):
         tensor = mod.get_output(i).asnumpy()
+        zp, scale = relay_quantization[calib_perlayer_mutator.name_map[i]]
+        if zp != 0 or scale != 1.0:
+            tensor = (tensor.astype('float32') - zp) * scale
         if data_layout == "NHWC" and len(tensor.shape) == 4:
             tensor = tensor.transpose(0, 3, 1, 2)
         file_name = os.path.join(temp_folder, calib_perlayer_mutator.name_map[i] + ".npy")
@@ -1625,7 +1701,7 @@ class TIDLImport:
 
         return status
 
-    def import_relay_ir(self, mod, params, subgraph_tensors_list):
+    def import_relay_ir(self, mod, params, subgraph_tensors_list, relay_quantization):
         r""" Relay IR import to TIDL
 
         Parameters
@@ -1636,6 +1712,7 @@ class TIDLImport:
             The parameter dict to be used by relay
         subgraph_tensors_list: list of dict (list length equals number of calibration data)
             Input/output tensors of subgraphs obtained from TVM graph execution
+        relay_quantization: { name: (zp, scale) } dictionary for input/output tensors
 
         Returns
         -------
@@ -1683,10 +1760,10 @@ class TIDLImport:
             out_tensor_name = tidl_subgraph + '_o'
 
             # Obtain input tensor from TVM graph execution
-            input_fp_list, input_names_list = obtain_subgraph_tensor(subgraph_tensors_list,
-                                                                     in_tensor_name)
-            output_fp_list, output_names_list = obtain_subgraph_tensor(subgraph_tensors_list,
-                                                                       out_tensor_name)
+            input_fp_list, input_names_list, input_zp_list, input_scale_inv_list = \
+                  obtain_subgraph_tensor(subgraph_tensors_list, relay_quantization, in_tensor_name)
+            output_fp_list, output_names_list, output_zp_list, output_scale_inv_list = \
+                  obtain_subgraph_tensor(subgraph_tensors_list, relay_quantization, out_tensor_name)
             input_names = input_names_list[0]
             output_names = output_names_list[0]
             if not input_fp_list:
@@ -1712,6 +1789,8 @@ class TIDLImport:
                'macs'    : relay.analysis.get_total_mac_number(subgraph),
                'ninputs' : len(input_names),
                'noutputs': len(output_names),
+               'inouts_zp' : input_zp_list + output_zp_list,
+               'inouts_scale_inv' : input_scale_inv_list + output_scale_inv_list,
                'nodes'   : {},
             }
 
@@ -1949,6 +2028,7 @@ class TIDLAnnotation:
             self._register_supported_op("nn.prelu")
             self._register_constrained_op("nn.upsampling")
             self._register_constrained_op("nn.upsampling3d")
+            self._register_constrained_op("qnn.conv2d")
 
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
@@ -2670,8 +2750,10 @@ class TIDLCompiler:
                                          self.tidl_target, self.tidl_platform,
                                          data_layout, self.tidl_tensor_bits,
                                          self.tidl_calib_option, self.tidl_bias_calib_iters)
-                subgraph_tensors_list = generate_subgraph_tensors(self.tidl_target, mod, params, graph_input_list, self.temp_folder)
-                import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list)
+                subgraph_tensors_list, relay_quantization = generate_subgraph_tensors(
+                                 self.tidl_target, mod, params, graph_input_list, self.temp_folder)
+                import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list,
+                                                            relay_quantization)
                 _ctypes.dlclose(import_lib._handle)
                 if import_status == 1:
                     print("TIDL import of Relay IR graph succeeded.")

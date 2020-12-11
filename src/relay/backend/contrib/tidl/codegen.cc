@@ -350,7 +350,19 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
           if (it2 == sg_obj.end())
             continue;
           subgraph_info.is_nchw = (it2->second.to_str() == "1");
-        } 
+          auto it3 = sg_obj.find("inouts_zp");
+          if (it3 == sg_obj.end())
+            continue;
+          const picojson::array& zps = it3->second.get<picojson::array>();
+          for (const auto &zp : zps)
+            subgraph_info.inouts_zp.push_back((int32_t) zp.get<double>());
+          auto it4 = sg_obj.find("inouts_scale_inv");
+          if (it4 == sg_obj.end())
+            continue;
+          const picojson::array& scale_invs = it4->second.get<picojson::array>();
+          for (const auto &scale_inv : scale_invs)
+            subgraph_info.inouts_scale_inv.push_back((float) scale_inv.get<double>());
+        }
       }
     }
     if (subgraph_info.is_nchw == -1)

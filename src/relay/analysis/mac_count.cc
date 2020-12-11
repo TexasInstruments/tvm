@@ -65,7 +65,7 @@ int64_t ConvMacCount(const Call& call_node) {
     return 0;
   }
   Array<Expr> args = call_node->args;
-  CHECK_EQ(args.size(), 2) << "The number of input arguments of a CONV 2D node should be 2.";
+  CHECK(args.size() == 2 || args.size() == 6) << "The number of input arguments of a CONV (qnn) 2D node should be 2 (6).";
   const auto* conv_2d_attr = call_node->attrs.as<Conv2DAttrs>();
   const auto* data_type = args[0]->checked_type().as<TensorTypeNode>();
   Array<IndexExpr> data_shape = data_type->shape;
@@ -158,6 +158,7 @@ int64_t BatchMatmulMacCount(const Call& call_node) {
 }
 
 RELAY_REGISTER_OP("nn.conv2d").set_attr<FMacCount>("FMacCount", ConvMacCount);
+RELAY_REGISTER_OP("qnn.conv2d").set_attr<FMacCount>("FMacCount", ConvMacCount);
 
 RELAY_REGISTER_OP("nn.conv2d_transpose").set_attr<FMacCount>("FMacCount", Conv2dTransposeMacCount);
 
@@ -169,7 +170,7 @@ class MacCounter : private ExprVisitor {
  public:
   MacCounter() { count_ = 0; }
   static int64_t GetTotalMacNumber(const Expr& expr) {
-    LOG(INFO) << "This pass only counts MACs in direct conv2d, "
+    LOG(INFO) << "This pass only counts MACs in direct conv2d (nn & qnn), "
               << "conv2d_transpose, dense, and batch_matmul ops";
     MacCounter counter;
     counter(expr);
