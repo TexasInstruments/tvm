@@ -286,7 +286,10 @@ def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
             scale = abs_signed_max/max_value
             quant_min, quant_max = (- abs_signed_max), (abs_signed_max - 1.0)
 
-        quant_scales.append(scale)
+        if tensor_bits == 32:
+            quant_scales.append(1.0)
+        else:
+            quant_scales.append(scale)
         input_signs.append(sign)
         quant_mins.append(quant_min)
         quant_maxs.append(quant_max)
@@ -2481,6 +2484,11 @@ class TIDLCompiler:
                                       'per_channel_weight' : 'off',
                                       'iterations' : 50 },
                               16 :  { 'activation_range' : 'off',
+                                      'weight_range' : 'off',
+                                      'bias_calibration' : 'off',
+                                      'per_channel_weight' : 'off',
+                                      'iterations' : 1 },
+                              32 :  { 'activation_range' : 'off',
                                       'weight_range' : 'off',
                                       'bias_calibration' : 'off',
                                       'per_channel_weight' : 'off',
