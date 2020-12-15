@@ -604,14 +604,15 @@ def get_quantization(expr):
     """
     if expr.checked_type.dtype != 'float32':
         if isinstance(expr, relay.expr.Call):
-            if expr.op.name == 'qnn.requantize':
+            op_name = expr.op.name
+            if op_name == 'qnn.requantize':
                 return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
-            elif expr.op.name == 'qnn.conv2d':
+            elif op_name == 'qnn.conv2d':
                 return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
-            elif expr.op.name == 'reshape':
+            elif op_name == 'reshape' or op_name == 'nn.bias_add':
                 return get_quantization(expr.args[0])
             else:
-                assert False, f'Do not know how to get quantization for {expr.op.name}'
+                assert False, f'Do not know how to get quantization for {op_name}'
         else:
             assert False, 'Do not know how to get quantization for this expr'
     else:
@@ -2397,6 +2398,10 @@ class TIDLAnnotation:
         # Invoke TIDL import library call to check if this op can be supported
         op = tvm.ir.Op.get(op_name)
         callnode = tvm.relay.Call(op, args, attrs)
+        # make sure checked_type() is defined on temporarily constructed callnode
+        tmp_mod = tvm.IRModule.from_expr(callnode)
+        tmp_mod = tvm.relay.transform.InferType()(tmp_mod)
+        callnode = tmp_mod['main'].body
         #print(f"Invoking TIDL Relay Import allow function for {op_name}")
         allow_fn = tvm.get_global_func("TIDL_relayAllowNode")
         return allow_fn(callnode)
