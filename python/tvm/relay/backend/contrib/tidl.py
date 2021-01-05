@@ -52,7 +52,7 @@ def traverse_expr(node, node_dict):
         return
     node_dict[node] = len(node_dict)
 
-def find_data_layout(mod):
+def find_data_layout_and_qnn_ops(mod):
     all_nodes = {}
     traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
     relay.analysis.post_order_visit(mod['main'], traverse_func)
@@ -62,7 +62,12 @@ def find_data_layout(mod):
                                                   node.op.name == 'qnn.conv2d'):
             data_layout = node.attrs.data_layout
             break
-    return data_layout
+    has_qnn_ops = False
+    for node in all_nodes:
+        if isinstance(node, relay.expr.Call) and node.op.name.startswith('qnn.'):
+            has_qnn_ops = True
+            break
+    return data_layout, has_qnn_ops
 
 def convert_str_list_to_char_array(str_list):
     """ Convert list of strings to array of ctypes char * """
@@ -599,8 +604,24 @@ class RemoveTrainingOperators(ExprMutator):
             return expr.args[0]
         return super().visit_tuple_getitem(t)
 
-def get_quantization(expr):
+def get_arg_quantization(expr, mod):
     """ Get quantization (zp, scale) of the expr's output
+        If expr is not a CallNode, we have to find the CallNode where expr is used,
+        and find quantization of expr from the CallNode
+    """
+    all_nodes = {}
+    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
+    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    for node in all_nodes:
+        if isinstance(node, relay.expr.Call):
+            if expr in node.args:
+                if node.op.name == 'qnn.conv2d':
+                    return node.args[2].data.asnumpy().item(), node.args[4].data.asnumpy().item()
+    assert False, 'Do not know hot to get quantization for expr'
+
+def get_quantization(expr, mod):
+    """ Get quantization (zp, scale) of the expr's output
+        If expr is a CallNode, we can compute quantization directly
     """
     if expr.checked_type.dtype != 'float32':
         if isinstance(expr, relay.expr.Call):
@@ -610,11 +631,11 @@ def get_quantization(expr):
             elif op_name == 'qnn.conv2d':
                 return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
             elif op_name == 'reshape' or op_name == 'nn.bias_add':
-                return get_quantization(expr.args[0])
+                return get_quantization(expr.args[0], mod)
             else:
                 assert False, f'Do not know how to get quantization for {op_name}'
         else:
-            assert False, 'Do not know how to get quantization for this expr'
+            return get_arg_quantization(expr, mod)
     else:
         return 0, 1.0
 
@@ -638,7 +659,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
     outputs_expr = mod_tvm["main"].body
     for i, output_i_expr in enumerate(outputs_expr.fields):
         if i in calib_mutator.name_map:
-            relay_quantization[calib_mutator.name_map[i]] = get_quantization(output_i_expr)
+            relay_quantization[calib_mutator.name_map[i]] = get_quantization(output_i_expr, mod_tvm)
 
     # Build and execute calibration graph on host to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
@@ -717,7 +738,11 @@ def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp
     relay_quantization = {}
     for i, output_i_expr in enumerate(mod_tvm["main"].body.fields):
         if i in calib_perlayer_mutator.name_map:
-            relay_quantization[calib_perlayer_mutator.name_map[i]] = get_quantization(output_i_expr)
+            output_i_name = calib_perlayer_mutator.name_map[i]
+            if output_i_name.startswith('graph_output_'):
+                relay_quantization[output_i_name] = 0, 1.0
+            else:
+                relay_quantization[output_i_name] = get_quantization(output_i_expr, mod_tvm)
 
     # Build and execute calibration graph on host to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
@@ -2030,6 +2055,7 @@ class TIDLAnnotation:
             self._register_constrained_op("nn.upsampling")
             self._register_constrained_op("nn.upsampling3d")
             self._register_constrained_op("qnn.conv2d")
+            self._register_constrained_op("qnn.requantize")
 
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
@@ -2685,7 +2711,7 @@ class TIDLCompiler:
             graph_input_list = [ graph_input_list ]
 
         #============= Find data layout of the original graph =============
-        data_layout = find_data_layout(mod_orig)
+        data_layout, has_qnn_ops = find_data_layout_and_qnn_ops(mod_orig)
 
         # Open TIDL import library
         if os.path.exists(self.tidl_import_lib):
@@ -2740,9 +2766,19 @@ class TIDLCompiler:
         mod = flatten_tuple_params(mod, self.tidl_target)
 
         #============= Post-partition transformations  ==============
-        with tvm.transform.PassContext(opt_level=3):
-            convert_pass = [relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})]
-            mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs
+        # ConvertLayout pass does not yet work properly for graph with qnn ops
+        # We could optionally lower the RelayIR with relay.qnn.transform.CanonicalizeOps() and
+        # relay.transform.FoldConstant() before ConvertLayout pass.  However, with the presence
+        # of TIDL subgraph, CanonicalizeOps() somehow caused int64 args/buffers (should be int32)
+        # in MakePackedAPI()/ArgBinder::BindDLTensor(), which inserted asserts in generated code
+        # and in turn caused assert fails at inference time:
+        #     TVMError: Check failed: ret == 0 (-1 vs. 0) : Assert fail: (((tir.tvm_struct_get(arg1, 0, 5) == (uint8)0) && (tir.tvm_struct_get(arg1, 0, 6) == (uint8)64)) && (tir.tvm_struct_get(arg1, 0, 7) == (uint16)1)), arg1.dtype is expected to be int64
+        # Skip applying ConvertLayout pass to quantized models for now.
+        # TODO: revisit this issue after finishing quantized model support for TIDL offload
+        if not has_qnn_ops:
+            with tvm.transform.PassContext(opt_level=3):
+                convert_pass = [relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})]
+                mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs
 
         #print("-----------final partitioned graph-----------")
         #print(mod.astext(show_meta_data=False))
