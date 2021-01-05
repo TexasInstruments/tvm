@@ -632,6 +632,8 @@ def get_quantization(expr, mod):
                 return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
             elif op_name == 'reshape' or op_name == 'nn.bias_add':
                 return get_quantization(expr.args[0], mod)
+            if op_name == 'qnn.add':
+                return expr.args[7].data.asnumpy().item(), expr.args[6].data.asnumpy().item()
             else:
                 assert False, f'Do not know how to get quantization for {op_name}'
         else:
@@ -2056,6 +2058,7 @@ class TIDLAnnotation:
             self._register_constrained_op("nn.upsampling3d")
             self._register_constrained_op("qnn.conv2d")
             self._register_constrained_op("qnn.requantize")
+            self._register_constrained_op("qnn.add")
 
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
