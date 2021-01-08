@@ -604,26 +604,31 @@ class RemoveTrainingOperators(ExprMutator):
             return expr.args[0]
         return super().visit_tuple_getitem(t)
 
-def get_arg_quantization(expr, mod):
+def get_arg_quantization(expr, mod, all_nodes=None):
     """ Get quantization (zp, scale) of the expr's output
         If expr is not a CallNode, we have to find the CallNode where expr is used,
         and find quantization of expr from the CallNode
     """
-    all_nodes = {}
-    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
-    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    if all_nodes == None:
+        all_nodes = {}
+        traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
+        relay.analysis.post_order_visit(mod['main'], traverse_func)
     for node in all_nodes:
         if isinstance(node, relay.expr.Call):
             if expr in node.args:
                 if node.op.name == 'qnn.conv2d':
                     return node.args[2].data.asnumpy().item(), node.args[4].data.asnumpy().item()
-    assert False, 'Do not know hot to get quantization for expr'
+                if node.op.name == 'cast':
+                    return get_quantization(node, mod, all_nodes)
+    assert False, 'Do not know hot to get arg quantization for expr'
 
-def get_quantization(expr, mod):
+def get_quantization(expr, mod, all_nodes=None):
     """ Get quantization (zp, scale) of the expr's output
         If expr is a CallNode, we can compute quantization directly
     """
-    if expr.checked_type.dtype != 'float32':
+    if isinstance(expr.checked_type, relay.ty.TensorType):
+        if expr.checked_type.dtype == 'float32':
+            return 0, 1.0
         if isinstance(expr, relay.expr.Call):
             op_name = expr.op.name
             if op_name == 'qnn.requantize':
@@ -631,16 +636,27 @@ def get_quantization(expr, mod):
             elif op_name == 'qnn.conv2d':
                 return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
             elif op_name == 'reshape' or op_name == 'nn.bias_add':
-                return get_quantization(expr.args[0], mod)
-            if op_name == 'qnn.add':
+                return get_quantization(expr.args[0], mod, all_nodes)
+            elif op_name == 'qnn.add':
                 return expr.args[7].data.asnumpy().item(), expr.args[6].data.asnumpy().item()
+            elif op_name == 'cast':
+                if expr.checked_type.dtype == 'int32':
+                    return get_quantization(expr.args[0], mod, all_nodes)
+                else:
+                    return get_arg_quantization(expr, mod, all_nodes)
+            elif op_name == 'nn.avg_pool2d':
+                return get_arg_quantization(expr, mod, all_nodes)
             else:
                 assert False, f'Do not know how to get quantization for {op_name}'
         else:
-            return get_arg_quantization(expr, mod)
+            return get_arg_quantization(expr, mod, all_nodes)
+    elif isinstance(expr.checked_type, relay.ty.TupleType):
+        if expr.checked_type.fields[0].dtype == 'float32':
+            return 0, 1.0
+        else:
+            assert False, f'Do not yet support getting quantization for Tuple'
     else:
-        return 0, 1.0
-
+        assert False, f'Do not know how to get quantization for expr'
 
 def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_folder, save_output=False):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
@@ -1571,7 +1587,8 @@ class TIDLImport:
 
         if self.tidl_platform == "J7":
             import_lib_node = tvm.get_global_func("TIDL_relayImportNode")
-            if import_lib_node(this_node) != 0:
+            zp, scale = get_quantization(this_node, None, all_nodes)
+            if import_lib_node(this_node, zp, scale) != 0:
                 return False
             in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names)
             import_lib_linknode = tvm.get_global_func("TIDL_relayImportLinkNode")
@@ -2059,6 +2076,7 @@ class TIDLAnnotation:
             self._register_constrained_op("qnn.conv2d")
             self._register_constrained_op("qnn.requantize")
             self._register_constrained_op("qnn.add")
+            self._register_constrained_op("cast")
 
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
