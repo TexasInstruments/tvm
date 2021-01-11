@@ -331,16 +331,16 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
     in_it = picojson::parse(json, in_it, std::istreambuf_iterator<char>(), &err);
     info_file_stream.close();
     if (!err.empty())
-      LOG(FATAL) << "picoJSON error parsing TIDL info file " << info_filename << 
+      LOG(FATAL) << "picoJSON error parsing TIDL info file " << info_filename <<
                     '[' << err << ']' << '\n';
 
-    else if (json.is<picojson::object>()) { 
+    else if (json.is<picojson::object>()) {
       const picojson::object& obj = json.get<picojson::object>();
       auto it = obj.find("subgraphs");
       if (it != obj.end() && it->second.is<picojson::array>()) {
         const picojson::array& subgraphs = it->second.get<picojson::array>();
-        for (const auto &sg : subgraphs) { 
-          if (!sg.is<picojson::object>()) 
+        for (const auto &sg : subgraphs) {
+          if (!sg.is<picojson::object>())
             continue;
           const picojson::object& sg_obj = sg.get<picojson::object>();
           auto it1 = sg_obj.find("name");
@@ -366,7 +366,7 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
       }
     }
     if (subgraph_info.is_nchw == -1)
-       LOG(FATAL) << "Could not determine layout for subgraph " << subgraph_name << "\n"; 
+       LOG(FATAL) << "Could not determine layout for subgraph " << subgraph_name << "\n";
     //std::cout << "Parsed info for " << subgraph_name << ", is_nchw=" << subgraph_info.is_nchw << "\n";
 
     // Read in the net binary file
@@ -404,7 +404,7 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
    * \param ref An object ref that could be either a Relay function or IRModule.
    * \return The TIDL runtime module.
    */
-  runtime::Module CreateCSourceModule(const ObjectRef& ref) override {
+  virtual runtime::Module CreateCSourceModule(const ObjectRef& ref) override {
     std::unordered_map<std::string, runtime::TIDLSubgraphInfo> subgraph_infos;
     if (ref->IsInstance<FunctionNode>()) {
       Function func = Downcast<Function>(ref);
@@ -423,6 +423,125 @@ class TIDLJ7ModuleCodeGen : public CSourceModuleCodegenBase {
   }
 };
 
+
+class J7CSourceCodegen : public TIDLJ7ModuleCodeGen {
+ public:
+
+  runtime::Module CreateCSourceModule(const ObjectRef& ref) override {
+    CHECK(ref->IsInstance<FunctionNode>());
+
+    Function func = Downcast<Function>(ref);
+    TIDLContext ctx = TIDLContext::Current();
+
+    const std::pair<std::string, runtime::TIDLSubgraphInfo>& subgraph_info = GetSubgraphInfo(func);
+
+    const std::string& subgraph_name = subgraph_info.first;
+    uint32_t           subgraph_id   = std::stoi(subgraph_name.substr(5));
+
+    const std::string tempdir = ctx->artifacts_directory + "/tempDir";
+
+    EmitHeaders(subgraph_name, subgraph_id, tempdir);
+    EmitWrapperFunction(subgraph_name, subgraph_info.second);
+    EmitDestroyFunction(subgraph_name);
+    EmitInitFunction(subgraph_name, subgraph_id, subgraph_info.second);
+
+    std::string code = code_stream_.str();
+
+    // Record the external symbol for runtime lookup.
+    String sym = GetExtSymbol(func);
+
+    // Create a CSource module
+    const auto* pf = runtime::Registry::Get("runtime.CSourceModuleCreate");
+    CHECK(pf != nullptr) << "Cannot find csource module to create the external runtime module";
+    return (*pf)(code, "c", sym, Array<String>{});
+  }
+
+ private:
+  std::ostringstream code_stream_;
+
+  void EmitHeaders(const std::string subgraph_name, uint32_t subgraph_id, const std::string& tempdir);
+  void EmitWrapperFunction(const std::string& prefix, const runtime::TIDLSubgraphInfo& subgraph_info);
+  void EmitInitFunction(const std::string& prefix, uint32_t subgraph_id, const runtime::TIDLSubgraphInfo& subgraph_info);
+  void EmitDestroyFunction(const std::string& prefix);
+};
+
+
+void J7CSourceCodegen::EmitHeaders(const std::string subgraph_name, uint32_t subgraph_id, const std::string& tempdir)
+{
+    const char* header_files = R"headers(
+#include <stdlib.h>
+#include <stdarg.h>
+#include <stdio.h>
+
+#include "tvm/runtime/c_runtime_api.h"
+#include "tvm/runtime/c_backend_api.h"
+
+#include "itidl_rt.h"
+#include "tidl_api.h"
+)headers";
+
+    // Create headers
+    code_stream_ << header_files;
+
+    code_stream_ << "#include \"" <<  tempdir << "/subgraph" << subgraph_id << "_net.c\"\n";
+    code_stream_ << "#include \"" <<  tempdir << "/subgraph" << subgraph_id << "_params.c\"\n";
+    code_stream_ << "void* " << subgraph_name << "_instance;\n\n";
+    code_stream_ << "extern void* getUDMADrvObjPtr();\n\n";
+}
+
+
+void J7CSourceCodegen::EmitInitFunction(const std::string& prefix, uint32_t subgraph_id,
+                                        const runtime::TIDLSubgraphInfo& subgraph_info)
+{
+    const char* TS = "    ";
+    code_stream_ << "void " << prefix << "_init(void) {\n"
+                 << TS  << prefix << "_instance = init_tidl_subgraph((void *) subgraph" << subgraph_id << "_net_bin,\n"
+                 << TS << TS << TS << "(void* ) subgraph" << subgraph_id << "_params_1_bin,\n"
+                 << TS << TS << TS << "getUDMADrvObjPtr(),\n"
+                 << TS << TS << TS << subgraph_info.is_nchw << " /* is_nchw */);\n\n"
+                 << TS << "atexit(&" << prefix << "_destroy);\n"
+                 << "}\n\n";
+}
+
+
+void J7CSourceCodegen::EmitWrapperFunction(const std::string& prefix, const runtime::TIDLSubgraphInfo& subgraph_info)
+
+{
+    const char* TS = "    ";
+
+    code_stream_ << "int " << prefix << "(TVMValue* args, int* type_codes, int num_args, TVMValue* out_ret_value, int* out_ret_tcode, void* resource_handle) {\n";
+
+    uint32_t num_args = subgraph_info.NumInputs() + subgraph_info.NumOutputs();
+    for (uint32_t i = 0; i < num_args; i++)
+        code_stream_ << TS << "void* arg" << i << " = (((TVMValue*)args)[" << i << "].v_handle);\n";
+    code_stream_ << "\n";
+
+    int index = 0;
+    code_stream_ << TS << "DLTensor* input_tensors[] = {";
+    for (uint32_t i = 0; i < subgraph_info.NumInputs(); i++)
+        code_stream_ << "(DLTensor*) arg" << index++ << ",";
+    code_stream_ << "};\n";
+
+    code_stream_ << TS << "DLTensor* output_tensors[] = {";
+    for (uint32_t i = 0; i < subgraph_info.NumOutputs(); i++)
+        code_stream_ << "(DLTensor*) arg" << index++ << ",";
+    code_stream_ << "};\n";
+
+    code_stream_ << TS << "process_tidl_subgraph(" << prefix << "_instance, input_tensors, output_tensors);\n\n";
+
+    code_stream_ << TS << "return 0;\n";
+    code_stream_ << "}\n\n";
+}
+
+
+void J7CSourceCodegen::EmitDestroyFunction(const std::string& prefix)
+{
+    code_stream_ << "static void " << prefix << "_destroy(void) {\n"
+                 << "    free_tidl_subgraph(" << prefix << "_instance);\n"
+                 << "}\n\n";
+}
+
+
 /*!
  * \brief The external compiler/codegen tool. It takes a Relay expression/module
  * and compile it into a TIDL runtime module.
@@ -434,8 +553,10 @@ runtime::Module TIDLCompiler(const ObjectRef& ref) {
     TIDLJ6ModuleCodeGen tidl;
     return tidl.CreateCSourceModule(ref);
   } else if (ctx->platform == "J7") {
-    TIDLJ7ModuleCodeGen tidl;
-    return tidl.CreateCSourceModule(ref);
+    //TIDLJ7ModuleCodeGen tidl;
+    //return tidl.CreateCSourceModule(ref);
+    J7CSourceCodegen csource;
+    return csource.CreateCSourceModule(ref);
   } else {
     LOG(FATAL) << "Illegal TIDL platform " << ctx->platform;
     return runtime::Module();
