@@ -52,7 +52,7 @@ def traverse_expr(node, node_dict):
         return
     node_dict[node] = len(node_dict)
 
-def find_data_layout_and_qnn_ops(mod):
+def find_data_layout(mod):
     all_nodes = {}
     traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
     relay.analysis.post_order_visit(mod['main'], traverse_func)
@@ -62,12 +62,14 @@ def find_data_layout_and_qnn_ops(mod):
                                                   node.op.name == 'qnn.conv2d'):
             data_layout = node.attrs.data_layout
             break
-    has_qnn_ops = False
-    for node in all_nodes:
-        if isinstance(node, relay.expr.Call) and node.op.name.startswith('qnn.'):
-            has_qnn_ops = True
-            break
-    return data_layout, has_qnn_ops
+    return data_layout
+
+def find_qnn_ops(mod):
+    all_nodes = {}
+    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
+    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    return any(isinstance(node, relay.expr.Call) and node.op.name.startswith('qnn.')
+               for node in all_nodes)
 
 def convert_str_list_to_char_array(str_list):
     """ Convert list of strings to array of ctypes char * """
@@ -223,7 +225,7 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names):
 
     return in_out_nodes
 
-def obtain_subgraph_tensor(subgraph_tensors_list, relay_quantization, tensor_name_prefix):
+def obtain_subgraph_tensor(subgraph_tensors_list, tensor_name_prefix):
     r""" Obtain input/output tensor for a given subgraph"""
 
     tensors_list = []
@@ -238,9 +240,14 @@ def obtain_subgraph_tensor(subgraph_tensors_list, relay_quantization, tensor_nam
         tensors_list.append(tensors)
         names_list.append(names)
 
+    return tensors_list, names_list
+
+def obtain_tensor_quantization(names, relay_quantization):
+    r""" Obtain quantization for the named tensors"""
+
     zp_list = []
     scale_inv_list = []
-    for name in names_list[0]:
+    for name in names:
         if name in relay_quantization:
             zp, scale = relay_quantization[name]
         else:
@@ -248,7 +255,7 @@ def obtain_subgraph_tensor(subgraph_tensors_list, relay_quantization, tensor_nam
         zp_list.append(zp)
         scale_inv_list.append(1.0 / scale)  ### TIDL uses inverse of TVM/Relay scale
 
-    return tensors_list, names_list, zp_list, scale_inv_list
+    return zp_list, scale_inv_list
 
 def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
     r""" Convert float32 n-d array to int8/int16 or uint8/uint16 1-d array
@@ -617,7 +624,10 @@ def get_arg_quantization(expr, mod, all_nodes=None):
         if isinstance(node, relay.expr.Call):
             if expr in node.args:
                 if node.op.name == 'qnn.conv2d':
-                    return node.args[2].data.asnumpy().item(), node.args[4].data.asnumpy().item()
+                    if expr == node.args[0]:
+                        return node.args[2].data.asnumpy().item(),node.args[4].data.asnumpy().item()
+                    elif expr == node.args[1]:
+                        return node.args[3].data.asnumpy().item(),node.args[5].data.asnumpy().item()
                 if node.op.name == 'cast':
                     return get_quantization(node, mod, all_nodes)
     assert False, 'Do not know hot to get arg quantization for expr'
@@ -1805,12 +1815,16 @@ class TIDLImport:
             out_tensor_name = tidl_subgraph + '_o'
 
             # Obtain input tensor from TVM graph execution
-            input_fp_list, input_names_list, input_zp_list, input_scale_inv_list = \
-                  obtain_subgraph_tensor(subgraph_tensors_list, relay_quantization, in_tensor_name)
-            output_fp_list, output_names_list, output_zp_list, output_scale_inv_list = \
-                  obtain_subgraph_tensor(subgraph_tensors_list, relay_quantization, out_tensor_name)
+            input_fp_list, input_names_list = \
+                  obtain_subgraph_tensor(subgraph_tensors_list, in_tensor_name)
+            output_fp_list, output_names_list = \
+                  obtain_subgraph_tensor(subgraph_tensors_list, out_tensor_name)
             input_names = input_names_list[0]
             output_names = output_names_list[0]
+            input_zp_list, input_scale_inv_list = \
+                  obtain_tensor_quantization(input_names, relay_quantization)
+            output_zp_list, output_scale_inv_list = \
+                  obtain_tensor_quantization(output_names, relay_quantization)
             if not input_fp_list:
                 return import_fail
             if self.tidl_platform == "AM57" and len(input_fp_list[0]) > 1:
@@ -2732,7 +2746,8 @@ class TIDLCompiler:
             graph_input_list = [ graph_input_list ]
 
         #============= Find data layout of the original graph =============
-        data_layout, has_qnn_ops = find_data_layout_and_qnn_ops(mod_orig)
+        data_layout = find_data_layout(mod_orig)
+        has_qnn_ops = find_qnn_ops(mod_orig)
 
         # Open TIDL import library
         if os.path.exists(self.tidl_import_lib):
