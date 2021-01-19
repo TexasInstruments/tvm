@@ -645,16 +645,18 @@ def get_quantization(expr, mod, all_nodes=None):
                 return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
             elif op_name == 'qnn.conv2d':
                 return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
-            elif op_name == 'reshape' or op_name == 'nn.bias_add':
-                return get_quantization(expr.args[0], mod, all_nodes)
             elif op_name == 'qnn.add':
                 return expr.args[7].data.asnumpy().item(), expr.args[6].data.asnumpy().item()
+            elif op_name == 'qnn.concatenate':
+                return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
+            elif op_name == 'reshape' or op_name == 'nn.bias_add':
+                return get_quantization(expr.args[0], mod, all_nodes)
             elif op_name == 'cast':
                 if expr.checked_type.dtype == 'int32':
                     return get_quantization(expr.args[0], mod, all_nodes)
                 else:
                     return get_arg_quantization(expr, mod, all_nodes)
-            elif op_name == 'nn.avg_pool2d':
+            elif op_name == 'nn.avg_pool2d' or op_name == 'nn.max_pool2d':
                 return get_arg_quantization(expr, mod, all_nodes)
             else:
                 assert False, f'Do not know how to get quantization for {op_name}'
@@ -2091,6 +2093,7 @@ class TIDLAnnotation:
             self._register_constrained_op("qnn.requantize")
             self._register_constrained_op("qnn.add")
             self._register_constrained_op("cast")
+            self._register_constrained_op("qnn.concatenate")
 
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
