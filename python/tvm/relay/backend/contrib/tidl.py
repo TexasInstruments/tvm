@@ -257,6 +257,25 @@ def obtain_tensor_quantization(names, relay_quantization):
 
     return zp_list, scale_inv_list
 
+def obtain_inout_quant_dict(subgraph, subgraph_id, relay_quantization):
+    r"""Populate input/output expr to quant dict with info from relay_quantization"""
+
+    def find_insert_quant(name, expr, inout_quant_dict):
+        if name in relay_quantization:
+            inout_quant_dict[expr] = relay_quantization[name]
+
+    inout_quant_dict = {}
+    for i, param in enumerate(subgraph.params):
+        find_insert_quant(f'tidl_{subgraph_id}_i{i}', param, inout_quant_dict)
+
+    if isinstance(subgraph.body, relay.expr.Tuple):
+        for i, expr in enumerate(subgraph.body.fields):
+            find_insert_quant(f'tidl_{subgraph_id}_o{i}', expr, inout_quant_dict)
+    else:
+        find_insert_quant(f'tidl_{subgraph_id}_o0', subgraph.body, inout_quant_dict)
+
+    return inout_quant_dict
+
 def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
     r""" Convert float32 n-d array to int8/int16 or uint8/uint16 1-d array
 
@@ -611,7 +630,7 @@ class RemoveTrainingOperators(ExprMutator):
             return expr.args[0]
         return super().visit_tuple_getitem(t)
 
-def get_arg_quantization(expr, mod, all_nodes=None, field_index=0):
+def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_index=0):
     """ Get quantization (zp, scale) of the expr's output
         If expr is not a CallNode, we have to find the CallNode where expr is used,
         and find quantization of expr from the CallNode
@@ -623,29 +642,31 @@ def get_arg_quantization(expr, mod, all_nodes=None, field_index=0):
     for node in all_nodes:
         if isinstance(node, relay.expr.Call):
             if expr in node.args:
-                if node.op.name == 'qnn.conv2d':
+                if node.op.name == 'qnn.conv2d' or node.op.name == 'qnn.dense':
                     if expr == node.args[0]:
                         return node.args[2].data.asnumpy().item(),node.args[4].data.asnumpy().item()
                     elif expr == node.args[1]:
                         return node.args[3].data.asnumpy().item(),node.args[5].data.asnumpy().item()
-                if node.op.name == 'cast':
-                    return get_quantization(node, mod, all_nodes)
+                if node.op.name == 'cast' or node.op.name == 'reshape':
+                    return get_quantization(node, mod, all_nodes, inout_quant_dict)
                 if node.op.name == 'qnn.concatenate':
                     return node.args[2].fields[field_index].data.asnumpy().item(), \
                            node.args[1].fields[field_index].data.asnumpy().item()
         elif isinstance(node, relay.expr.Tuple):
             indices = [ i for i,e in enumerate(node.fields) if e == expr ]
             if indices:
-                return get_arg_quantization(node, mod, all_nodes, indices[0])
+                return get_arg_quantization(node, mod, all_nodes, inout_quant_dict, indices[0])
     assert False, 'Do not know how to get arg quantization for expr'
 
-def get_quantization(expr, mod, all_nodes=None):
+def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
     """ Get quantization (zp, scale) of the expr's output
         If expr is a CallNode, we can compute quantization directly
     """
     if isinstance(expr.checked_type, relay.ty.TensorType):
         if expr.checked_type.dtype == 'float32':
             return 0, 1.0
+        if expr in inout_quant_dict:
+            return inout_quant_dict[expr]
         if isinstance(expr, relay.expr.Call):
             op_name = expr.op.name
             if op_name == 'qnn.requantize':
@@ -656,20 +677,20 @@ def get_quantization(expr, mod, all_nodes=None):
                 return expr.args[7].data.asnumpy().item(), expr.args[6].data.asnumpy().item()
             elif op_name == 'qnn.concatenate':
                 return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
-            elif op_name == 'reshape' or op_name == 'nn.bias_add':
-                return get_quantization(expr.args[0], mod, all_nodes)
+            elif op_name == 'nn.bias_add':
+                return get_quantization(expr.args[0], mod, all_nodes, inout_quant_dict)
             elif op_name == 'cast':
                 if expr.checked_type.dtype == 'int32':
-                    return get_quantization(expr.args[0], mod, all_nodes)
+                    return get_quantization(expr.args[0], mod, all_nodes, inout_quant_dict)
                 else:
-                    return get_arg_quantization(expr, mod, all_nodes)
-            elif op_name == 'nn.avg_pool2d' or op_name == 'nn.max_pool2d':
+                    return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
+            elif op_name == 'nn.avg_pool2d' or op_name == 'nn.max_pool2d' or op_name == 'reshape':
                 # max_pool2d can get quantization either from its arg or its use
-                return get_arg_quantization(expr, mod, all_nodes)
+                return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
             else:
                 assert False, f'Do not know how to get quantization for {op_name}'
         else:
-            return get_arg_quantization(expr, mod, all_nodes)
+            return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
     elif isinstance(expr.checked_type, relay.ty.TupleType):
         if expr.checked_type.fields[0].dtype == 'float32':
             return 0, 1.0
@@ -1588,7 +1609,7 @@ class TIDLImport:
 
         return True
 
-    def tidl_import_node(self, all_nodes, this_node, params, output_names):
+    def tidl_import_node(self, all_nodes, this_node, params, output_names, inout_quant_dict):
         r""" Importing a given node (operator) to TIDL
             # https://docs.tvm.ai/langref/relay_op.html#relay-core-tensor-operators
 
@@ -1600,6 +1621,8 @@ class TIDLImport:
             A relay.expr.Call node which is to be imported
         params : dict of str to tvm.NDArray
             The parameter dict to be used by relay
+        output_names: names of the subgraph outputs
+        inout_quant_dict: input/output expr to quantization dictionary
 
         Returns
         True if import succeeds or False if import fails
@@ -1607,7 +1630,7 @@ class TIDLImport:
 
         if self.tidl_platform == "J7":
             import_lib_node = tvm.get_global_func("TIDL_relayImportNode")
-            zp, scale = get_quantization(this_node, None, all_nodes)
+            zp, scale = get_quantization(this_node, None, all_nodes, inout_quant_dict)
             if import_lib_node(this_node, zp, scale) != 0:
                 return False
             in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names)
@@ -1863,13 +1886,17 @@ class TIDLImport:
                'nodes'   : {},
             }
 
+            # Initialize subgraph input/output exprs to quantization mapping
+            inout_quant_dict = obtain_inout_quant_dict(subgraph, subgraph_id, relay_quantization)
+
             # Scan through all relay.expr.Call nodes and import each to TIDL
             all_nodes_tidl = {}
             traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_tidl)
             relay.analysis.post_order_visit(subgraph, traverse_func)
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
-                    result = self.tidl_import_node(all_nodes_tidl, node, params, output_names)
+                    result = self.tidl_import_node(all_nodes_tidl, node, params, output_names,
+                                                   inout_quant_dict)
                     if not result:
                         return import_fail
                     self._tally_op(str(node.op), subgraph_info_dict['nodes'])
