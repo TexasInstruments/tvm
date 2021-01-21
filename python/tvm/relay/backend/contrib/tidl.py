@@ -611,7 +611,7 @@ class RemoveTrainingOperators(ExprMutator):
             return expr.args[0]
         return super().visit_tuple_getitem(t)
 
-def get_arg_quantization(expr, mod, all_nodes=None):
+def get_arg_quantization(expr, mod, all_nodes=None, field_index=0):
     """ Get quantization (zp, scale) of the expr's output
         If expr is not a CallNode, we have to find the CallNode where expr is used,
         and find quantization of expr from the CallNode
@@ -630,7 +630,14 @@ def get_arg_quantization(expr, mod, all_nodes=None):
                         return node.args[3].data.asnumpy().item(),node.args[5].data.asnumpy().item()
                 if node.op.name == 'cast':
                     return get_quantization(node, mod, all_nodes)
-    assert False, 'Do not know hot to get arg quantization for expr'
+                if node.op.name == 'qnn.concatenate':
+                    return node.args[2].fields[field_index].data.asnumpy().item(), \
+                           node.args[1].fields[field_index].data.asnumpy().item()
+        elif isinstance(node, relay.expr.Tuple):
+            indices = [ i for i,e in enumerate(node.fields) if e == expr ]
+            if indices:
+                return get_arg_quantization(node, mod, all_nodes, indices[0])
+    assert False, 'Do not know how to get arg quantization for expr'
 
 def get_quantization(expr, mod, all_nodes=None):
     """ Get quantization (zp, scale) of the expr's output
@@ -657,6 +664,7 @@ def get_quantization(expr, mod, all_nodes=None):
                 else:
                     return get_arg_quantization(expr, mod, all_nodes)
             elif op_name == 'nn.avg_pool2d' or op_name == 'nn.max_pool2d':
+                # max_pool2d can get quantization either from its arg or its use
                 return get_arg_quantization(expr, mod, all_nodes)
             else:
                 assert False, f'Do not know how to get quantization for {op_name}'
