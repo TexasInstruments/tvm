@@ -671,7 +671,7 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
             op_name = expr.op.name
             if op_name == 'qnn.requantize':
                 return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
-            elif op_name == 'qnn.conv2d':
+            elif op_name == 'qnn.conv2d' or op_name == 'qnn.dense':
                 return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
             elif op_name == 'qnn.add':
                 return expr.args[7].data.asnumpy().item(), expr.args[6].data.asnumpy().item()
@@ -2129,6 +2129,7 @@ class TIDLAnnotation:
             self._register_constrained_op("qnn.add")
             self._register_constrained_op("cast")
             self._register_constrained_op("qnn.concatenate")
+            self._register_constrained_op("qnn.dense")
 
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
