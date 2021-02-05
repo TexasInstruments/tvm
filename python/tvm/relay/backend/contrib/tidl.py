@@ -655,6 +655,18 @@ class ConvertMaxMinToClip(ExprMutator):
                                                                        max_val.item())
         return super().visit_call(call)
 
+class RemoveIdentityClip(ExprMutator):
+    """
+    Removes clip operators that clip uint8 input to uint8 range (0, 255), which is identity op
+    """
+    def visit_call(self, call):
+        if call.op.name == 'clip':
+            if call.args[0].checked_type.dtype == 'uint8' and \
+               call.checked_type.dtype == 'uint8' and \
+               call.attrs.a_min == 0 and call.attrs.a_max == 255:
+                return super().visit_call(call.args[0])
+        return super().visit_call(call)
+
 def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_index=0):
     """ Get quantization (zp, scale) of the expr's output
         If expr is not a CallNode, we have to find the CallNode where expr is used,
@@ -717,7 +729,7 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
             return known_quantization
         if isinstance(expr, relay.expr.Call):
             op_name = expr.op.name
-            if op_name == 'nn.bias_add':
+            if op_name == 'nn.bias_add' or op_name == 'image.resize' or op_name == 'clip':
                 return get_quantization(expr.args[0], mod, all_nodes, inout_quant_dict)
             elif op_name == 'cast':
                 if expr.checked_type.dtype == 'int32':
@@ -2867,6 +2879,8 @@ class TIDLCompiler:
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
         mod['main'] = RemoveTrainingOperators().visit(mod['main'])
         mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
+        if has_qnn_ops:
+            mod['main'] = RemoveIdentityClip().visit(mod['main'])
         # Removing redundant outputs
         mod = relay.transform.EliminateCommonSubexpr()(mod)
         #print("----------- original graph-----------")
