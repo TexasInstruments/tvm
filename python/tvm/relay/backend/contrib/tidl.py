@@ -630,6 +630,26 @@ class RemoveTrainingOperators(ExprMutator):
             return expr.args[0]
         return super().visit_tuple_getitem(t)
 
+class ConvertMaxMinToClip(ExprMutator):
+    """
+    Convert maximum(), minimun() sequence to clip operator
+    ONNX v11 frontend has created the following Relay IR for ONNX Clip operator:
+      %2 = maximum(%x.1, -4f /* ty=float32 */) /* ty=Tensor[(1, 3, 224, 224), float32] */;
+      %3 = minimum(%2, 4f /* ty=float32 */) /* ty=Tensor[(1, 3, 224, 224), float32] */;
+    Convert the above example to %3 = clip(%x.1, -4f, 4f)
+    """
+    def visit_call(self, call):
+        if call.op.name == "minimum" and isinstance(call.args[1], relay.expr.Constant):
+            arg0 = call.args[0]
+            if isinstance(arg0, relay.expr.Call) and \
+               arg0.op.name == "maximum" and isinstance(arg0.args[1], relay.expr.Constant):
+                max_val = call.args[1].data.asnumpy()
+                min_val = arg0.args[1].data.asnumpy()
+                if min_val.shape == () and max_val.shape == ():
+                    return tvm.relay.clip(super().visit(arg0.args[0]), min_val.item(),
+                                                                       max_val.item())
+        return super().visit_call(call)
+
 def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_index=0):
     """ Get quantization (zp, scale) of the expr's output
         If expr is not a CallNode, we have to find the CallNode where expr is used,
@@ -2841,6 +2861,7 @@ class TIDLCompiler:
         mod = relay.transform.FoldConstant()(mod)
         mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
         mod['main'] = RemoveTrainingOperators().visit(mod['main'])
+        mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
         # Removing redundant outputs
         mod = relay.transform.EliminateCommonSubexpr()(mod)
         #print("----------- original graph-----------")
