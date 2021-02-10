@@ -140,7 +140,7 @@ def find_in_nodes(all_nodes, this_node, input_prefix):
         input_names.extend(_get_result(node))
     return input_names
 
-def find_out_nodes(all_nodes, this_node):
+def find_out_nodes(all_nodes, this_node, field_index=-1):
     r""" Find the output nodes of a given relay.expr.Call node.
 
     Parameters
@@ -164,17 +164,22 @@ def find_out_nodes(all_nodes, this_node):
                 if this_node == node_arg:
                     output_nodes.append(str(node_idx))
         elif isinstance(node, relay.expr.TupleGetItem):
-            if this_node == node.tuple_value:
+            if this_node == node.tuple_value and (field_index == -1 or field_index == node.index):
                 output_nodes = output_nodes + find_out_nodes(all_nodes, node)
         elif isinstance(node, relay.expr.Tuple):
-            if this_node in node.fields:
-                tuple_node_outs = find_out_nodes(all_nodes, node)
-                if len(tuple_node_outs) == 0:
-                    # this is an output node
-                    output_nodes.append(str(all_nodes[node]))
-                else:
-                    # this is an input node to another node
-                    output_nodes = output_nodes + tuple_node_outs
+            # Count multiple times for uses: e.g. onnx_yolov5s_opset11, %100 used 3 times by %102
+            #   %100 = nn.max_pool2d(%99, pool_size=[3, 3], padding=[1, 1, 1, 1])
+            #   %101 = (%99, %100, %100, %100);
+            #   %102 = concatenate(%101, axis=1) /* ty=Tensor[(1, 1024, 20, 20), float32] */;
+            for i, field_i in enumerate(node.fields):
+                if this_node == field_i:
+                    tuple_node_outs = find_out_nodes(all_nodes, node, i)
+                    if len(tuple_node_outs) == 0:
+                        # this is an output node
+                        output_nodes.append(str(all_nodes[node]))
+                    else:
+                        # this is an input node to another node
+                        output_nodes = output_nodes + tuple_node_outs
 
     return output_nodes
 
