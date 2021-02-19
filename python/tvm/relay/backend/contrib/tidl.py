@@ -736,14 +736,20 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
                     return get_quantization(expr.args[0], mod, all_nodes, inout_quant_dict)
                 else:
                     return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
-            elif op_name == 'nn.avg_pool2d':
+            elif op_name == 'nn.avg_pool2d' or op_name == 'nn.global_avg_pool2d' or \
+                 op_name == 'mean' or op_name =='strided_slice':
                 return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
-            elif op_name == 'nn.max_pool2d' or op_name == 'reshape':
+            elif op_name == 'nn.max_pool2d' or op_name == 'reshape' or op_name == 'squeeze' or \
+                 op_name == 'nn.batch_flatten' or op_name == 'nn.pad' or \
+                 op_name == 'transpose' or op_name == 'nn.upsampling':
                 # max_pool2d/reshape can get quantization either from its arg or its use
+                # similarly, squeeze, nn.batch_flatten, nn.pad, transpose, nn.upsampling
                 arg_quant = get_known_quantization(expr.args[0])
                 if arg_quant != None:
                     return arg_quant
                 return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
+            elif op_name == 'argmax':
+                return 0, 1.0
             else:
                 assert False, f'Do not know how to get quantization for {op_name}'
         else:
