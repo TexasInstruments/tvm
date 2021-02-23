@@ -679,12 +679,12 @@ def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_i
     for node in all_nodes:
         if isinstance(node, relay.expr.Call):
             if expr in node.args:
-                if node.op.name == 'qnn.conv2d' or node.op.name == 'qnn.dense':
+                if node.op.name in ['qnn.conv2d', 'qnn.dense']:
                     if expr == node.args[0]:
                         return node.args[2].data.asnumpy().item(),node.args[4].data.asnumpy().item()
                     elif expr == node.args[1]:
                         return node.args[3].data.asnumpy().item(),node.args[5].data.asnumpy().item()
-                if node.op.name == 'qnn.add' or node.op.name == 'qnn.mul':
+                if node.op.name in ['qnn.add', 'qnn.mul']:
                     if expr == node.args[0]:
                         return node.args[3].data.asnumpy().item(),node.args[2].data.asnumpy().item()
                     elif expr == node.args[1]:
@@ -694,7 +694,7 @@ def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_i
                            node.args[1].fields[field_index].data.asnumpy().item()
                 if node.op.name == 'qnn.dequantize':
                     return node.args[2].data.asnumpy().item(),node.args[1].data.asnumpy().item()
-                if node.op.name == 'cast' or node.op.name == 'reshape':
+                if node.op.name in ['cast', 'reshape']:
                     return get_quantization(node, mod, all_nodes, inout_quant_dict)
         elif isinstance(node, relay.expr.Tuple):
             indices = [ i for i,e in enumerate(node.fields) if e == expr ]
@@ -711,9 +711,9 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
             op_name = expr.op.name
             if op_name == 'qnn.requantize':
                 return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
-            elif op_name == 'qnn.conv2d' or op_name == 'qnn.dense':
+            elif op_name in ['qnn.conv2d', 'qnn.dense']:
                 return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
-            elif op_name == 'qnn.add' or op_name == 'qnn.mul':
+            elif op_name in ['qnn.add', 'qnn.mul']:
                 return expr.args[7].data.asnumpy().item(), expr.args[6].data.asnumpy().item()
             elif op_name == 'qnn.concatenate':
                 return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
@@ -729,19 +729,17 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
             return known_quantization
         if isinstance(expr, relay.expr.Call):
             op_name = expr.op.name
-            if op_name == 'nn.bias_add' or op_name == 'image.resize' or op_name == 'clip':
+            if op_name in ['nn.bias_add', 'image.resize', 'clip']:
                 return get_quantization(expr.args[0], mod, all_nodes, inout_quant_dict)
             elif op_name == 'cast':
                 if expr.checked_type.dtype == 'int32':
                     return get_quantization(expr.args[0], mod, all_nodes, inout_quant_dict)
                 else:
                     return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
-            elif op_name == 'nn.avg_pool2d' or op_name == 'nn.global_avg_pool2d' or \
-                 op_name == 'mean' or op_name =='strided_slice':
+            elif op_name in ['nn.avg_pool2d', 'nn.global_avg_pool2d', 'mean', 'strided_slice']:
                 return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
-            elif op_name == 'nn.max_pool2d' or op_name == 'reshape' or op_name == 'squeeze' or \
-                 op_name == 'nn.batch_flatten' or op_name == 'nn.pad' or \
-                 op_name == 'transpose' or op_name == 'nn.upsampling':
+            elif op_name in ['nn.max_pool2d', 'reshape', 'squeeze', 'nn.batch_flatten', 'nn.pad',
+                             'transpose', 'nn.upsampling']:
                 # max_pool2d/reshape can get quantization either from its arg or its use
                 # similarly, squeeze, nn.batch_flatten, nn.pad, transpose, nn.upsampling
                 arg_quant = get_known_quantization(expr.args[0])
