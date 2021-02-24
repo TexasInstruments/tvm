@@ -2795,12 +2795,20 @@ class TIDLCompiler:
             self.tidl_tools_path = None
             self.tidl_tensor_bits = 16
             self.tidl_denylist = []
+            # more exposed TIDL import options
+            self.power_of_2_quantization = 'off'
+            self.enable_high_resolution_optimization = 'off'
+            self.pre_batchnorm_fold = 1
+            self.reserved_compile_constraints_flag = (0x1 | 0x40 | 0x200 | 0x400)
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
             # Read arguments provided through **kwargs
             for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_calibration_options',
-                        'tidl_tools_path', 'tidl_tensor_bits', 'tidl_denylist'):
+                        'tidl_tools_path', 'tidl_tensor_bits', 'tidl_denylist',
+                        'power_of_2_quantization', 'enable_high_resolution_optimization',
+                        'pre_batchnorm_fold', 'reserved_compile_constraints_flag'
+                       ):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             self.tidl_calib_tool = os.path.join(self.tidl_tools_path,
@@ -2866,7 +2874,10 @@ class TIDLCompiler:
             if self.tidl_platform == "J7":
                 tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
                 is_nchw = data_layout == "NCHW"
-                tidl_relay_init(is_nchw, self.tidl_tensor_bits)
+                quant_style = 3 if (self.power_of_2_quantization == 'on') else 2
+                hires = 1 if (self.enable_high_resolution_optimization == 'on') else 0
+                tidl_relay_init(is_nchw, self.tidl_tensor_bits, quant_style, hires,
+                                self.pre_batchnorm_fold, self.reserved_compile_constraints_flag)
         else:
             import_lib = None # Continue with graph annotation and partition for CI testing
 
