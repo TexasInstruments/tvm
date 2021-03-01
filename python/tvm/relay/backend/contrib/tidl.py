@@ -2103,10 +2103,10 @@ class TIDLImport:
                         return self.mark_with_let(var_name, visited_getitem)
                 return visited_getitem
 
-        ### tempDir/subgraph<id>_net.bin.layer_info.txt always available, even DEBUG level 0
+        ### tempDir/subgraph<id>_net.bin_calib.layer_info.txt always available, even DEBUG level 0
         ### format of each line: layer_index data_id output_name
         layer_info_file = os.path.join(self.temp_folder,
-                                       f"subgraph{subgraph_id}_net.bin.layer_info.txt")
+                                       f"subgraph{subgraph_id}_net.bin_calib.layer_info.txt")
         layer_info = [ x.split(' ') for x in open(layer_info_file).readlines() ]
         # rewrite outputs as "tidl_<subgraph_id>_o<output_id>" to match up with TIDL names
         if isinstance(subgraph.body, Tuple):
