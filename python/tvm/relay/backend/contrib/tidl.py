@@ -1879,9 +1879,8 @@ class TIDLImport:
         -1: if TIDL import fails
         0: if there are no subgraphs for TIDL offload
         """
-        if self.tidl_relay_import_debug != None:
-            print("----- RelayIR Graph for importing to TIDL -----")
-            print(mod.astext(show_meta_data=False))
+        with open(os.path.join(self.temp_folder, "relay_graph.import.txt"), "w") as relay_txt:
+            print(mod.astext(show_meta_data=False), file=relay_txt)
 
         # Generate svg for partitined graph
         visualize_relay_graph(module=mod, filename=self.temp_folder+'/relay.gv')
