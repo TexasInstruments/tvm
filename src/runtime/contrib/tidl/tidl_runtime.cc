@@ -43,7 +43,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../../file_util.h"
+#include "../../file_utils.h"
 #include "tidl_runtime.h"
 #include "itidl_rt.h"
 
