@@ -771,8 +771,10 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
     # executed on CPU and will give additional outputs for boundary tensors.
     mod_tvm = relay.transform.InferType()(mod)
     mod_tvm = relay.transform.Inline()(mod_tvm)
+    mod_tvm = relay.transform.InferType()(mod_tvm)
     calib_mutator = CalibrationGraphMutator(tidl_target)
     mod_tvm["main"] = calib_mutator.make_calibration_graph(mod_tvm["main"])
+    mod_tvm = relay.transform.InferType()(mod_tvm)
     #print("----------- CPU-only graph for generating subgraph boundary tensors -----------")
     #print(mod_tvm.astext(show_meta_data=False))
 
@@ -853,10 +855,12 @@ def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp
     mod_tvm = relay.transform.InferType()(mod)
     mod_tvm = relay.transform.Inline()(mod_tvm)
     mod_tvm["main"] = CalibrationGraphMutator(tidl_target).visit(mod_tvm["main"])
+    mod_tvm = relay.transform.InferType()(mod_tvm)
     print("----------- after call rewriting -----------")
     print(mod_tvm.astext(show_meta_data=False))
     calib_perlayer_mutator = CalibrationPerLayerMutator(tidl_target)
     mod_tvm["main"] = calib_perlayer_mutator.make_calibration_graph(mod_tvm["main"])
+    mod_tvm = relay.transform.InferType()(mod_tvm)
     #print("----------- after additional outputs -----------")
     #print(mod_tvm.astext(show_meta_data=False))
 
@@ -2136,8 +2140,9 @@ class TIDLAnnotation:
 
         # Register J7/J6 common operators which are supported with same constraints
         @tvm.ir.register_op_attr("reshape", "target.tidl")
-        def reshape_allow_fn(attrs, args):
+        def reshape_allow_fn(expr):
             """Register standalone reshape if it is a flattening function """
+            attrs, args = expr.attrs, expr.args
             if len(attrs.newshape) != 2:
                 return False
             inshape = args[0].checked_type.shape
@@ -2207,7 +2212,8 @@ class TIDLAnnotation:
             self._register_supported_op("nn.dropout")
             self._register_constrained_op("max")           # 'max' mapped to max_pooling layer
             @tvm.ir.register_op_attr("add", "target.tidl")
-            def add_allow_fn(attrs, args):
+            def add_allow_fn(expr):
+                attrs, args = expr.attrs, expr.args
                 if any([isinstance(arg, tvm.relay.expr.Constant) for arg in args]):
                     # This is the same as "bias_add" which is not supported standalone.
                     return False
@@ -2534,7 +2540,8 @@ class TIDLAnnotation:
     def _register_supported_op(self, op_name):
         """ Helper function to register an op that is supported without any constraints """
         @tvm.ir.register_op_attr(op_name, "target.tidl")
-        def _func_wrapper(attrs, args):
+        def _func_wrapper(expr):
+            attrs, args = expr.attrs, expr.args
             if self._user_denied(op_name):
                 return False
             #TODO: add data type check
@@ -2546,7 +2553,8 @@ class TIDLAnnotation:
     def _register_constrained_op(self, op_name):
         """ Helper function to register an op that is supported with some constraints """
         @tvm.ir.register_op_attr(op_name, "target.tidl")
-        def _func_wrapper(attrs, args):
+        def _func_wrapper(expr):
+            attrs, args = expr.attrs, expr.args
             if self._user_denied(op_name):
                 return False
             return self.allow_func(op_name, attrs, args)
@@ -2920,10 +2928,13 @@ class TIDLCompiler:
                                                                 compiler=self.tidl_target)
 
         mod = unpack_composites(mod)
+        mod = relay.transform.InferType()(mod)
         mod = prune_subgraphs(mod, compiler=self.tidl_target,
                               num_subgraphs_to_keep=self.num_tidl_subgraphs,
                               min_mac_threshold=1)
+        mod = relay.transform.InferType()(mod)
         mod = flatten_tuple_params(mod, self.tidl_target)
+        mod = relay.transform.InferType()(mod)
 
         #============= Post-partition transformations  ==============
         # ConvertLayout pass does not yet work properly for graph with qnn ops
@@ -2939,6 +2950,7 @@ class TIDLCompiler:
             with tvm.transform.PassContext(opt_level=3):
                 convert_pass = [relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})]
                 mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs
+                mod = relay.transform.InferType()(mod)
 
         #print("-----------final partitioned graph-----------")
         #print(mod.astext(show_meta_data=False))
