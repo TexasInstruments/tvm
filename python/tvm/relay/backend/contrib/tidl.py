@@ -2269,8 +2269,8 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d'):
                 return False
             pad_op = extract.args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
-            conv2d_supported = self.allow_func('nn.conv2d', extract.attrs, extract.args)
+            pad_supported = self.allow_func('nn.pad', pad_op)
+            conv2d_supported = self.allow_func('nn.conv2d', extract)
             return conv2d_supported and pad_supported
 
         # common patterns required by J7 or J6
@@ -2289,7 +2289,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.conv2d', 'nn.bias_add'):
                 return False
             op = extract.args[0]
-            return self.allow_func('nn.conv2d', op.attrs, op.args)
+            return self.allow_func('nn.conv2d', op)
         def _conv2d_add_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
             add_out = is_op('add')(conv2d_out, is_constant())
@@ -2298,7 +2298,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.conv2d', 'add'):
                 return False
             op = extract.args[0]
-            return self.allow_func('nn.conv2d', op.attrs, op.args)
+            return self.allow_func('nn.conv2d', op)
 
         def _pad_conv2d_bias_pattern():
             pad_conv2d_out = _pad_conv2d_pattern()
@@ -2308,7 +2308,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add'):
                 return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op)
             conv2d_bias_supported = _conv2d_bias_checker(extract)
             return conv2d_bias_supported and pad_supported
 
@@ -2320,7 +2320,7 @@ class TIDLAnnotation:
             if _user_denied('nn.pad', 'nn.conv2d', 'add'):
                return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op)
             conv2d_add_supported = _conv2d_add_checker(extract)
             return conv2d_add_supported and pad_supported
 
@@ -2333,7 +2333,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.dense', 'nn.bias_add'):
                 return False
             op = extract.args[0]
-            return self.allow_func('nn.dense', op.attrs, op.args)
+            return self.allow_func('nn.dense', op)
 
         def _dense_add_pattern():
             dense_out = is_op('nn.dense')(wildcard(), is_constant())
@@ -2343,7 +2343,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.dense', 'add'):
                 return False
             op = extract.args[0]
-            return self.allow_func('nn.dense', op.attrs, op.args)
+            return self.allow_func('nn.dense', op)
 
         #relu6 has to be preceded by conv2d or (conv2d, bias_add)
         def _relu6_check_fun(attrs): # clip(0, 6) is not supported standalone
@@ -2359,7 +2359,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0]
-            return self.allow_func('nn.conv2d', op.attrs, op.args) and relu6_supported
+            return self.allow_func('nn.conv2d', op) and relu6_supported
 
         def _conv2d_bias_relu6_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
@@ -2371,7 +2371,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0].args[0]
-            return self.allow_func('nn.conv2d', op.attrs, op.args) and relu6_supported
+            return self.allow_func('nn.conv2d', op) and relu6_supported
 
         def _conv2d_add_relu6_pattern():
             conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
@@ -2407,7 +2407,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             bn_op = extract.args[0].tuple_value
-            bn_supported = self.allow_func('nn.batch_norm', bn_op.attrs, bn_op.args)
+            bn_supported = self.allow_func('nn.batch_norm', bn_op)
             return bn_supported and relu6_supported
 
         def _dense_relu6_pattern():
@@ -2419,7 +2419,7 @@ class TIDLAnnotation:
                 return False
             relu6_supported = _relu6_check_fun(extract.attrs)
             op = extract.args[0]
-            return self.allow_func('nn.dense', op.attrs, op.args) and relu6_supported
+            return self.allow_func('nn.dense', op) and relu6_supported
 
         #relu6 can also be preceded by (dense, bias_add): 
         #  (dense, bias_add, relu6) -> (dense, relu6) -> dense
@@ -2433,7 +2433,7 @@ class TIDLAnnotation:
                 return False
             dense_op = extract.args[0].args[0]
             relu6_supported = _relu6_check_fun(extract.attrs)
-            dense_supported = self.allow_func('nn.dense', dense_op.attrs, dense_op.args)
+            dense_supported = self.allow_func('nn.dense', dense_op)
             return relu6_supported and dense_supported
 
         def _dense_add_relu6_pattern():
@@ -2454,7 +2454,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'clip'):
                 return False
             pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op)
             return pad_supported and _conv2d_relu6_checker(extract)
 
         def _pad_conv2d_bias_relu6_pattern():
@@ -2465,7 +2465,7 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add', 'clip'):
                 return False
             pad_op = extract.args[0].args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op)
             return pad_supported and _conv2d_bias_relu6_checker(extract)
 
         def _pad_conv2d_add_relu6_pattern():
@@ -2476,7 +2476,7 @@ class TIDLAnnotation:
             if _user_denied('nn.pad', 'nn.conv2d', 'add', 'clip'):
                 return False
             pad_op = extract.args[0].args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
+            pad_supported = self.allow_func('nn.pad', pad_op)
             return pad_supported and _conv2d_add_relu6_checker(extract)
 
         # additional patterns required by J6
@@ -2510,8 +2510,8 @@ class TIDLAnnotation:
             if self._user_denied('nn.pad', 'nn.avg_pool2d'):
                 return False
             pad_op = extract.args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op.attrs, pad_op.args)
-            pool_supported = self.allow_func('nn.avg_pool2d', extract.attrs, extract.args)
+            pad_supported = self.allow_func('nn.pad', pad_op)
+            pool_supported = self.allow_func('nn.avg_pool2d', extract)
             return pool_supported and pad_supported
 
         pattern_table_j7 = [
@@ -2554,20 +2554,19 @@ class TIDLAnnotation:
         """ Helper function to register an op that is supported with some constraints """
         @tvm.ir.register_op_attr(op_name, "target.tidl")
         def _func_wrapper(expr):
-            attrs, args = expr.attrs, expr.args
             if self._user_denied(op_name):
                 return False
-            return self.allow_func(op_name, attrs, args)
+            return self.allow_func(op_name, expr)
         return _func_wrapper
 
-    def allow_func(self, op_name, attrs, args):
+    def allow_func(self, op_name, expr):
         """ Allow function for operators with different constraints for J7 and J6 """
         if self.tidl_platform == "J7":
-            return self.allow_fn_j7(op_name, attrs, args)
+            return self.allow_fn_j7(op_name, expr)
         else:
-            return self.allow_fn_j6(op_name, attrs, args)
+            return self.allow_fn_j6(op_name, expr)
 
-    def allow_fn_j7(self, op_name, attrs, args):
+    def allow_fn_j7(self, op_name, expr):
         """ Allow function for J7: constraint checking is delegated to the import library """
 
         if self.import_lib is None:
@@ -2575,17 +2574,11 @@ class TIDLAnnotation:
             return True
 
         # Invoke TIDL import library call to check if this op can be supported
-        op = tvm.ir.Op.get(op_name)
-        callnode = tvm.relay.Call(op, args, attrs)
-        # make sure checked_type() is defined on temporarily constructed callnode
-        tmp_mod = tvm.IRModule.from_expr(callnode)
-        tmp_mod = tvm.relay.transform.InferType()(tmp_mod)
-        callnode = tmp_mod['main'].body
         #print(f"Invoking TIDL Relay Import allow function for {op_name}")
         allow_fn = tvm.get_global_func("TIDL_relayAllowNode")
-        return allow_fn(callnode)
+        return allow_fn(expr)
 
-    def allow_fn_j6(self, op_name, attrs, args):
+    def allow_fn_j6(self, op_name, expr):
         """ Allow function for J6: checking operator attributes against constraints """
 
         def argmax_allow_fn(attrs, args):
@@ -2727,7 +2720,7 @@ class TIDLAnnotation:
                        "nn.pad": pad_allow_fn,
                        }
         #print("allowing " + op_name)
-        return allow_funcs[op_name](attrs, args)
+        return allow_funcs[op_name](expr.attrs, expr.args)
 
 class TIDLCompiler:
     """TIDL compiler module.
