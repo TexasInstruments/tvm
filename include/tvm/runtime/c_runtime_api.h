@@ -61,7 +61,7 @@
 #endif
 
 // TVM version
-#define TVM_VERSION "0.7.dev1"
+#define TVM_VERSION "0.8.dev0"
 
 // TVM Runtime is DLPack compatible.
 #include <dlpack/dlpack.h>
@@ -366,6 +366,12 @@ TVM_DLL int TVMFuncGetGlobal(const char* name, TVMFunctionHandle* out);
  */
 TVM_DLL int TVMFuncListGlobalNames(int* out_size, const char*** out_array);
 
+/*!
+ * \brief Remove a global function.
+ * \param name The name of the function.
+ */
+TVM_DLL int TVMFuncRemoveGlobal(const char* name);
+
 // Array related apis for quick proptyping
 /*!
  * \brief Allocate a nd-array's memory,
@@ -532,6 +538,13 @@ TVM_DLL int TVMObjectRetain(TVMObjectHandle obj);
  * \return 0 when success, -1 when failure happens
  */
 TVM_DLL int TVMObjectFree(TVMObjectHandle obj);
+
+/*!
+ * \brief Free a TVMByteArray returned from TVMFuncCall, and associated memory.
+ * \param arr The TVMByteArray instance.
+ * \return 0 on success, -1 on failure.
+ */
+TVM_DLL int TVMByteArrayFree(TVMByteArray* arr);
 
 /*!
  * \brief Allocate a data space on device.

@@ -362,6 +362,33 @@ def test_batch_matmul():
     verify_batch_matmul((30, 16, 32), (30, 20, 32), (30, 16, 20))
 
 
+def verify_dynamic_batch_matmul(x_shape, y_shape, out_shape, dtype="float32"):
+    x = relay.var("x", relay.TensorType(x_shape, dtype))
+    y = relay.var("y", relay.TensorType((relay.Any(),) * len(y_shape), dtype))
+    z = relay.nn.batch_matmul(x, y)
+
+    func = relay.Function([x, y], z)
+    x_np = np.random.uniform(size=x_shape).astype(dtype)
+    y_np = np.random.uniform(size=y_shape).astype(dtype)
+    z_np = tvm.topi.testing.batch_matmul(x_np, y_np)
+
+    for target, ctx in tvm.testing.enabled_targets():
+        for kind in ["vm", "debug"]:
+            mod = tvm.ir.IRModule.from_expr(func)
+            intrp = relay.create_executor(kind, mod=mod, ctx=ctx, target=target)
+            z = intrp.evaluate()(x_np, y_np)
+            tvm.testing.assert_allclose(z.asnumpy(), z_np, rtol=1e-5)
+
+
+# TODO(mbrookhart): enable once VM supports heterogenous execution
+# @tvm.testing.uses_gpu
+def test_dynamic_batch_matmul():
+    verify_dynamic_batch_matmul((1, 16, 32), (1, 16, 32), (1, 16, 16))
+    verify_dynamic_batch_matmul((5, 16, 32), (5, 16, 32), (5, 16, 16))
+    verify_dynamic_batch_matmul((5, 16, 32), (5, 20, 32), (5, 16, 20))
+    verify_dynamic_batch_matmul((30, 16, 32), (30, 20, 32), (30, 16, 20))
+
+
 @tvm.testing.uses_gpu
 def test_shape_of():
     shape = (10, 5, 12)
@@ -398,17 +425,18 @@ def test_ndarray_size():
 
 
 def verify_adaptive_pool(dshape, out_size, pool_type, layout, dtype, opfunc):
-    x = relay.var("x", relay.TensorType(dshape, "float32"))
-    y = opfunc(x, out_size, layout)
-    func = relay.Function([x], y)
+    for shape_dtype in ["int32", "int64"]:
+        x = relay.var("x", shape=[tvm.tir.IntImm(shape_dtype, x) for x in dshape], dtype=dtype)
+        y = opfunc(x, out_size, layout)
+        func = relay.Function([x], y)
 
-    np_data = np.random.uniform(low=0, high=255, size=dshape).astype(dtype)
-    np_out = tvm.topi.testing.adaptive_pool(np_data, out_size, pool_type, layout)
+        np_data = np.random.uniform(low=0, high=255, size=dshape).astype(dtype)
+        np_out = tvm.topi.testing.adaptive_pool(np_data, out_size, pool_type, layout)
 
-    for target, ctx in tvm.testing.enabled_targets():
-        intrp1 = relay.create_executor("graph", ctx=ctx, target=target)
-        relay_out = intrp1.evaluate(func)(np_data)
-        tvm.testing.assert_allclose(relay_out.asnumpy(), np_out, rtol=1e-5, atol=1e-5)
+        for target, ctx in tvm.testing.enabled_targets():
+            intrp1 = relay.create_executor("graph", ctx=ctx, target=target)
+            relay_out = intrp1.evaluate(func)(np_data)
+            tvm.testing.assert_allclose(relay_out.asnumpy(), np_out, rtol=1e-5, atol=1e-5)
 
 
 def verify_adaptive_pool2d(dshape, out_size, pool_type, layout="NCHW", dtype="float32"):
@@ -425,6 +453,7 @@ def verify_adaptive_pool3d(dshape, out_size, pool_type, layout="NCHW", dtype="fl
 def test_adaptive_pool():
     verify_adaptive_pool2d((1, 9, 224, 224), (1, 1), "max")
     verify_adaptive_pool2d((1, 3, 224, 224), (2, 3), "avg")
+    verify_adaptive_pool2d((1, 3, 224, 224), (2, 3), "avg", dtype="int32")
     verify_adaptive_pool2d((1, 14, 56, 78), (34, 13), "max")
     verify_adaptive_pool2d((1, 5, 46, 97), (4, 96), "avg")
     verify_adaptive_pool2d((1, 224, 224, 3), (1, 1), "max", layout="NHWC")
@@ -432,6 +461,8 @@ def test_adaptive_pool():
     verify_adaptive_pool3d((1, 16, 32, 32, 32), (1, 1, 1), "max", layout="NCDHW")
     verify_adaptive_pool3d((1, 16, 32, 32, 32), (1, 1, 1), "avg", layout="NCDHW")
     verify_adaptive_pool3d((1, 16, 32, 32, 32), (1, 1, 1), "avg", layout="NDHWC")
+    verify_adaptive_pool3d((1, 16, 32, 32, 32), (1, 1, 1), "avg", layout="NCDHW", dtype="int32")
+    verify_adaptive_pool3d((1, 16, 32, 32, 32), (1, 1, 1), "avg", layout="NDHWC", dtype="int32")
     verify_adaptive_pool3d((1, 16, 32, 32, 32), (2, 4, 4), "max", layout="NDHWC")
 
 
@@ -506,12 +537,10 @@ def test_one_hot():
 
 @tvm.testing.uses_gpu
 def test_matrix_set_diag():
-    def _verify(input_shape, dtype):
-        diagonal_shape = list(input_shape[:-2])
-        diagonal_shape.append(min(input_shape[-2], input_shape[-1]))
+    def _verify(input_shape, diagonal_shape, dtype, k=0, align="RIGHT_LEFT"):
         input = relay.var("input", relay.TensorType(input_shape, dtype))
         diagonal = relay.var("diagonal", relay.TensorType(diagonal_shape, dtype))
-        out = relay.matrix_set_diag(input, diagonal)
+        out = relay.matrix_set_diag(input, diagonal, k, align)
 
         in_type = run_infer_type(input)
         out_type = run_infer_type(out)
@@ -520,7 +549,7 @@ def test_matrix_set_diag():
         func = relay.Function([input, diagonal], out)
         input_np = np.random.randint(-100, 100, size=input_shape).astype(dtype)
         diagonal_np = np.random.randint(-100, 100, size=diagonal_shape).astype(dtype)
-        out_np = tvm.topi.testing.matrix_set_diag(input_np, diagonal_np)
+        out_np = tvm.topi.testing.matrix_set_diag(input_np, diagonal_np, k, align)
 
         for target, ctx in tvm.testing.enabled_targets():
             for kind in ["graph", "debug"]:
@@ -528,9 +557,12 @@ def test_matrix_set_diag():
                 out_relay = intrp.evaluate(func)(input_np, diagonal_np)
                 tvm.testing.assert_allclose(out_relay.asnumpy(), out_np)
 
-    _verify((2, 2), "float32")
-    _verify((4, 3, 3), "int32")
-    _verify((2, 3, 4), "float32")
+    _verify((2, 2), (2,), "float32")
+    _verify((4, 3, 3), (4, 3), "int32")
+    _verify((2, 3, 4), (2, 3), "float32", 1)
+    _verify((2, 3, 4), (2, 4, 3), "int32", (-1, 2), "LEFT_RIGHT")
+    _verify((2, 3, 4), (2, 4, 3), "int32", (-1, 2), "LEFT_LEFT")
+    _verify((2, 3, 4), (2, 4, 3), "int32", (-1, 2), "RIGHT_RIGHT")
 
 
 if __name__ == "__main__":

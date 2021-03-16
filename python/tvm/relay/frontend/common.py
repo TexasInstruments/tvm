@@ -22,13 +22,18 @@ import numpy as np
 
 import tvm
 from tvm.ir import IRModule
-from tvm.topi.util import get_const_tuple
+from tvm.topi.utils import get_const_tuple
 
 from .. import expr as _expr
 from .. import function as _function
 from .. import transform as _transform
 from .. import op as _op
 from .. import analysis
+
+# pylint: disable=invalid-name
+logger = logging.getLogger("Common")
+# Uncomment below line to print all debug msgs
+# logger.setLevel(logging.DEBUG)
 
 
 class RequiredAttr(object):
@@ -408,10 +413,10 @@ class AttrCvt(object):
                     "Attribute %s in operator %s is not" + " supported.", k, op_name
                 )
             if k in self._disables:
-                logging.warning("Attribute %s is disabled in relay.sym.%s", k, op_name)
+                logger.debug("Attribute %s is disabled in relay.sym.%s", k, op_name)
             elif k in self._ignores:
                 if k != "tvm_custom":
-                    logging.warning("Attribute %s is ignored in relay.sym.%s", k, op_name)
+                    logger.debug("Attribute %s is ignored in relay.sym.%s", k, op_name)
             elif k in self._transforms:
                 new_name, defaults, transform = self._parse_default(self._transforms[k])
                 if defaults is None:
@@ -478,7 +483,8 @@ def infer_type(node, mod=None):
         new_mod = IRModule.from_expr(node)
         if mod is not None:
             new_mod.update(mod)
-            new_mod = _transform.InferType()(new_mod)
+
+        new_mod = _transform.InferType()(new_mod)
         entry = new_mod["main"]
         ret = entry if isinstance(node, _function.Function) else entry.body
 
@@ -563,6 +569,23 @@ def infer_value_simulated(input_val, params):
     return output_value
 
 
+def try_infer_value(val, on_success=None, on_failure=None):
+    """Try running infer_value on the input val, and if successful, return the inferred value or
+    pass it to on_success callback if provided. Otherwise, run on_failure callback if it is
+    provided, or return the input val as output. In each case, the second return value
+    indicates whether infer_value has succeeded or not.
+    """
+    try:
+        ret = infer_value(val, {}).asnumpy()
+        if on_success:
+            return on_success(ret), True
+        return ret, True
+    except Exception:
+        if on_failure:
+            return on_failure(), False
+        return val, False
+
+
 def new_var(name_hint, type_annotation=None, shape=None, dtype="float32"):
     return _expr.var(name_hint, type_annotation, shape, dtype)
 
@@ -583,3 +606,14 @@ class Renamer(object):
         if "tvm_custom" in attrs:
             attrs.pop("tvm_custom")
         return get_relay_op(self._new_name)(*inputs, **attrs)
+
+
+def to_int_list(np_array):
+    """Convert a np array to a python int list.
+
+    Note: This function converts np.int32 to python's int.
+    If we don't do this conversion, numpy's automatic upcast will make
+    the shape / parameters be converted to int64 IntImm in relay and
+    cause problems in relay/TOPI.
+    """
+    return [int(x) for x in np_array]

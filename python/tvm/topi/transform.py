@@ -22,7 +22,7 @@ from tvm import te
 from tvm import topi
 from . import cpp
 from . import tag
-from .util import within_index, make_idx
+from .utils import within_index, make_idx, const_vector
 
 
 def expand_dims(a, axis, num_newaxis=1):
@@ -200,6 +200,20 @@ def strided_slice(a, begin, end, strides=None, slice_mode="end"):
     -------
     ret : tvm.te.Tensor
     """
+    if (
+        isinstance(begin, tvm.te.Tensor)
+        or isinstance(end, tvm.te.Tensor)
+        or isinstance(strides, tvm.te.Tensor)
+    ):
+        if not isinstance(begin, tvm.te.Tensor):
+            begin = const_vector(begin)
+        if not isinstance(end, tvm.te.Tensor):
+            end = const_vector(end)
+        if strides is None:
+            strides = [1] * begin.shape[0].value
+        if not isinstance(strides, tvm.te.Tensor):
+            strides = const_vector(strides)
+        return cpp.dynamic_strided_slice(a, begin, end, strides)
     if strides is None:
         strides = []
     return cpp.strided_slice(a, begin, end, strides, slice_mode)
@@ -410,6 +424,28 @@ def take(a, indices, axis=None, mode="clip"):
     if axis is None:
         return cpp.take(a, indices, mode)
     return cpp.take(a, indices, int(axis), mode)
+
+
+@tvm.target.generic_func
+def take_legalize(attrs, inputs, types):
+    """Legalizes dyn.topk op.
+
+    Parameters
+    ----------
+    attrs : tvm.ir.Attrs
+        Attributes of current op
+    inputs : list of tvm.relay.Expr
+        The args of the Relay expr to be legalized
+    types : list of types
+        List of input and output types
+    Returns
+    -------
+    result : tvm.relay.Expr
+        The legalized expr
+    """
+    if tvm.relay.ty.is_dynamic(types[0]):
+        return tvm.relay.take(tvm.relay.annotation.stop_fusion(inputs[0]), inputs[1], **attrs)
+    return None
 
 
 def gather(data, axis, indices):
@@ -806,16 +842,32 @@ def sparse_to_dense(sparse_indices, output_shape, sparse_values, default_value=0
     return cpp.sparse_to_dense(sparse_indices, output_shape, sparse_values, default_value)
 
 
-def matrix_set_diag(data, diagonal):
+def matrix_set_diag(data, diagonal, k=0, align="RIGHT_LEFT"):
     """
-    Returns a tensor with the diagonal of input tensor replaced with the provided diagonal values.
+    Returns a tensor with the diagonals of input tensor replaced with the provided diagonal values.
 
     Parameters
     ----------
     data : relay.Expr
         Input Tensor.
+
     diagonal : relay.Expr
         Values to be filled in the diagonal.
+
+    k : int or tuple of int, optional
+        Diagonal Offset(s). The diagonal or range of diagonals to set. (0 by default)
+        Positive value means superdiagonal, 0 refers to the main diagonal, and
+        negative value means subdiagonals. k can be a single integer (for a single diagonal)
+        or a pair of integers specifying the low and high ends of a matrix band.
+        k[0] must not be larger than k[1].
+
+    align : string, optional
+        Some diagonals are shorter than max_diag_len and need to be padded.
+        align is a string specifying how superdiagonals and subdiagonals should be aligned,
+        respectively. There are four possible alignments: "RIGHT_LEFT" (default), "LEFT_RIGHT",
+        "LEFT_LEFT", and "RIGHT_RIGHT". "RIGHT_LEFT" aligns superdiagonals to the right
+        (left-pads the row) and subdiagonals to the left (right-pads the row). It is the packing
+        format LAPACK uses. cuSPARSE uses "LEFT_RIGHT", which is the opposite alignment.
 
     Returns
     -------
@@ -836,7 +888,7 @@ def matrix_set_diag(data, diagonal):
         diagonal = [[1, 2, 3],
                     [4, 5, 6]]
 
-        relay.matrix_set_diag(input, diagonal) =
+        topi.matrix_set_diag(input, diagonal) =
             [[[1, 7, 7, 7],
               [7, 2, 7, 7],
               [7, 7, 3, 7]],
@@ -844,7 +896,22 @@ def matrix_set_diag(data, diagonal):
               [7, 5, 7, 7],
               [7, 7, 6, 7]]]
     """
-    return cpp.matrix_set_diag(data, diagonal)
+    if isinstance(k, (tuple, list)):
+        k_one = k[0]
+        if len(k) >= 2:
+            k_two = k[1]
+        else:
+            k_two = k[0]
+    else:
+        k_one = k
+        k_two = k
+
+    super_diag_right_align = align[:5] == "RIGHT"
+    sub_diag_right_align = align[-5:] == "RIGHT"
+
+    return cpp.matrix_set_diag(
+        data, diagonal, k_one, k_two, super_diag_right_align, sub_diag_right_align
+    )
 
 
 def adv_index(data, indices):

@@ -423,6 +423,38 @@ def verify_strided_slice(in_shape, begin, end, strides=None):
         check_device(device)
 
 
+def verify_dynamic_strided_slice(in_shape, begin, end, strides=None):
+    A = te.placeholder(shape=in_shape, name="A")
+    Begin = te.placeholder(shape=[len(in_shape)], name="begin", dtype="int64")
+    End = te.placeholder(shape=[len(in_shape)], name="end", dtype="int64")
+    Strides = te.placeholder(shape=[len(in_shape)], name="strides", dtype="int64")
+    strides = [1, 1, 1] if strides is None else strides
+    B = topi.strided_slice(A, Begin, End, Strides) + 1
+
+    def check_device(device):
+        ctx = tvm.context(device, 0)
+        if not tvm.testing.device_enabled(device):
+            print("Skip because %s is not enabled" % device)
+            return
+        print("Running on target: %s" % device)
+        with tvm.target.Target(device):
+            s = tvm.topi.testing.get_injective_schedule(device)(B)
+
+        foo = tvm.build(s, [A, Begin, End, Strides, B], device, name="stride_slice")
+        x_np = np.random.uniform(size=in_shape).astype(A.dtype)
+        out_npy = tvm.topi.testing.strided_slice_python(x_np, begin, end, strides) + 1
+        data_nd = tvm.nd.array(x_np, ctx)
+        out_nd = tvm.nd.empty(out_npy.shape, ctx=ctx, dtype=A.dtype)
+        begin_nd = tvm.nd.array(np.array(begin).astype("int64"), ctx)
+        end_nd = tvm.nd.array(np.array(end).astype("int64"), ctx)
+        strides_nd = tvm.nd.array(np.array(strides).astype("int64"), ctx)
+        foo(data_nd, begin_nd, end_nd, strides_nd, out_nd)
+        tvm.testing.assert_allclose(out_nd.asnumpy(), out_npy)
+
+    for device in ["llvm", "opencl", "sdaccel", "aocl_sw_emu"]:
+        check_device(device)
+
+
 def verify_strided_set(in_shape, v_shape, begin, end, strides=None):
     A = te.placeholder(shape=in_shape, name="A")
     V = te.placeholder(shape=v_shape, name="V")
@@ -715,12 +747,10 @@ def verify_sparse_to_dense(sparse_indices, sparse_values, default_value, output_
         check_device(device, ctx)
 
 
-def verify_matrix_set_diag(input_shape, dtype):
-    diagonal_shape = list(input_shape[:-2])
-    diagonal_shape.append(min(input_shape[-2], input_shape[-1]))
+def verify_matrix_set_diag(input_shape, diagonal_shape, dtype, k=0, align="RIGHT_LEFT"):
     input = te.placeholder(shape=input_shape, name="input", dtype=dtype)
     diagonal = te.placeholder(shape=diagonal_shape, name="diagonal", dtype=dtype)
-    matrix_set_diag_result = topi.transform.matrix_set_diag(input, diagonal)
+    matrix_set_diag_result = topi.transform.matrix_set_diag(input, diagonal, k, align)
 
     def check_device(device, ctx):
         ctx = tvm.context(device, 0)
@@ -730,7 +760,7 @@ def verify_matrix_set_diag(input_shape, dtype):
         fn = tvm.build(s, [input, diagonal, matrix_set_diag_result], device, name="matrix_set_diag")
         input_npy = np.random.randint(-100, 100, size=input_shape).astype(dtype)
         diagonal_npy = np.random.randint(-100, 100, size=diagonal_shape).astype(dtype)
-        out_npy = tvm.topi.testing.matrix_set_diag(input_npy, diagonal_npy)
+        out_npy = tvm.topi.testing.matrix_set_diag(input_npy, diagonal_npy, k, align)
         input_nd = tvm.nd.array(input_npy, ctx)
         diagonal_nd = tvm.nd.array(diagonal_npy, ctx)
         out_nd = tvm.nd.array(np.empty(out_npy.shape).astype(matrix_set_diag_result.dtype), ctx)
@@ -787,6 +817,16 @@ def test_strided_slice():
     verify_strided_slice((3, 4, 3), [1, -1, 0], [2, -3, 3], [1, -1, 1])
     verify_strided_slice((3, 4, 3), [1, 1, 0], [4, 4, 3])
     verify_strided_slice((3, 4, 3), [0, 2, 0], [1, 2, 3])
+    verify_strided_slice((3, 4, 3), [0, 0, 0], [None, None, None])
+
+
+@tvm.testing.uses_gpu
+def test_dynamic_strided_slice():
+    verify_dynamic_strided_slice((3, 4, 3), [0, 0, 0], [4, -5, 4], [1, -1, 2])
+    verify_dynamic_strided_slice((3, 4, 3), [1, 1, 0], [4, 4, 3], [2, 1, 1])
+    verify_dynamic_strided_slice((3, 4, 3), [1, 0, 0], [2, 2, 3], [1, 1, 2])
+    verify_dynamic_strided_slice((3, 4, 3), [1, 1, 0], [4, 4, 3])
+    verify_dynamic_strided_slice((3, 4, 3), [0, 2, 0], [1, 2, 3])
 
 
 @tvm.testing.uses_gpu
@@ -841,6 +881,7 @@ def test_reshape():
 
 @tvm.testing.uses_gpu
 def test_where():
+    verify_where(())
     verify_where((1, 2, 3, 4))
 
 
@@ -1165,9 +1206,12 @@ def test_sparse_to_dense():
 @tvm.testing.uses_gpu
 def test_matrix_set_diag():
     for dtype in ["float32", "int32"]:
-        verify_matrix_set_diag((2, 2), dtype)
-        verify_matrix_set_diag((4, 3, 3), dtype)
-        verify_matrix_set_diag((2, 3, 4), dtype)
+        verify_matrix_set_diag((2, 2), (2,), dtype)
+        verify_matrix_set_diag((4, 3, 3), (4, 3), dtype)
+        verify_matrix_set_diag((2, 3, 4), (2, 3), dtype, 1)
+        verify_matrix_set_diag((2, 3, 4), (2, 4, 3), dtype, (-1, 2), "LEFT_RIGHT")
+        verify_matrix_set_diag((2, 3, 4), (2, 4, 3), dtype, (-1, 2), "LEFT_LEFT")
+        verify_matrix_set_diag((2, 3, 4), (2, 4, 3), dtype, (-1, 2), "RIGHT_RIGHT")
 
 
 @tvm.testing.uses_gpu

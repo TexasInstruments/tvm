@@ -23,8 +23,8 @@
 #ifndef TVM_RUNTIME_OBJECT_H_
 #define TVM_RUNTIME_OBJECT_H_
 
-#include <dmlc/logging.h>
 #include <tvm/runtime/c_runtime_api.h>
+#include <tvm/support/logging.h>
 
 #include <string>
 #include <type_traits>
@@ -133,7 +133,7 @@ struct TypeIndex {
  *    TVM_DECLARE_BASE_OBJECT_INFO(BaseObj, Object);
  *  };
  *
- *  class ObjLeaf : public ObjBase {
+ *  class LeafObj : public BaseObj {
  *   public:
  *    // fields
  *    int child_field0;
@@ -144,8 +144,8 @@ struct TypeIndex {
  *  };
  *
  *  // The following code should be put into a cc file.
- *  TVM_REGISTER_OBJECT_TYPE(ObjBase);
- *  TVM_REGISTER_OBJECT_TYPE(ObjLeaf);
+ *  TVM_REGISTER_OBJECT_TYPE(BaseObj);
+ *  TVM_REGISTER_OBJECT_TYPE(LeafObj);
  *
  *  // Usage example.
  *  void TestObjects() {
@@ -153,9 +153,9 @@ struct TypeIndex {
  *    ObjectRef leaf_ref(make_object<LeafObj>());
  *    // cast to a specific instance
  *    const LeafObj* leaf_ptr = leaf_ref.as<LeafObj>();
- *    CHECK(leaf_ptr != nullptr);
+ *    ICHECK(leaf_ptr != nullptr);
  *    // can also cast to the base class.
- *    CHECK(leaf_ref.as<BaseObj>() != nullptr);
+ *    ICHECK(leaf_ref.as<BaseObj>() != nullptr);
  *  }
  *
  * \endcode
@@ -633,7 +633,7 @@ struct ObjectPtrEqual {
  * \param ParentType The name of the ParentType
  */
 #define TVM_DECLARE_BASE_OBJECT_INFO(TypeName, ParentType)                                     \
-  static_assert(!ParentType::_type_final, "ParentObj maked as final");                         \
+  static_assert(!ParentType::_type_final, "ParentObj marked as final");                        \
   static uint32_t RuntimeTypeIndex() {                                                         \
     static_assert(TypeName::_type_child_slots == 0 || ParentType::_type_child_slots == 0 ||    \
                       TypeName::_type_child_slots < ParentType::_type_child_slots,             \
@@ -756,7 +756,7 @@ struct ObjectPtrEqual {
  */
 #define TVM_DEFINE_OBJECT_REF_COW_METHOD(ObjectName)     \
   ObjectName* CopyOnWrite() {                            \
-    CHECK(data_ != nullptr);                             \
+    ICHECK(data_ != nullptr);                            \
     if (!data_.unique()) {                               \
       auto n = make_object<ObjectName>(*(operator->())); \
       ObjectPtr<Object>(std::move(n)).swap(data_);       \
@@ -845,7 +845,7 @@ inline RefType GetRef(const ObjType* ptr) {
   static_assert(std::is_base_of<typename RefType::ContainerType, ObjType>::value,
                 "Can only cast to the ref of same container type");
   if (!RefType::_type_is_nullable) {
-    CHECK(ptr != nullptr);
+    ICHECK(ptr != nullptr);
   }
   return RefType(ObjectPtr<Object>(const_cast<Object*>(static_cast<const Object*>(ptr))));
 }
@@ -860,12 +860,12 @@ inline ObjectPtr<BaseType> GetObjectPtr(ObjType* ptr) {
 template <typename SubRef, typename BaseRef>
 inline SubRef Downcast(BaseRef ref) {
   if (ref.defined()) {
-    CHECK(ref->template IsInstance<typename SubRef::ContainerType>())
+    ICHECK(ref->template IsInstance<typename SubRef::ContainerType>())
         << "Downcast from " << ref->GetTypeKey() << " to " << SubRef::ContainerType::_type_key
         << " failed.";
   } else {
-    CHECK(SubRef::_type_is_nullable) << "Downcast from nullptr to not nullable reference of "
-                                     << SubRef::ContainerType::_type_key;
+    ICHECK(SubRef::_type_is_nullable) << "Downcast from nullptr to not nullable reference of "
+                                      << SubRef::ContainerType::_type_key;
   }
   return SubRef(std::move(ref.data_));
 }

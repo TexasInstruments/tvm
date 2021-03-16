@@ -40,23 +40,8 @@ def split_env_var(env_var, split):
     return []
 
 
-def find_lib_path(name=None, search_path=None, optional=False):
-    """Find dynamic library files.
-
-    Parameters
-    ----------
-    name : list of str
-        List of names to be found.
-
-    Returns
-    -------
-    lib_path : list(string)
-        List of all found path to the libraries
-    """
-    use_runtime = os.environ.get("TVM_USE_RUNTIME_LIB", False)
-
-    # See https://github.com/apache/incubator-tvm/issues/281 for some background.
-
+def get_dll_directories():
+    """Get the possible dll directories"""
     # NB: This will either be the source directory (if TVM is run
     # inplace) or the install directory (if TVM is installed).
     # An installed TVM's curr_path will look something like:
@@ -70,7 +55,7 @@ def find_lib_path(name=None, search_path=None, optional=False):
     if os.environ.get("TVM_LIBRARY_PATH", None):
         dll_path.append(os.environ["TVM_LIBRARY_PATH"])
 
-    if sys.platform.startswith("linux"):
+    if sys.platform.startswith("linux") or sys.platform.startswith("freebsd"):
         dll_path.extend(split_env_var("LD_LIBRARY_PATH", ":"))
         dll_path.extend(split_env_var("PATH", ":"))
     elif sys.platform.startswith("darwin"):
@@ -94,11 +79,31 @@ def find_lib_path(name=None, search_path=None, optional=False):
         dll_path.append(os.path.join(source_dir, "web", "dist"))
 
     dll_path = [os.path.realpath(x) for x in dll_path]
+    return [x for x in dll_path if os.path.isdir(x)]
+
+
+def find_lib_path(name=None, search_path=None, optional=False):
+    """Find dynamic library files.
+
+    Parameters
+    ----------
+    name : list of str
+        List of names to be found.
+
+    Returns
+    -------
+    lib_path : list(string)
+        List of all found path to the libraries
+    """
+    use_runtime = os.environ.get("TVM_USE_RUNTIME_LIB", False)
+    dll_path = get_dll_directories()
+
     if search_path is not None:
         if isinstance(search_path, list):
             dll_path = dll_path + search_path
         else:
             dll_path.append(search_path)
+
     if name is not None:
         if isinstance(name, list):
             lib_dll_path = []
@@ -217,4 +222,4 @@ def find_include_path(name=None, search_path=None, optional=False):
 # We use the version of the incoming release for code
 # that is under development.
 # The following line is set by tvm/python/update_version.py
-__version__ = "0.7.dev1"
+__version__ = "0.8.dev0"

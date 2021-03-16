@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-""" Cost model that estimates the performance of programs """
+""" Cost models that estimate the performance of programs """
 import ctypes
 import numpy as np
 
@@ -31,7 +31,7 @@ class CostModel(Object):
 
 @tvm._ffi.register_object("auto_scheduler.RandomModel")
 class RandomModel(CostModel):
-    """A model returns random estimation for all inputs"""
+    """A model that returns random estimation for all inputs"""
 
     def __init__(self):
         self.__init_handle_by_constructor__(_ffi_api.RandomModel)
@@ -41,9 +41,9 @@ class RandomModel(CostModel):
 
         Parameters
         ----------
-        inputs : List[MeasureInput]
+        inputs : List[auto_scheduler.measure.MeasureInput]
             The measurement inputs
-        results : List[MeasureResult]
+        results : List[auto_scheduler.measure.MeasureResult]
             The measurement results
         """
         _ffi_api.CostModelUpdate(self, inputs, results)
@@ -112,9 +112,9 @@ class PythonBasedModel(CostModel):
 
         Parameters
         ----------
-        inputs : List[MeasureInput]
+        inputs : List[auto_scheduler.measure.MeasureInput]
             The measurement inputs
-        results : List[MeasureResult]
+        results : List[auto_scheduler.measure.MeasureResult]
             The measurement results
         """
         raise NotImplementedError

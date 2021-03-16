@@ -107,6 +107,14 @@ TVM_DLL Pass FoldConstant();
 TVM_DLL Pass FuseOps(int fuse_opt_level = -1);
 
 /*!
+ * \brief The inverse operation of FuseOps. It transforms a fused program returned by
+ * FuseOps into the program before FuseOps. (i.e. x == DefuseOps(FuseOps(x)))
+ *
+ * \return The pass.
+ */
+TVM_DLL Pass DefuseOps();
+
+/*!
  * \brief Rewrite the annotated program.
  *
  * \param fallback_device The fallback device which is the default device for
@@ -194,8 +202,9 @@ TVM_DLL Pass ToGraphNormalForm();
 TVM_DLL Pass PartialEval();
 
 /*!
- * \brief Simplify certain operators during inference. For example, batch norm
- * will be unpacked into a number of simplified operators.
+ * \brief Simplify certain operators during inference. For example, the result
+ * of a batch norm which is indexed at tuple index 0 will be unpacked into a
+ * number of simplified operators.
  *
  * \return The Pass.
  */
@@ -207,6 +216,17 @@ TVM_DLL Pass SimplifyInference();
  * \return The Pass.
  */
 TVM_DLL Pass FastMath();
+
+/*!
+ * \brief Find Dynamic ops and make them static
+ *
+ * Searches the graph for dynamic ops. If the dynamic inputs to those ops are constants, it replaces
+ * them with static ops and re-performs type inference and constant folding. The pass repeats
+ * itself until the graph stops changing or we run too many iterations.
+ *
+ * \return The pass.
+ */
+TVM_DLL Pass DynamicToStatic();
 
 /*!
  * \brief Infer the type of an expression.
@@ -302,6 +322,12 @@ TVM_DLL Pass CanonicalizeOps();
  * \return The pass.
  */
 TVM_DLL Pass AlterOpLayout();
+
+/*!
+ * \brief Do layout rewrite according to the tile structure created by auto-scheduler.
+ * \return The pass
+ */
+TVM_DLL Pass AutoSchedulerLayoutRewrite();
 
 /*!
  * \brief Given a dest layout, this pass transforms the expr such that most of the ops input data
@@ -406,18 +432,6 @@ TVM_DLL Pass SimplifyExpr();
  * \return The updated expression.
  */
 TVM_DLL Expr Bind(const Expr& expr, const tvm::Map<Var, Expr>& binds);
-
-/*!
- * \brief Infer the type of a function as if it is mapped to var in the mod.
- *
- * \param f the function.
- * \param mod The module used for referencing global functions.
- * \param var The global variable corresponding to the function.
- *
- * \return A type checked Function with its checked_type field populated.
- * \note this function mutates mod and is not thread-safe.
- */
-TVM_DLL Function InferType(const Function& f, const IRModule& mod, const GlobalVar& var);
 
 /*!
  * \brief Apply rewrite rules to rewrite the expr in post DFS order. This

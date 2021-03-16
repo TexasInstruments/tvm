@@ -49,19 +49,24 @@ inline tvm::te::Tensor broadcast_to(const tvm::te::Tensor& t,
                                     const tvm::Array<tvm::PrimExpr>& output_shape,
                                     std::string name = "T_broadcast_to",
                                     std::string tag = kBroadcast) {
-  CHECK_GE(output_shape.size(), t->shape.size())
+  ICHECK_GE(output_shape.size(), t->shape.size())
       << "Not a broadcast, output dimensionality smaller than input.\noutput: " << output_shape
       << "\nvs\ninput: " << t;
   auto bh = detail::BroadcastShape(output_shape, t->shape);
-  CHECK_EQ(output_shape.size(), bh.common_shape.size());
+  ICHECK_EQ(output_shape.size(), bh.common_shape.size());
+  Array<PrimExpr> oshape;
   for (size_t i = 0; i < output_shape.size(); ++i) {
-    CHECK(topi::detail::EqualCheck(output_shape[i], bh.common_shape[i]));
+    if (output_shape[i].as<tir::IntImmNode>() == nullptr) {
+      oshape.push_back(output_shape[i]);
+    } else {
+      ICHECK(topi::detail::EqualCheck(output_shape[i], bh.common_shape[i]));
+      oshape.push_back(bh.common_shape[i]);
+    }
   }
   auto l = [&](tvm::Array<tvm::tir::Var> ovars) {
     return t(detail::InputIndexFromBroadcast(ovars, t, bh.vars2, bh.all_vars));
   };
-  return tvm::te::compute(tvm::Array<tvm::PrimExpr>(bh.common_shape.begin(), bh.common_shape.end()),
-                          l, name, tag);
+  return tvm::te::compute(oshape, l, name, tag);
 }
 
 #define TOPI_DEFINE_BCAST_OP(Name, ComputeRule)                                                   \

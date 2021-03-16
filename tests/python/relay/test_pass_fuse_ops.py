@@ -14,8 +14,9 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import numpy as np
+
 import tvm
-from tvm import te
 from tvm import relay
 from tvm.relay import transform
 from tvm.relay.testing import run_opt_pass
@@ -44,7 +45,6 @@ def test_fuse_simple():
         return relay.Function([x], y)
 
     z = before()
-    zz = run_opt_pass(z, transform.FuseOps(fuse_opt_level=2))
     zz = run_opt_pass(z, transform.FuseOps())
     after = run_opt_pass(expected(), transform.InferType())
     assert tvm.ir.structural_equal(zz, after)
@@ -331,8 +331,14 @@ def test_tuple_get_root():
     assert tvm.ir.structural_equal(zz, after)
 
 
-fuse0 = relay.transform.FuseOps(fuse_opt_level=0)
-fuse2 = relay.transform.FuseOps(fuse_opt_level=2)
+def fuse0(mod):
+    mod = relay.transform.InferType()(mod)
+    return relay.transform.FuseOps(fuse_opt_level=0)(mod)
+
+
+def fuse2(mod):
+    mod = relay.transform.InferType()(mod)
+    return relay.transform.FuseOps(fuse_opt_level=2)(mod)
 
 
 def test_tuple_intermediate():
@@ -550,10 +556,10 @@ def test_immutable():
         mod["main"] = relay.Function([x], y)
         return mod
 
-    mod = before()
+    mod = transform.InferType()(before())
     new_mod = transform.FuseOps(fuse_opt_level=2)(mod)
-    assert tvm.ir.structural_equal(mod, before())
-    assert tvm.ir.structural_equal(new_mod, expected())
+    assert tvm.ir.structural_equal(mod, transform.InferType()(before()))
+    assert tvm.ir.structural_equal(new_mod, transform.InferType()(expected()))
 
 
 def test_split():
@@ -565,6 +571,7 @@ def test_split():
     c = relay.TupleGetItem(y, 2)
     mod = tvm.IRModule()
     mod["main"] = relay.Function([x], a + relay.RefRead(relay.RefCreate(b)) + c)
+    mod = transform.InferType()(mod)
     mod = transform.FuseOps()(mod)
 
 
@@ -750,6 +757,31 @@ def test_fuse_max_diamond():
 
     expected = run_opt_pass(after(branch_len, num_diamond), transform.InferType())
     assert tvm.ir.structural_equal(fused, expected)
+
+
+def test_fuse_dynamic_squeeze_slice_take():
+    input_data = [
+        np.random.random([1, 2, 4]).astype("float32"),
+        np.array([0]).astype("int64"),
+    ]
+
+    x = relay.var("p0107", shape=(relay.Any(), relay.Any(), 4), dtype="float32")
+    take_val = relay.var("p166", shape=(relay.Any(),), dtype="int64")
+
+    squeeze = relay.op.squeeze(x, axis=[0])
+    strided_slice = relay.op.strided_slice(
+        squeeze, begin=[0, 0], end=[15130, 9223372036854775807], strides=[1, 1]
+    )
+    take = relay.op.take(strided_slice, take_val, axis=0)
+
+    mod = tvm.IRModule.from_expr(take)
+    ex = relay.create_executor("vm", mod=mod, ctx=tvm.cpu(), target="llvm")
+
+    result = ex.evaluate()(*input_data)
+
+    np_result = np.squeeze(input_data[0][:, input_data[1][0], :], axis=0)
+
+    assert np.allclose(result.asnumpy(), np_result)
 
 
 if __name__ == "__main__":

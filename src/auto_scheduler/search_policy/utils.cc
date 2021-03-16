@@ -32,7 +32,7 @@ namespace auto_scheduler {
 Array<Integer> GetSpatialSplitStepIds(const State& s, int stage_id) {
   const auto& stage = s->stages[stage_id];
   const auto& pop = s->stages[stage_id]->op.as<te::ComputeOpNode>();
-  CHECK(pop != nullptr);
+  ICHECK(pop != nullptr);
   const std::set<std::string>& no_split_at_inner_name_set =
       stage->op->attrs.count(SearchPolicyKey::no_split_at_inner)
           ? GetIterNameSetParam(stage->op->attrs, SearchPolicyKey::no_split_at_inner)
@@ -46,9 +46,7 @@ Array<Integer> GetSpatialSplitStepIds(const State& s, int stage_id) {
 
   Array<Integer> spatial_split_step_ids;
   for (int i = s->transform_steps.size() - 1; i >= 0; --i) {
-    if (s->transform_steps[i]->IsInstance<CacheWriteStepNode>() ||
-        s->transform_steps[i]->IsInstance<CacheReadStepNode>() ||
-        s->transform_steps[i]->IsInstance<RfactorStepNode>()) {
+    if (IsStageNumberChangingStep(s->transform_steps[i])) {
       if (stage_id > s->transform_steps[i]->stage_id) {
         stage_id--;
       }
@@ -65,6 +63,87 @@ Array<Integer> GetSpatialSplitStepIds(const State& s, int stage_id) {
   }
 
   return spatial_split_step_ids;
+}
+
+std::vector<std::pair<int, int>> GetComputeLocationCandidates(const SearchTask& task,
+                                                              const State& state, int stage_id) {
+  int target_stage_id = GetSingleConsumerId(task, state, stage_id);
+  if (target_stage_id < 0) {
+    return {};
+  }
+  const Stage& target_stage = state->stages[target_stage_id];
+
+  std::vector<std::pair<int, int>> candidates;
+  bool target_compute_at_other = target_stage->compute_at == ComputeAtKind::kIter;
+  bool target_is_tiled = IsTiled(target_stage);
+
+  bool visited_reduce = false;
+  // Enumerate compute_at location at target_stage
+  // TODO(merrymercy): More analysis here to make smarter choices
+  for (size_t i = 0; i < target_stage->iters.size(); ++i) {
+    const Iterator& target_iter = target_stage->iters[i];
+    if (target_iter->iter_kind == IteratorKind::kReduction) {
+      visited_reduce = true;
+      if (!target_is_tiled) {  // Do not go into reduce iter
+        break;
+      }
+    } else if (target_iter->iter_kind == IteratorKind::kSpatial) {
+      if (visited_reduce) {  // Do not go into inner tile
+        break;
+      }
+    }
+
+    if (target_iter->annotation == IteratorAnnotation::kUnroll) {
+      // Do not go into the unroll region of const tensor indices
+      break;
+    }
+
+    if (GetExtent(target_iter) == 1) {
+      // Skip iterators with length of 1
+      continue;
+    }
+    if (target_compute_at_other && target_iter->iter_kind == IteratorKind::kSpatial &&
+        StrEndsWith(target_iter->name, ".0")) {
+      // Skip the first level iterators if target stage compute_at another stage
+      // In this case, the lengths of first level iterators are always one
+      continue;
+    }
+    candidates.emplace_back(target_stage_id, i);
+
+    if (state->attach_map->iter_to_attached_stages.count(std::make_pair(target_stage_id, i))) {
+      break;
+    }
+  }
+
+  // if the target_stage is already compute_at another stage X, try also compute_at X
+  // We call stage X as `target_target_stage`
+  if (target_compute_at_other) {
+    int target_target_stage_id;
+    target_target_stage_id = state->attach_map->stage_to_attach_iter.at(target_stage_id).first;
+    const Stage& target_target_stage = state->stages[target_target_stage_id];
+
+    for (size_t i = 0; i < target_target_stage->iters.size(); ++i) {
+      const Iterator& target_target_iter = target_target_stage->iters[i];
+      if (target_target_iter->iter_kind == IteratorKind::kReduction ||
+          state->attach_map->iter_to_attached_stages.count(
+              std::make_pair(target_target_stage_id, i))) {
+        break;
+      }
+
+      if (target_target_iter->annotation == IteratorAnnotation::kUnroll) {
+        // Do not go into the unroll region of const tensor indices
+        break;
+      }
+
+      if (GetExtent(target_target_iter) == 1) {  // skip iterators with length of 1
+        continue;
+      }
+
+      candidates.emplace_back(target_target_stage_id, i);
+    }
+  }
+
+  return candidates;
 }
 
 State DoMultiLevelTiling(const State& state, int stage_id, const std::string& format,
@@ -103,7 +182,7 @@ State DoMultiLevelTiling(const State& state, int stage_id, const std::string& fo
   for (const auto& iter : state->stages[stage_id]->iters) {
     if (!no_split_at_inner_name_set.count(iter->name)) {
       if (iter->iter_kind == IteratorKind::kSpatial) {
-        CHECK_GE(n_space, 1);
+        ICHECK_GE(n_space, 1);
 
         if (n_space == 1) {
           space_levels[0].push_back(iter);
@@ -115,7 +194,7 @@ State DoMultiLevelTiling(const State& state, int stage_id, const std::string& fo
           spatial_split_step_ids->push_back(tmp_s->transform_steps.size() - 1);
         }
       } else if (iter->iter_kind == IteratorKind::kReduction) {
-        CHECK_GE(n_reduce, 1);
+        ICHECK_GE(n_reduce, 1);
 
         if (n_reduce == 1) {
           reduce_levels[0].push_back(iter);
@@ -140,26 +219,26 @@ State DoMultiLevelTiling(const State& state, int stage_id, const std::string& fo
   }
 
   if (!space_outer.empty()) {
-    CHECK(!space_levels.empty());
+    ICHECK(!space_levels.empty());
     space_levels.front().insert(space_levels.front().begin(),
                                 std::make_move_iterator(space_outer.begin()),
                                 std::make_move_iterator(space_outer.end()));
   }
   if (!space_inner.empty()) {
-    CHECK(!space_levels.empty());
+    ICHECK(!space_levels.empty());
     space_levels.back().insert(space_levels.back().begin(),
                                std::make_move_iterator(space_inner.begin()),
                                std::make_move_iterator(space_inner.end()));
   }
 
   if (!reduce_outer.empty()) {
-    CHECK(!reduce_levels.empty());
+    ICHECK(!reduce_levels.empty());
     reduce_levels.front().insert(reduce_levels.front().begin(),
                                  std::make_move_iterator(reduce_outer.begin()),
                                  std::make_move_iterator(reduce_outer.end()));
   }
   if (!reduce_inner.empty()) {
-    CHECK(!reduce_levels.empty());
+    ICHECK(!reduce_levels.empty());
     reduce_levels.back().insert(reduce_levels.back().begin(),
                                 std::make_move_iterator(reduce_inner.begin()),
                                 std::make_move_iterator(reduce_inner.end()));
@@ -195,7 +274,7 @@ State FollowTiling(const State& state, int stage_id, const std::vector<int>& spl
   Array<Iterator> split_res;
 
   auto pop = state->stages[stage_id]->op.as<te::ComputeOpNode>();
-  CHECK(pop != nullptr);
+  ICHECK(pop != nullptr);
   const Stage& stage = state->stages[stage_id];
   const std::set<std::string>& no_split_at_inner_name_set =
       stage->op->attrs.count(SearchPolicyKey::no_split_at_inner)
@@ -206,8 +285,8 @@ State FollowTiling(const State& state, int stage_id, const std::vector<int>& spl
     no_split_at_inner_name_in_stage_cnt += no_split_at_inner_name_set.count(iter->name);
   }
 
-  CHECK_EQ(state->stages[stage_id]->iters.size() - no_split_at_inner_name_in_stage_cnt,
-           split_step_ids.size());
+  ICHECK_EQ(state->stages[stage_id]->iters.size() - no_split_at_inner_name_in_stage_cnt,
+            split_step_ids.size());
 
   State tmp_s = state;
   int ct = 0;
@@ -249,7 +328,7 @@ State FollowTiling(const State& state, int stage_id, const std::vector<int>& spl
           } else if (n_split == 2) {
             space_2.push_back(iter);
           } else {
-            CHECK_EQ(n_split, 3);
+            ICHECK_EQ(n_split, 3);
             space_3.push_back(iter);
           }
         }
@@ -327,16 +406,17 @@ void PruneInvalidState(const SearchTask& task, Array<State>* states) {
   }
 
   if (pt == 0) {
-    LOG(INFO) << "All states are invalid.";
+    LOG(FATAL) << "Internal error: All states are invalid.";
   } else {
     states->resize(pt);
   }
 }
 
+/********** SplitFactorizationMemo **********/
 const Array<Array<Integer>>& SplitFactorizationMemo::GetFactorizationSchemes(
     int extent, int n_lengths, int max_innermost_factor) {
   QueryKey key = std::make_tuple(extent, n_lengths, max_innermost_factor);
-  auto it = memory_.find(key);
+  const auto& it = memory_.find(key);
   if (it != memory_.end()) {
     return it->second;
   }
@@ -382,6 +462,8 @@ const std::vector<int>& SplitFactorizationMemo::GetFactors(int n) {
   std::sort(res.begin(), res.end());
   return res;
 }
+
+/********** Utils interface API for ffi **********/
 
 TVM_REGISTER_GLOBAL("auto_scheduler.SearchPolicyUtilsIsTiled")
     .set_body_typed([](const Stage& stage) { return IsTiled(stage); });

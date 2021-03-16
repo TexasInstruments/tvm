@@ -351,7 +351,7 @@ class SmallMapNode : public MapNode,
    */
   const mapped_type& at(const key_type& key) const {
     iterator itr = find(key);
-    CHECK(itr.index < size_) << "IndexError: key is not in Map";
+    ICHECK(itr.index < size_) << "IndexError: key is not in Map";
     return itr->second;
   }
   /*!
@@ -361,7 +361,7 @@ class SmallMapNode : public MapNode,
    */
   mapped_type& at(const key_type& key) {
     iterator itr = find(key);
-    CHECK(itr.index < size_) << "IndexError: key is not in Map";
+    ICHECK(itr.index < size_) << "IndexError: key is not in Map";
     return itr->second;
   }
   /*! \return begin iterator */
@@ -466,7 +466,7 @@ class SmallMapNode : public MapNode,
     }
     uint64_t next_size = std::max(map_node->slots_ * 2, uint64_t(kInitSize));
     next_size = std::min(next_size, uint64_t(kMaxSize));
-    CHECK_GT(next_size, map_node->slots_);
+    ICHECK_GT(next_size, map_node->slots_);
     ObjectPtr<Object> new_map = CreateFromRange(next_size, map_node->begin(), map_node->end());
     InsertMaybeReHash(kv, &new_map);
     *map = std::move(new_map);
@@ -656,7 +656,7 @@ class DenseMapNode : public MapNode {
    */
   mapped_type& At(const key_type& key) const {
     ListNode iter = Search(key);
-    CHECK(!iter.IsNone()) << "IndexError: key is not in Map";
+    ICHECK(!iter.IsNone()) << "IndexError: key is not in Map";
     return iter.Val();
   }
   /*!
@@ -823,7 +823,7 @@ class DenseMapNode : public MapNode {
    * \return The object created
    */
   static ObjectPtr<DenseMapNode> Empty(uint32_t fib_shift, uint64_t n_slots) {
-    CHECK_GT(n_slots, uint64_t(SmallMapNode::kMaxSize));
+    ICHECK_GT(n_slots, uint64_t(SmallMapNode::kMaxSize));
     ObjectPtr<DenseMapNode> p = make_object<DenseMapNode>();
     uint64_t n_blocks = CalcNumBlocks(n_slots - 1);
     Block* block = p->data_ = new Block[n_blocks];
@@ -855,7 +855,7 @@ class DenseMapNode : public MapNode {
       for (int j = 0; j < kBlockCap;
            ++j, ++meta_ptr_from, ++data_ptr_from, ++meta_ptr_to, ++data_ptr_to) {
         uint8_t& meta = *meta_ptr_to = *meta_ptr_from;
-        CHECK(meta != kProtectedSlot);
+        ICHECK(meta != kProtectedSlot);
         if (meta != uint8_t(kEmptySlot)) {
           new (data_ptr_to) KVType(*data_ptr_from);
         }
@@ -876,7 +876,7 @@ class DenseMapNode : public MapNode {
       iter.Val() = kv.second;
       return;
     }
-    CHECK_GT(map_node->slots_, uint64_t(SmallMapNode::kMaxSize));
+    ICHECK_GT(map_node->slots_, uint64_t(SmallMapNode::kMaxSize));
     // Otherwise, start rehash
     ObjectPtr<Object> p = Empty(map_node->fib_shift_ - 1, map_node->slots_ * 2 + 2);
     // Insert the given `kv` into the new hash map
@@ -963,7 +963,7 @@ class DenseMapNode : public MapNode {
       shift -= 1;
       slots <<= 1;
     }
-    CHECK_GT(slots, cap);
+    ICHECK_GT(slots, cap);
     if (slots < cap * 2) {
       *fib_shift = shift - 1;
       *n_slots = slots << 1;
@@ -1104,7 +1104,7 @@ class DenseMapNode : public MapNode {
   friend class MapNode;
 };
 
-#define _TVM_DISPATCH_MAP(base, var, body)    \
+#define TVM_DISPATCH_MAP(base, var, body)     \
   {                                           \
     using TSmall = SmallMapNode*;             \
     using TDense = DenseMapNode*;             \
@@ -1118,68 +1118,68 @@ class DenseMapNode : public MapNode {
     }                                         \
   }
 
-#define _TVM_DISPATCH_MAP_CONST(base, var, body) \
-  {                                              \
-    using TSmall = const SmallMapNode*;          \
-    using TDense = const DenseMapNode*;          \
-    uint64_t slots = base->slots_;               \
-    if (slots <= SmallMapNode::kMaxSize) {       \
-      TSmall var = static_cast<TSmall>(base);    \
-      body;                                      \
-    } else {                                     \
-      TDense var = static_cast<TDense>(base);    \
-      body;                                      \
-    }                                            \
+#define TVM_DISPATCH_MAP_CONST(base, var, body) \
+  {                                             \
+    using TSmall = const SmallMapNode*;         \
+    using TDense = const DenseMapNode*;         \
+    uint64_t slots = base->slots_;              \
+    if (slots <= SmallMapNode::kMaxSize) {      \
+      TSmall var = static_cast<TSmall>(base);   \
+      body;                                     \
+    } else {                                    \
+      TDense var = static_cast<TDense>(base);   \
+      body;                                     \
+    }                                           \
   }
 
 inline MapNode::iterator::pointer MapNode::iterator::operator->() const {
-  _TVM_DISPATCH_MAP_CONST(self, p, { return p->DeRefItr(index); });
+  TVM_DISPATCH_MAP_CONST(self, p, { return p->DeRefItr(index); });
 }
 
 inline MapNode::iterator& MapNode::iterator::operator++() {
-  _TVM_DISPATCH_MAP_CONST(self, p, {
+  TVM_DISPATCH_MAP_CONST(self, p, {
     index = p->IncItr(index);
     return *this;
   });
 }
 
 inline MapNode::iterator& MapNode::iterator::operator--() {
-  _TVM_DISPATCH_MAP_CONST(self, p, {
+  TVM_DISPATCH_MAP_CONST(self, p, {
     index = p->IncItr(index);
     return *this;
   });
 }
 
 inline size_t MapNode::count(const key_type& key) const {
-  _TVM_DISPATCH_MAP_CONST(this, p, { return p->count(key); });
+  TVM_DISPATCH_MAP_CONST(this, p, { return p->count(key); });
 }
 
 inline const MapNode::mapped_type& MapNode::at(const MapNode::key_type& key) const {
-  _TVM_DISPATCH_MAP_CONST(this, p, { return p->at(key); });
+  TVM_DISPATCH_MAP_CONST(this, p, { return p->at(key); });
 }
 
 inline MapNode::mapped_type& MapNode::at(const MapNode::key_type& key) {
-  _TVM_DISPATCH_MAP(this, p, { return p->at(key); });
+  TVM_DISPATCH_MAP(this, p, { return p->at(key); });
 }
 
 inline MapNode::iterator MapNode::begin() const {
-  _TVM_DISPATCH_MAP_CONST(this, p, { return p->begin(); });
+  TVM_DISPATCH_MAP_CONST(this, p, { return p->begin(); });
 }
 
 inline MapNode::iterator MapNode::end() const {
-  _TVM_DISPATCH_MAP_CONST(this, p, { return p->end(); });
+  TVM_DISPATCH_MAP_CONST(this, p, { return p->end(); });
 }
 
 inline MapNode::iterator MapNode::find(const MapNode::key_type& key) const {
-  _TVM_DISPATCH_MAP_CONST(this, p, { return p->find(key); });
+  TVM_DISPATCH_MAP_CONST(this, p, { return p->find(key); });
 }
 
 inline void MapNode::erase(const MapNode::iterator& position) {
-  _TVM_DISPATCH_MAP(this, p, { return p->erase(position); });
+  TVM_DISPATCH_MAP(this, p, { return p->erase(position); });
 }
 
-#undef _TVM_DISPATCH_MAP
-#undef _TVM_DISPATCH_MAP_CONST
+#undef TVM_DISPATCH_MAP
+#undef TVM_DISPATCH_MAP_CONST
 
 inline ObjectPtr<MapNode> MapNode::Empty() { return SmallMapNode::Empty(); }
 

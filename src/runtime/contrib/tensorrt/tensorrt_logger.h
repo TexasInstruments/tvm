@@ -25,10 +25,14 @@
 #ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_LOGGER_H_
 #define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_LOGGER_H_
 
+#include <tvm/support/logging.h>
+
 #include "NvInfer.h"
+#include "tensorrt_utils.h"
 
 namespace tvm {
 namespace runtime {
+namespace contrib {
 
 /*! \brief Logger for TensorRT info/warning/errors. */
 class TensorRTLogger : public nvinfer1::ILogger {
@@ -67,6 +71,7 @@ class TensorRTLogger : public nvinfer1::ILogger {
   Severity reportable_severity{Severity::kWARNING};
 };
 
+}  // namespace contrib
 }  // namespace runtime
 }  // namespace tvm
 

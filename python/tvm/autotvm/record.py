@@ -57,7 +57,7 @@ def measure_str_key(inp, include_config=True):
 
     Parameters
     ----------
-    inp: MeasureInput
+    inp: autotvm.measure.MeasureInput
         input for the measure
     include_config: bool, optional
         whether includes config in the str key
@@ -78,8 +78,8 @@ def encode(inp, result, protocol="json"):
 
     Parameters
     ----------
-    inp: autotvm.tuner.MeasureInput
-    result: autotvm.tuner.MeasureResult
+    inp: autotvm.measure.MeasureInput
+    result: autotvm.measure.MeasureResult
         pair of input/result
     protocol: str
         log protocol, json or pickle
@@ -135,7 +135,7 @@ def decode(row, protocol="json"):
 
     Returns
     -------
-    ret : tuple(autotvm.tuner.MeasureInput, autotvm.tuner.MeasureResult), or None
+    ret : tuple(autotvm.measure.MeasureInput, autotvm.measure.MeasureResult), or None
         The tuple of input and result, or None if input uses old version log format.
     """
     # pylint: disable=unused-variable
@@ -204,8 +204,8 @@ def load_from_file(filename):
 
     Yields
     ------
-    input: autotvm.tuner.MeasureInput
-    result: autotvm.tuner.MeasureResult
+    input: autotvm.measure.MeasureInput
+    result: autotvm.measure.MeasureResult
     """
     for row in open(filename):
         if row and not row.startswith("#"):
@@ -268,8 +268,8 @@ def split_workload(in_file, clean=True):
 
 def pick_best(in_file, out_file):
     """
-    Pick best entries from a file and store it to another file.
-    This distill the useful log entries from a large log file.
+    Pick the best entries from a file and store them to another file.
+    This function distills the useful log entries from a large log file.
     If out_file already exists, the best entries from both
     in_file and out_file will be saved.
 

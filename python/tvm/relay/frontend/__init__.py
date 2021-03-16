@@ -34,3 +34,6 @@ from .tensorflow import from_tensorflow
 from .darknet import from_darknet
 from .pytorch import from_pytorch
 from .caffe import from_caffe
+from .sklearn import from_sklearn
+from .sklearn import from_auto_ml
+from .change_datatype import ChangeDatatype

@@ -89,6 +89,10 @@ register_injective_schedule("device_copy")
 register_broadcast_schedule("fast_exp")
 register_broadcast_schedule("fast_tanh")
 register_broadcast_schedule("fast_erf")
+# a fake on_device schedule.
+# this will not be used in actual computation
+# as on_device will be removed during DeviceAnnotation pass
+register_injective_schedule("on_device")
 
 
 # zeros
@@ -179,6 +183,8 @@ def no_data_full_shape_func(attrs, inputs, out_ndims):
     """
     Shape func for zeros and ones.
     """
+    if len(inputs) == 0:
+        return [_convert_shape(convert(attrs.shape))]
     return [_full_shape_func(inputs[0])]
 
 
@@ -228,6 +234,7 @@ def elemwise_shape_func(attrs, inputs, _):
 
 
 register_shape_func("cast", False, elemwise_shape_func)
+register_shape_func("cast_like", False, elemwise_shape_func)
 register_shape_func("zeros", False, no_data_full_shape_func)
 register_shape_func("zeros_like", False, elemwise_shape_func)
 register_shape_func("ones", False, no_data_full_shape_func)
@@ -241,6 +248,7 @@ register_shape_func("subtract", False, broadcast_shape_func)
 register_shape_func("multiply", False, broadcast_shape_func)
 register_shape_func("divide", False, broadcast_shape_func)
 register_shape_func("floor_divide", False, broadcast_shape_func)
+register_shape_func("power", False, broadcast_shape_func)
 register_shape_func("mod", False, broadcast_shape_func)
 register_shape_func("floor_mod", False, broadcast_shape_func)
 register_shape_func("logical_and", False, broadcast_shape_func)
@@ -272,3 +280,8 @@ register_shape_func("device_copy", False, elemwise_shape_func)
 register_shape_func("clip", False, elemwise_shape_func)
 register_shape_func("log2", False, elemwise_shape_func)
 register_shape_func("sigmoid", False, elemwise_shape_func)
+register_shape_func("isnan", False, elemwise_shape_func)
+register_shape_func("isinf", False, elemwise_shape_func)
+register_shape_func("logical_not", False, elemwise_shape_func)
+register_shape_func("sign", False, elemwise_shape_func)
+register_shape_func("abs", False, elemwise_shape_func)

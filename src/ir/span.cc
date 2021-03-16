@@ -23,6 +23,8 @@
 #include <tvm/ir/span.h>
 #include <tvm/runtime/registry.h>
 
+#include <algorithm>
+
 namespace tvm {
 
 ObjectPtr<Object> GetSourceNameNode(const String& name) {
@@ -71,8 +73,10 @@ Span::Span(SourceName source_name, int line, int end_line, int column, int end_c
   data_ = std::move(n);
 }
 
-Span Span::Merge(const Span& other) {
-  CHECK((*this)->source_name == other->source_name);
+Span Span::Merge(const Span& other) const {
+  ICHECK(this->defined() && other.defined()) << "Span::Merge: both spans must be defined";
+
+  ICHECK((*this)->source_name == other->source_name);
   return Span((*this)->source_name, std::min((*this)->line, other->line),
               std::max((*this)->end_line, other->end_line),
               std::min((*this)->column, other->column),

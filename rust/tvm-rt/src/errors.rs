@@ -33,8 +33,6 @@ pub struct TypeMismatchError {
 
 #[derive(Debug, Error)]
 pub enum NDArrayError {
-    #[error("Missing NDArray shape.")]
-    MissingShape,
     #[error("Cannot convert from an empty array.")]
     EmptyArray,
     #[error("Invalid datatype when attempting to convert ndarray.")]
@@ -70,6 +68,23 @@ pub enum Error {
     Infallible(#[from] std::convert::Infallible),
     #[error("a panic occurred while executing a Rust packed function")]
     Panic,
+    #[error(
+        "one or more error diagnostics were emitted, please check diagnostic render for output."
+    )]
+    DiagnosticError(String),
+    #[error("{0}")]
+    Raw(String),
+}
+
+impl Error {
+    pub fn from_raw_tvm(raw: &str) -> Error {
+        let err_header = raw.find(":").unwrap_or(0);
+        let (err_ty, err_content) = raw.split_at(err_header);
+        match err_ty {
+            "DiagnosticError" => Error::DiagnosticError((&err_content[1..]).into()),
+            _ => Error::Raw(raw.into()),
+        }
+    }
 }
 
 impl Error {

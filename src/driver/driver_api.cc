@@ -69,7 +69,8 @@ Target DefaultTargetHost(Target target) {
 
 tir::Buffer BufferWithOffsetAlignment(Array<PrimExpr> shape, DataType dtype, std::string name,
                                       int data_alignment, int offset_factor, bool compact) {
-  auto data = tir::Var(name, PointerType(PrimType(dtype)));
+  DataType storage_dtype = (dtype == DataType::Bool() ? DataType::Int(8) : dtype);
+  auto data = tir::Var(name, PointerType(PrimType(storage_dtype)));
   bool has_any = false;
   if (!compact) {
     for (const auto& it : shape) {
@@ -209,11 +210,13 @@ std::pair<IRModule, IRModule> SplitDevHostFuncs(IRModule mod_mixed, const Target
       }),
       BindTarget(target_host),
       tir::transform::LowerTVMBuiltin(),
+      tir::transform::LowerCustomDatatypes(),
       tir::transform::LowerIntrin(),
       tir::transform::LowerDeviceStorageAccessInfo(),
       tir::transform::CombineContextCall(),
   };
   auto opt_host = transform::Sequential(host_pass_list);
+  ICHECK(mod_mixed.defined()) << "This module must be defined";
   auto mhost = opt_host(mod_mixed);
 
   // device pipeline
@@ -225,6 +228,7 @@ std::pair<IRModule, IRModule> SplitDevHostFuncs(IRModule mod_mixed, const Target
       BindTarget(target),
       tir::transform::LowerWarpMemory(),
       tir::transform::Simplify(),
+      tir::transform::LowerCustomDatatypes(),
       tir::transform::LowerIntrin(),
       tir::transform::LowerDeviceStorageAccessInfo(),
   };
@@ -240,9 +244,9 @@ std::pair<IRModule, IRModule> SplitDevHostFuncs(IRModule mod_mixed, const Target
   }
 
   if (target->kind->device_type == kDLCPU && target_host == target) {
-    CHECK(mdevice->functions.empty()) << "No device code should be generated when target "
-                                      << "and host_target are both llvm target."
-                                      << "\n";
+    ICHECK(mdevice->functions.empty()) << "No device code should be generated when target "
+                                       << "and host_target are both llvm target."
+                                       << "\n";
   }
 
   return {mhost, mdevice};
@@ -269,14 +273,23 @@ runtime::Module build(const Map<Target, IRModule>& inputs, const Target& target_
 
   IRModule mhost_all = IRModule(Map<GlobalVar, BaseFunc>());
 
-  for (const auto& it : inputs) {
-    auto pair = SplitDevHostFuncs(it.second, it.first, target_host_val, pass_ctx);
-    auto& mhost = pair.first;
-    auto& mdevice = pair.second;
+  ICHECK(mhost_all.defined()) << "The host module must be defined";
 
-    mhost_all->Update(mhost);
-    if (mdevice->functions.size() != 0) {
-      device_modules.push_back(codegen::Build(mdevice, it.first));
+  for (const auto& it : inputs) {
+    if (it.second.defined()) {
+      auto pair = SplitDevHostFuncs(it.second, it.first, target_host_val, pass_ctx);
+      auto& mhost = pair.first;
+      auto& mdevice = pair.second;
+
+      ICHECK(mhost.defined()) << "The split host module must be defined";
+
+      ICHECK(mhost_all.defined()) << "The host module must be defined";
+
+      mhost_all->Update(mhost);
+
+      if (mdevice->functions.size() != 0) {
+        device_modules.push_back(codegen::Build(mdevice, it.first));
+      }
     }
   }
 

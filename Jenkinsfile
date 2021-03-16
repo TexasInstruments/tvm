@@ -45,10 +45,12 @@
 
 // NOTE: these lines are scanned by docker/dev_common.sh. Please update the regex as needed. -->
 ci_lint = "tlcpack/ci-lint:v0.62"
-ci_gpu = "tlcpack/ci-gpu:v0.64"
-ci_cpu = "tlcpack/ci-cpu:v0.65"
-ci_wasm = "tlcpack/ci-wasm:v0.60"
-ci_i386 = "tlcpack/ci-i386:v0.52"
+ci_gpu = "tlcpack/ci-gpu:v0.72"
+ci_cpu = "tlcpack/ci-cpu:v0.71"
+ci_wasm = "tlcpack/ci-wasm:v0.70"
+ci_i386 = "tlcpack/ci-i386:v0.71"
+ci_qemu = "tlcpack/ci-qemu:v0.01"
+ci_arm = "tlcpack/ci-arm:v0.01"
 // <--- End of regex-scanned config.
 
 // tvm libraries
@@ -78,7 +80,7 @@ def init_git() {
   checkout scm
   retry(5) {
     timeout(time: 2, unit: 'MINUTES') {
-      sh 'git submodule update --init'
+      sh 'git submodule update --init -f'
     }
   }
 }
@@ -87,10 +89,23 @@ def init_git_win() {
     checkout scm
     retry(5) {
         timeout(time: 2, unit: 'MINUTES') {
-            bat 'git submodule update --init'
+            bat 'git submodule update --init -f'
         }
     }
 }
+
+def cancel_previous_build() {
+    // cancel previous build if it is not on main.
+    if (env.BRANCH_NAME != "main") {
+        def buildNumber = env.BUILD_NUMBER as int
+        // Milestone API allows us to cancel previous build
+        // with the same milestone number
+        if (buildNumber > 1) milestone(buildNumber - 1)
+        milestone(buildNumber)
+    }
+}
+
+cancel_previous_build()
 
 stage("Sanity Check") {
   timeout(time: max_time, unit: 'MINUTES') {
@@ -112,7 +127,11 @@ def make(docker_type, path, make_flag) {
       sh "${docker_run} ${docker_type} ./tests/scripts/task_build.sh ${path} ${make_flag}"
       // always run cpp test when build
       sh "${docker_run} ${docker_type} ./tests/scripts/task_cpp_unittest.sh"
-    } catch (exc) {
+    } catch (hudson.AbortException ae) {
+      // script exited due to user abort, directly throw instead of retry
+      if (ae.getMessage().contains('script returned exit code 143')) {
+        throw ae
+      }
       echo 'Incremental compilation failed. Fall back to build from scratch'
       sh "${docker_run} ${docker_type} ./tests/scripts/task_clean.sh ${path}"
       sh "${docker_run} ${docker_type} ./tests/scripts/task_build.sh ${path} ${make_flag}"
@@ -162,11 +181,12 @@ stage('Build') {
         make(ci_cpu, 'build', '-j2')
         pack_lib('cpu', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_cpu} ./tests/scripts/task_ci_python_setup.sh"
           sh "${docker_run} ${ci_cpu} ./tests/scripts/task_python_unittest.sh"
           sh "${docker_run} ${ci_cpu} ./tests/scripts/task_python_integration.sh"
           sh "${docker_run} ${ci_cpu} ./tests/scripts/task_python_vta_fsim.sh"
           sh "${docker_run} ${ci_cpu} ./tests/scripts/task_python_vta_tsim.sh"
-          sh "${docker_run} ${ci_cpu} ./tests/scripts/task_golang.sh"
+          // sh "${docker_run} ${ci_cpu} ./tests/scripts/task_golang.sh"
           sh "${docker_run} ${ci_cpu} ./tests/scripts/task_rust.sh"
         }
       }
@@ -179,6 +199,7 @@ stage('Build') {
         sh "${docker_run} ${ci_wasm} ./tests/scripts/task_config_build_wasm.sh"
         make(ci_wasm, 'build', '-j2')
         timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_wasm} ./tests/scripts/task_ci_python_setup.sh"
           sh "${docker_run} ${ci_wasm} ./tests/scripts/task_web_wasm.sh"
         }
       }
@@ -193,6 +214,29 @@ stage('Build') {
         pack_lib('i386', tvm_multilib)
       }
     }
+  },
+  // 'BUILD : arm': {
+  //   node('ARM') {
+  //     ws(per_exec_ws("tvm/build-arm")) {
+  //       init_git()
+  //       sh "${docker_run} ${ci_arm} ./tests/scripts/task_config_build_arm.sh"
+  //       make(ci_arm, 'build', '-j4')
+  //       pack_lib('arm', tvm_multilib)
+  //     }
+  //   }
+  // },
+  'BUILD: QEMU': {
+    node('CPU') {
+      ws(per_exec_ws("tvm/build-qemu")) {
+        init_git()
+        sh "${docker_run} ${ci_qemu} ./tests/scripts/task_config_build_qemu.sh"
+        make(ci_qemu, 'build', '-j2')
+        timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_qemu} ./tests/scripts/task_ci_python_setup.sh"
+          sh "${docker_run} ${ci_qemu} ./tests/scripts/task_python_microtvm.sh"
+        }
+      }
+    }
   }
 }
 
@@ -203,6 +247,7 @@ stage('Unit Test') {
         init_git()
         unpack_lib('gpu', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_gpu} ./tests/scripts/task_ci_python_setup.sh"
           sh "${docker_run} ${ci_gpu} ./tests/scripts/task_sphinx_precheck.sh"
           sh "${docker_run} ${ci_gpu} ./tests/scripts/task_python_unittest_gpuonly.sh"
           sh "${docker_run} ${ci_gpu} ./tests/scripts/task_python_integration_gpuonly.sh"
@@ -216,6 +261,7 @@ stage('Unit Test') {
         init_git()
         unpack_lib('i386', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_i386} ./tests/scripts/task_ci_python_setup.sh"
           sh "${docker_run} ${ci_i386} ./tests/scripts/task_python_unittest.sh"
           sh "${docker_run} ${ci_i386} ./tests/scripts/task_python_integration.sh"
           sh "${docker_run} ${ci_i386} ./tests/scripts/task_python_vta_fsim.sh"
@@ -223,12 +269,26 @@ stage('Unit Test') {
       }
     }
   },
+  // 'python3: arm': {
+  //   node('ARM') {
+  //     ws(per_exec_ws("tvm/ut-python-arm")) {
+  //       init_git()
+  //       unpack_lib('arm', tvm_multilib)
+  //       timeout(time: max_time, unit: 'MINUTES') {
+  //         sh "${docker_run} ${ci_arm} ./tests/scripts/task_ci_python_setup.sh"
+  //         sh "${docker_run} ${ci_arm} ./tests/scripts/task_python_unittest.sh"
+  //         // sh "${docker_run} ${ci_arm} ./tests/scripts/task_python_integration.sh"
+  //       }
+  //     }
+  //   }
+  // },
   'java: GPU': {
     node('GPU') {
       ws(per_exec_ws("tvm/ut-java")) {
         init_git()
         unpack_lib('gpu', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_gpu} ./tests/scripts/task_ci_python_setup.sh"
           sh "${docker_run} ${ci_gpu} ./tests/scripts/task_java_unittest.sh"
         }
       }
@@ -243,6 +303,7 @@ stage('Integration Test') {
         init_git()
         unpack_lib('gpu', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_gpu} ./tests/scripts/task_ci_python_setup.sh"
           sh "${docker_run} ${ci_gpu} ./tests/scripts/task_python_topi.sh"
         }
       }
@@ -254,6 +315,7 @@ stage('Integration Test') {
         init_git()
         unpack_lib('gpu', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_gpu} ./tests/scripts/task_ci_python_setup.sh"
           sh "${docker_run} ${ci_gpu} ./tests/scripts/task_python_frontend.sh"
         }
       }
@@ -265,6 +327,7 @@ stage('Integration Test') {
         init_git()
         unpack_lib('cpu', tvm_multilib)
         timeout(time: max_time, unit: 'MINUTES') {
+          sh "${docker_run} ${ci_gpu} ./tests/scripts/task_ci_python_setup.sh"
           sh "${docker_run} ${ci_cpu} ./tests/scripts/task_python_frontend_cpu.sh"
         }
       }
@@ -277,12 +340,12 @@ stage('Integration Test') {
   //       init_git()
   //       unpack_lib('gpu', tvm_multilib)
   //       timeout(time: max_time, unit: 'MINUTES') {
+  //         sh "${docker_run} ${ci_gpu} ./tests/scripts/task_ci_python_setup.sh"
   //         sh "${docker_run} ${ci_gpu} ./tests/scripts/task_python_docs.sh"
   //       }
   //       pack_lib('mydocs', 'docs.tgz')
   //     }
   //   }
-  // }
 }
 
 /*
@@ -299,18 +362,19 @@ stage('Build packages') {
     }
   }
   // Here we could upload the packages to anaconda for releases
-  // and/or the master branch
+  // and/or the main branch
 }
 */
 
-// stage('Deploy') {
-//     node('doc') {
-//       ws(per_exec_ws("tvm/deploy-docs")) {
-//         if (env.BRANCH_NAME == "master") {
-//            unpack_lib('mydocs', 'docs.tgz')
-//            sh "cp docs.tgz /var/docs/docs.tgz"
-//            sh "tar xf docs.tgz -C /var/docs"
-//         }
-//       }
-//     }
-// }
+/*
+stage('Deploy') {
+    node('doc') {
+      ws(per_exec_ws("tvm/deploy-docs")) {
+        if (env.BRANCH_NAME == "main") {
+           unpack_lib('mydocs', 'docs.tgz')
+           sh "cp docs.tgz /var/docs/docs.tgz"
+           sh "tar xf docs.tgz -C /var/docs"
+        }
+      }
+    }
+}*/

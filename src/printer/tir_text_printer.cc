@@ -246,27 +246,27 @@ Doc TIRTextPrinter::VisitExpr_(const VarNode* op) {
   return meta_->InMeta(var) ? meta_->GetMetaNode(var) : AllocVar(GetRef<Var>(op));
 }
 
-#define TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(OpName, OpString) \
-  Doc TIRTextPrinter::VisitExpr_(const OpName* op) {           \
-    Doc doc;                                                   \
-    doc << "(" << Print(op->a) << OpString;                    \
-    doc << Print(op->b) << ")";                                \
-    return doc;                                                \
+#define TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(OpName, OpString) \
+  Doc TIRTextPrinter::VisitExpr_(const OpName* op) {         \
+    Doc doc;                                                 \
+    doc << "(" << Print(op->a) << OpString;                  \
+    doc << Print(op->b) << ")";                              \
+    return doc;                                              \
   }
 
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(AddNode, " + ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(SubNode, " - ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(MulNode, "*")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(DivNode, " / ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(ModNode, " % ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(EQNode, " == ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(NENode, " != ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(LTNode, " < ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(LENode, " <= ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(GTNode, " > ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(GENode, " >= ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(AndNode, " && ")
-TVM_DECLARE_TIR_HYBRID_PRINTER_BINOP(OrNode, " || ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(AddNode, " + ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(SubNode, " - ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(MulNode, "*")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(DivNode, " / ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(ModNode, " % ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(EQNode, " == ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(NENode, " != ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(LTNode, " < ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(LENode, " <= ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(GTNode, " > ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(GENode, " >= ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(AndNode, " && ")
+TVM_DECLARE_TIR_TEXT_PRINTER_BINOP(OrNode, " || ")
 
 Doc TIRTextPrinter::VisitExpr_(const FloorDivNode* op) {
   Doc doc;
@@ -353,7 +353,7 @@ Doc TIRTextPrinter::VisitExpr_(const CallNode* op) {
   } else {
     // TODO(bohan): Print out the name by he global var in the module.
     auto* op_gvar = op->op.as<GlobalVarNode>();
-    CHECK(op_gvar != nullptr);
+    ICHECK(op_gvar != nullptr);
     doc << "@" << Doc::Text(op_gvar->name_hint) << "(";
   }
   std::vector<Doc> args;
@@ -465,18 +465,21 @@ Doc TIRTextPrinter::VisitStmt_(const EvaluateNode* op) {
   return doc;
 }
 
-inline const char* ForType2String(ForType t) {
+inline const char* ForKind2String(ForKind t) {
   switch (t) {
-    case ForType::Serial:
+    case ForKind::kSerial:
       return "serial";
-    case ForType::Parallel:
+    case ForKind::kParallel:
       return "parallel";
-    case ForType::Vectorized:
+    case ForKind::kVectorized:
       return "vectorized";
-    case ForType::Unrolled:
+    case ForKind::kUnrolled:
       return "unroll";
+    case ForKind::kThreadBinding:
+      LOG(FATAL) << "Loop ThreadBinding is reserved for future used and "
+                 << "not yet supported in TIR";
   }
-  LOG(FATAL) << "Unknown ForType";
+  LOG(FATAL) << "Unknown ForKind";
   return "Unknown";
 }
 
@@ -484,8 +487,8 @@ Doc TIRTextPrinter::VisitStmt_(const ForNode* op) {
   Doc doc;
   doc << "for (" << Print(op->loop_var) << ", " << Print(op->min) << ", "
       << Print(op->min + op->extent) << ")";
-  if (op->for_type != ForType::Serial) {
-    doc << " " << Doc::StrLiteral(ForType2String(op->for_type));
+  if (op->kind != ForKind::kSerial) {
+    doc << " " << Doc::StrLiteral(ForKind2String(op->kind));
   }
   doc << PrintBody(op->body);
   return doc;

@@ -308,7 +308,7 @@ Doc RelayTextPrinter::ScalarLiteral(DataType dtype, const T& value) {
   } else if (dtype == DataType::Float(32)) {
     os << value << 'f';
   } else if (dtype == DataType::Float(64)) {
-    os << value;
+    os << value << "f64";
   } else if (dtype == DataType::Bool()) {
     return Doc::PyBoolLiteral(value != 0);
   } else {
@@ -322,7 +322,7 @@ Doc RelayTextPrinter::VisitExpr_(const ConstantNode* op) {
   if (op->is_scalar()) {
     std::ostringstream os;
     DataType dtype = DataType(op->data->dtype);
-    CHECK_EQ(op->data->ctx.device_type, kDLCPU);
+    ICHECK_EQ(op->data->ctx.device_type, kDLCPU);
     if (dtype == DataType::Int(32)) {
       return ScalarLiteral(dtype, static_cast<const int32_t*>(op->data->data)[0]);
     } else if (dtype == DataType::Int(64)) {
@@ -489,7 +489,11 @@ Doc RelayTextPrinter::VisitExpr_(const CallNode* op) {
     // don't print as a call if it's a 0-arity cons
     return doc;
   } else {
-    return doc << "(" << Doc::Concat(args) << ")";
+    doc << "(" << Doc::Concat(args) << ")";
+    if (op->span.defined()) {
+      doc << " /* " << PrintSpan(op->span) << " */";
+    }
+    return doc;
   }
 }
 
@@ -500,12 +504,12 @@ Doc RelayTextPrinter::VisitExpr_(const RefCreateNode* op) {
 
 Doc RelayTextPrinter::VisitExpr_(const RefReadNode* op) {
   Doc doc;
-  return doc << Print(op->ref) << "^";
+  return doc << "ref_read(" << Print(op->ref) << ")";
 }
 
 Doc RelayTextPrinter::VisitExpr_(const RefWriteNode* op) {
   Doc doc;
-  return doc << "(" << Print(op->ref) << " := " << Print(op->value) << ")";
+  return doc << "ref_write(" << Print(op->ref) << ", " << Print(op->value) << ")";
 }
 
 Doc RelayTextPrinter::VisitExpr_(const MatchNode* op) {
@@ -522,10 +526,11 @@ Doc RelayTextPrinter::VisitExpr_(const MatchNode* op) {
     Doc clause_doc;
     clause_doc << PrintPattern(clause->lhs, false) << " => ";
     Doc rhs_doc = PrintScope(clause->rhs);
-    if (clause->rhs.as<LetNode>()) {
-      // only add braces if there are multiple lines on the rhs
-      rhs_doc = Doc::Brace("{", rhs_doc, "}");
-    }
+    // TODO(@jroesch): This is unsound right now, and we need to revist it.
+    // if (clause->rhs.as<LetNode>()) {
+    // only add braces if there are multiple lines on the rhs
+    rhs_doc = Doc::Brace("{", rhs_doc, "}");
+    // }
     clause_doc << rhs_doc << ",";
     clause_docs.push_back(clause_doc);
   }
@@ -830,13 +835,21 @@ std::vector<Doc> RelayTextPrinter::PrintFuncAttrs(const Attrs& attrs) {
   std::vector<Doc> docs;
   if (!attrs.defined()) return docs;
   const auto* dict_attrs = attrs.as<DictAttrsNode>();
-  CHECK(dict_attrs);
+  ICHECK(dict_attrs);
   for (const auto& k : dict_attrs->dict) {
     Doc doc;
     doc << k.first << "=" << Print(k.second);
     docs.push_back(doc);
   }
   return docs;
+}
+
+Doc RelayTextPrinter::PrintSpan(const Span& span) {
+  Doc doc;
+  const auto* span_node = span.as<SpanNode>();
+  ICHECK(span_node);
+  doc << span_node->source_name->name;
+  return doc;
 }
 
 TVM_REGISTER_GLOBAL("ir.TextPrinter").set_body_typed([](ObjectRef node) {

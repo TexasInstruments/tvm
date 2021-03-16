@@ -27,7 +27,6 @@ from tvm.relay import create_executor, transform
 from tvm.relay.transform import gradient
 from tvm.relay.prelude import Prelude
 from tvm.relay.testing import (
-    add_nat_definitions,
     make_nat_expr,
     run_infer_type,
     check_grad,
@@ -256,6 +255,29 @@ def _test_tuple(mode):
     tvm.testing.assert_allclose(grad_z.asnumpy(), -1 * np.ones_like(grad_z.asnumpy()))
 
 
+def _test_tuple_argument(mode):
+    shape = (2, 3)
+    dtype = "float32"
+    tensor_type = relay.TensorType(shape, dtype)
+    fields = 3
+    tuple_type = relay.TupleType([tensor_type] * fields)
+    tup = relay.var("tup", type_annotation=tuple_type)
+    body = relay.TupleGetItem(tup, 0)
+    for i in range(1, fields):
+        body = relay.add(body, relay.TupleGetItem(tup, i))
+    func = relay.Function([tup], body)
+    func = run_infer_type(func)
+    back_func = run_infer_type(gradient(func, mode=mode))
+    xs = [rand(dtype, *shape) for _ in range(fields)]
+    xs_np = np.array([x.asnumpy() for x in xs])
+    expected_forward = np.sum(xs_np, axis=0)
+    ex = create_executor()
+    forward, grad = ex.evaluate(back_func)(tuple(xs))
+    tvm.testing.assert_allclose(forward.asnumpy(), expected_forward)
+    for field in grad[0]:
+        tvm.testing.assert_allclose(field.asnumpy(), np.ones_like(field.asnumpy()))
+
+
 def test_tuple():
     _test_tuple("higher_order")
 
@@ -264,18 +286,30 @@ def test_tuple_first_order():
     _test_tuple("first_order")
 
 
+@pytest.mark.xfail(raises=tvm.error.TVMError)
+def test_tuple_argument():
+    # fails until we add support for top-level tuple arguments in higher-order AD
+    _test_tuple_argument("higher_order")
+
+
+def test_tuple_argument_first_order():
+    _test_tuple_argument("first_order")
+
+
 def test_pow():
     mod = tvm.IRModule()
     p = Prelude(mod)
-    add_nat_definitions(p)
+    p.mod.import_from_std("nat.rly")
+    nat_iterate = mod.get_global_var("nat_iterate")
     shape = (10, 10)
     dtype = "float32"
     t = relay.TensorType(shape, dtype)
     x = relay.var("x", t)
     double = relay.Function([x], x + x)
     i = relay.var("i", t)
-    func = relay.Function([i], p.nat_iterate(double, make_nat_expr(p, 3))(i))
+    func = relay.Function([i], nat_iterate(double, make_nat_expr(p, 3))(i))
     mod["main"] = func
+    mod = transform.InferType()(mod)
     mod["main"] = gradient(mod["main"], mod=mod)
     m = transform.InferType()(mod)
     back_func = m["main"]
@@ -407,7 +441,9 @@ def test_global_function():
     q = GlobalVar("q")
     m[q] = relay.Function([y], d(d(y)))
     g = GlobalVar("grad")
+    m = tvm.relay.transform.InferType()(m)
     m[g] = tvm.relay.transform.gradient(q, m)
+    m = tvm.relay.transform.InferType()(m)
     back_func = m[g]
     assert back_func.checked_type == relay.FuncType([t], relay.TupleType([t, relay.TupleType([t])]))
     ex = create_executor(mod=m)

@@ -235,6 +235,7 @@ def test_sum_loop():
         sb.ret(relay.Call(sum_up, [one_less, new_accum]))
     func = relay.Function([i, accum], sb.get())
     mod[sum_up] = func
+    mod = relay.transform.InferType()(mod)
     loop_bound = 0
     i_data = np.array(loop_bound, dtype="int32")
     accum_data = np.array(0, dtype="int32")
@@ -273,9 +274,7 @@ def test_list_constructor():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    l = p.l
+    l, cons, nil = mod.get_type("List")
 
     one2 = cons(relay.const(1), nil())
     one3 = cons(relay.const(2), one2)
@@ -372,10 +371,8 @@ def test_list_hd():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    l = p.l
-    hd = p.hd
+    l, cons, nil = mod.get_type("List")
+    hd = mod.get_global_var("hd")
 
     one2 = cons(relay.const(1), nil())
     one3 = cons(relay.const(2), one2)
@@ -395,9 +392,8 @@ def test_list_tl_empty_list():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    l = p.l
-    tl = p.tl
+    l, cons, nil = mod.get_type("List")
+    tl = mod.get_global_var("tl")
 
     f = relay.Function([], tl(nil()))
 
@@ -412,10 +408,8 @@ def test_list_tl():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    l = p.l
-    tl = p.tl
+    l, cons, nil = mod.get_type("List")
+    tl = mod.get_global_var("tl")
 
     one2 = cons(relay.const(1), nil())
     one3 = cons(relay.const(2), one2)
@@ -438,9 +432,9 @@ def test_list_nth():
         mod = tvm.IRModule()
         p = Prelude(mod)
 
-        nil = p.nil
-        cons = p.cons
-        nth = p.nth
+        _, cons, nil = mod.get_type("List")
+        nth = mod.get_global_var("nth")
+
         l = nil()
         for i in reversed(expected):
             l = cons(relay.const(i), l)
@@ -459,9 +453,8 @@ def test_list_update():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    update = p.update
+    _, cons, nil = mod.get_type("List")
+    update = mod.get_global_var("update")
 
     l = nil()
     # create zero initialized list
@@ -486,13 +479,12 @@ def test_list_length():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    length = p.length
+    _, cons, nil = mod.get_type("List")
+    length = mod.get_global_var("length")
 
     l = nil()
     # create zero initialized list
-    for i in range(len(expected)):
+    for _ in range(len(expected)):
         l = cons(relay.const(0), l)
 
     l = length(l)
@@ -512,9 +504,8 @@ def test_list_map():
     x = relay.var("x", "int32")
     add_one_func = relay.Function([x], relay.const(1) + x)
 
-    nil = p.nil
-    cons = p.cons
-    map = p.map
+    _, cons, nil = mod.get_type("List")
+    map = mod.get_global_var("map")
 
     l = cons(relay.const(2), cons(relay.const(1), nil()))
 
@@ -530,9 +521,8 @@ def test_list_foldl():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    foldl = p.foldl
+    _, cons, nil = mod.get_type("List")
+    foldl = mod.get_global_var("foldl")
 
     x = relay.var("x")
     y = relay.var("y")
@@ -551,9 +541,8 @@ def test_list_foldr():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    foldr = p.foldr
+    _, cons, nil = mod.get_type("List")
+    foldr = mod.get_global_var("foldr")
 
     x = relay.var("x")
     y = relay.var("y")
@@ -572,9 +561,8 @@ def test_list_sum():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    sum = p.sum
+    _, cons, nil = mod.get_type("List")
+    sum = mod.get_global_var("sum")
 
     l = cons(relay.const(1), cons(relay.const(2), cons(relay.const(3), nil())))
     f = relay.Function([], sum(l))
@@ -589,9 +577,8 @@ def test_list_filter():
     mod = tvm.IRModule()
     p = Prelude(mod)
 
-    nil = p.nil
-    cons = p.cons
-    filter = p.filter
+    _, cons, nil = mod.get_type("List")
+    filter = mod.get_global_var("filter")
 
     x = relay.var("x", "int32")
     greater_than_one = relay.Function([x], x > relay.const(1))
@@ -765,6 +752,47 @@ def test_vm_reshape_tensor():
     assert "reshape_tensor" in exec.bytecode
     y_np = np.array([8, 2, 8]).astype("int32")
     check_result([x_np, y_np], x_np.reshape([8, 2, 8]), mod)
+
+
+def test_vm_reshape_tuple(x_shape=(1, 4, 2), y_shape=(1, 2, 10)):
+    tup = relay.var(
+        "tup",
+        type_annotation=relay.TupleType([relay.TensorType(x_shape), relay.TensorType(y_shape)]),
+    )
+    out = relay.reshape(relay.TupleGetItem(tup, 0), (1, -1))
+    f = relay.Function([tup], out)
+
+    x_data = np.random.uniform(size=x_shape).astype("float32")
+    y_data = np.random.uniform(size=y_shape).astype("float32")
+
+    for tgt, ctx in tvm.testing.enabled_targets():
+        res = veval(f, (x_data, y_data), ctx=ctx, target=tgt)
+        tvm.testing.assert_allclose(res.asnumpy(), np.reshape(x_data, (1, -1)))
+
+
+def test_constant_shape_with_external_codegen():
+    mod = tvm.IRModule()
+    shape = (relay.Any(), 25)
+    dtype = "float32"
+
+    # external function
+    x = relay.var("x", shape=shape, dtype=dtype)
+    weight = relay.const(np.random.rand(5, 25).astype("float32"), dtype="float32")
+    out = relay.nn.dense(x, weight)
+    f1 = relay.Function([x], out)
+    f1 = f1.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+    f1 = f1.with_attr("Inline", tvm.tir.IntImm("int32", 1))
+    f1 = f1.with_attr("Compiler", "a")
+    glb_f1 = relay.GlobalVar("f1")
+    mod[glb_f1] = f1
+    mod = relay.transform.InferType()(mod)
+
+    # Main function
+    x = relay.var("x", shape=shape, dtype=dtype)
+    mod["main"] = relay.Function([x], glb_f1(x))
+    comp = relay.vm.VMCompiler()
+    opt_mod, _ = comp.optimize(mod, target="llvm")
+    assert "shape_func" in opt_mod.astext(False)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ A pass for manifesting explicit memory allocations.
 import numpy as np
 
 from tvm.ir.transform import PassContext, module_pass
+from tvm.relay.transform import InferType
 from tvm import nd, container
 from ..function import Function
 from ..expr_functor import ExprVisitor, ExprMutator
@@ -82,6 +83,11 @@ class CheckReshapeOnly(ExprVisitor):
             self.reshape_only = False
         for arg in call.args:
             self.visit(arg)
+
+    def visit_var(self, var):
+        var_type = var.checked_type
+        if not isinstance(var_type, ty.TensorType):
+            self.reshape_only = False
 
 
 def is_reshape_only(func):
@@ -351,6 +357,7 @@ class ManifestAlloc:
         # TODO(@jroesch): Is there a way to do one shot initialization?
         # can we have def pass_init?
         mod.import_from_std("core.rly")
+        mod = InferType()(mod)
 
         assert isinstance(self.targets, (dict, container.Map))
         if len(self.targets) > 1:

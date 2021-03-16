@@ -18,6 +18,7 @@
 """TVM: Open Deep Learning Compiler Stack."""
 import multiprocessing
 import sys
+import os
 import traceback
 
 # top-level alias
@@ -57,9 +58,6 @@ from .driver import build, lower
 # tvm.parser
 from . import parser
 
-# tvm tir hybrid script
-from . import hybrid
-
 # others
 from . import arith
 
@@ -70,12 +68,31 @@ from . import support
 from .contrib import rocm as _rocm, nvcc as _nvcc, sdaccel as _sdaccel
 
 
+def _should_print_backtrace():
+    in_pytest = "PYTEST_CURRENT_TEST" in os.environ
+    tvm_backtrace = os.environ.get("TVM_BACKTRACE", "0")
+
+    try:
+        tvm_backtrace = bool(int(tvm_backtrace))
+    except ValueError:
+        raise ValueError(
+            f"invalid value for TVM_BACKTRACE `{tvm_backtrace}`, please set to 0 or 1."
+        )
+
+    return in_pytest or tvm_backtrace
+
+
 def tvm_wrap_excepthook(exception_hook):
     """Wrap given excepthook with TVM additional work."""
 
     def wrapper(exctype, value, trbk):
         """Clean subprocesses when TVM is interrupted."""
-        exception_hook(exctype, value, trbk)
+        if exctype is error.DiagnosticError and not _should_print_backtrace():
+            # TODO(@jroesch): consider moving to C++?
+            print("note: run with `TVM_BACKTRACE=1` environment variable to display a backtrace.")
+        else:
+            exception_hook(exctype, value, trbk)
+
         if hasattr(multiprocessing, "active_children"):
             # pylint: disable=not-callable
             for p in multiprocessing.active_children():

@@ -87,17 +87,6 @@ set(USE_OPENGL OFF)
 # Whether enable MicroTVM runtime
 set(USE_MICRO OFF)
 
-# Whether to enable SGX runtime
-#
-# Possible values for USE_SGX:
-# - /path/to/sgxsdk: path to Intel SGX SDK
-# - OFF: disable SGX
-#
-# SGX_MODE := HW|SIM
-set(USE_SGX OFF)
-set(SGX_MODE "SIM")
-set(RUST_SGX_SDK "/path/to/rust-sgx-sdk")
-
 # Whether enable RPC runtime
 set(USE_RPC ON)
 
@@ -124,13 +113,23 @@ set(USE_MICRO_STANDALONE_RUNTIME OFF)
 #
 # Possible values:
 # - ON: enable llvm with cmake's find search
-# - OFF: disable llvm
+# - OFF: disable llvm, note this will disable CPU codegen
+#        which is needed for most cases
 # - /path/to/llvm-config: enable specific LLVM when multiple llvm-dev is available.
-set(USE_LLVM OFF)
+set(USE_LLVM ON)
 
 #---------------------------------------------
 # Contrib libraries
 #---------------------------------------------
+# Whether to build with BYODT software emulated posit custom datatype
+#
+# Possible values:
+# - ON: enable BYODT posit, requires setting UNIVERSAL_PATH
+# - OFF: disable BYODT posit
+#
+# set(UNIVERSAL_PATH /path/to/stillwater-universal) for ON
+set(USE_BYODT_POSIT OFF)
+
 # Whether use BLAS, choices: openblas, atlas, apple
 set(USE_BLAS none)
 
@@ -224,6 +223,22 @@ set(USE_ETHOSN OFF)
 # otherwise use ETHOSN_HW (OFF) to use the software test infrastructure
 set(USE_ETHOSN_HW OFF)
 
+# Whether to build with TensorRT codegen or runtime
+# Examples are available here: docs/deploy/tensorrt.rst.
+#
+# USE_TENSORRT_CODEGEN - Support for compiling a relay graph where supported operators are
+#                        offloaded to TensorRT. OFF/ON
+# USE_TENSORRT_RUNTIME - Support for running TensorRT compiled modules, requires presense of
+#                        TensorRT library. OFF/ON/"path/to/TensorRT"
+set(USE_TENSORRT_CODEGEN OFF)
+set(USE_TENSORRT_RUNTIME OFF)
+
+# Whether use VITIS-AI codegen
+set(USE_VITIS_AI OFF)
+
+# Build Verilator codegen and runtime, example located in 3rdparty/vta-hw/apps/verilator
+set(USE_VERILATOR_HW OFF)
+
 # Build ANTLR parser for Relay text format
 # Possible values:
 # - ON: enable ANTLR by searching default locations (cmake find_program for antlr4 and /usr/local for jar)
@@ -265,7 +280,3 @@ set(USE_TIDL OFF)
 
 # Whether to use ONNX codegen
 set(USE_TARGET_ONNX OFF)
-
-# Whether to compile the standalone C runtime.
-set(USE_STANDALONE_CRT ON)
-

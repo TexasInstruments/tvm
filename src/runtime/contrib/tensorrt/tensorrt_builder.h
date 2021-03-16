@@ -17,153 +17,120 @@
  */
 
 /*!
-* \file runtime/contrib/tensorrt/tensorrt_builder.h
-* \brief Contains TensorRTBuilder class which can be used to convert a relay
-* program into a TRT engine which can be used for inference.
-*/
+ * \file runtime/contrib/tensorrt/tensorrt_builder.h
+ * \brief The TensorRTBuilder class can be used to convert a JSONRuntime graph into a TRT engine
+ * which can be used for inference.
+ */
 
 #ifndef TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_BUILDER_H_
 #define TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_BUILDER_H_
 
-#include <tvm/relay/expr_functor.h>
-#include <tvm/relay/type.h>
 #include <tvm/runtime/ndarray.h>
 
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "../json/json_node.h"
 #include "NvInfer.h"
-
-#define TRT_VERSION_GE(major, minor, patch)                    \
-  ((NV_TENSORRT_MAJOR > major) ||                              \
-  (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR > minor) || \
-  (NV_TENSORRT_MAJOR == major && NV_TENSORRT_MINOR == minor && \
-  NV_TENSORRT_PATCH >= patch))
-
 #include "tensorrt_logger.h"
+#include "tensorrt_ops.h"
 
 namespace tvm {
 namespace runtime {
+namespace contrib {
+
+using JSONGraphNode = tvm::runtime::json::JSONGraphNode;
+using JSONGraphNodeEntry = tvm::runtime::json::JSONGraphNodeEntry;
 
 /*!
  * \brief The product of TensorRTBuilder which provides everything needed to
  * perform inference.
  */
-struct TrtEngineAndContext {
+struct TensorRTEngineAndContext {
   nvinfer1::ICudaEngine* engine;
   nvinfer1::IExecutionContext* context;
   std::vector<std::string> inputs;
-  std::vector<bool> input_is_baked;
   std::vector<std::string> outputs;
-};
-
-}  // namespace runtime
-
-namespace relay {
-namespace contrib {
-
-/*!
- * \brief An input to a op may be either kTensor in the case of nvifner::ITensor
- * or kWeight for nvinfer1::Weights.
- */
-enum TrtInputType {
-  kTensor,
-  kWeight,
+  /*! \brief GPU buffers for inputs and outputs. */
+  std::vector<NDArray> device_buffers;
 };
 
 /*!
- * \brief An input to a TrtOpConverter. The type of the input is either kTensor
- * or kWeight. For kTensor, "tensor" contains the input tensor. For kWeight,
- * "weight" contains the input weight and "weight_shape" contains the shape.
+ * \brief Converts a JSONRuntime graph into a TensorRT engine and execution context. Inputs,
+ * constants, layers, and outputs can be added to construct the TensorRT network definition.
+ * BuildEngine() will then use the network definition to build the TensorRT engine and context which
+ * can be used to run inference - this phase can take a long time because TensorRT will query the
+ * performance of all available kernels and fusions to optimize the engine.
  */
-struct TrtOpInput {
-  TrtInputType type;
-  nvinfer1::ITensor* tensor;
-  nvinfer1::Weights weight;
-  std::vector<int> weight_shape;
-
-  explicit TrtOpInput(nvinfer1::ITensor* tensor)
-      : tensor(tensor), type(kTensor) {}
-  TrtOpInput(nvinfer1::Weights weight, const std::vector<int>& shape)
-      : weight(weight), type(kWeight), weight_shape(shape) {}
-};
-
-/*!
- * \brief An ExprVisitor to convert a relay expression into a TensorRT engine
- * and execution context.
- */
-class TensorRTBuilder : public ExprVisitor {
+class TensorRTBuilder {
  public:
   /*!
    * \brief Create TensorRT builder.
-   * \param args Inputs to this execution.
+   * \param logger TensorRT logger to use for errors and warnings.
+   * \param max_workspace_size Workspace size parameter for TensorRT engine build phase.
+   * \param use_implicit_batch Whether to use implicit batch mode (default)
+   * \param use_fp16 Whether to use implicit batch mode (default)
+   * \param batch_size If use_implicit_batch,
    */
-  explicit TensorRTBuilder(runtime::TensorRTLogger* logger, const std::vector<DLTensor*>& args,
-                           size_t max_workspace_size, bool use_implicit_batch_);
-
-  void VisitExpr_(const VarNode* node) final;
-
-  void VisitExpr_(const ConstantNode* node) final;
-
-  void VisitExpr_(const TupleGetItemNode* op) final;
-
-  void VisitExpr_(const TupleNode* op) final;
-
-  void VisitExpr_(const CallNode* call) final;
+  TensorRTBuilder(TensorRTLogger* logger, const std::vector<const DLTensor*>& data_entry,
+                  size_t max_workspace_size, bool use_implicit_batch, bool use_fp16,
+                  int batch_size);
 
   /*!
-   * \brief Convert Expr into TensorRT.
-   * \param expr The relay expression.
+   * \brief Add TensorRT input(s) for input node in network definition.
+   * \param nid The input node id.
+   * \param entry_id The index into data_entry_ for first entry in node.
+   * \param node The input node.
+   */
+  void AddInput(int nid, uint32_t entry_id, const JSONGraphNode& node);
+
+  /*!
+   * \brief Add TensorRT weight for input constant in network definition.
+   * \param nid The input node id.
+   * \param node The data tensor on CPU.
+   */
+  void AddConstant(int nid, const DLTensor* data);
+
+  /*!
+   * \brief Add TensorRT layer for op node in network definition.
+   * \param nid The input node id.
+   * \param node The op node.
+   */
+  void AddLayer(int nid, const JSONGraphNode& node);
+
+  /*!
+   * \brief Mark TensorRT output in network definition.
+   * \param entry The output node entry.
+   * \param entry_id The output node entry id.
+   */
+  void AddOutput(const JSONGraphNodeEntry& entry, uint32_t entry_id);
+
+  /*!
+   * \brief Takes network definition and "compiles" a TensorRT engine which can be used for
+   * inference. This step is time confusing.
    * \return TRT engine, context, and input/output information.
    */
-  runtime::TrtEngineAndContext BuildEngine(const Function& func);
+  TensorRTEngineAndContext BuildEngine();
 
  private:
-  /*!
-   * \brief Helper function fto convert NDArray to TRT Weights.
-   * \param array NDArray containing data.
-   * \param src_device Which device the data is expected to be on.
-   * \return Newly created weights
-   */
-  nvinfer1::Weights GetNdArrayAsWeights(const runtime::NDArray& array,
-                                        DLDeviceType src_device);
+  /*! \brief Convert a DLTensor to a TensorRT weight. */
+  nvinfer1::Weights GetDLTensorAsWeights(const DLTensor* dptr, DLDeviceType src_device);
 
-  /*!
-   * \brief Helper function fto convert DLTensor to TRT Weights.
-   * \param dptr Pointer to DLTensor containing data.
-   * \param src_device Which device the data is expected to be on.
-   * \return Newly created weights
-   */
-  nvinfer1::Weights GetDLTensorAsWeights(DLTensor* dptr,
-                                         DLDeviceType src_device);
+  /*! \brief Convert an input to a Tensor if it is a Weight */
+  nvinfer1::ITensor* GetInputAsTensor(const TensorRTOpInput& input);
 
-  nvinfer1::ITensor* AddInput(const std::string& tensor_name, const Type& type);
-
-  /*! \brief Gets value from execution args and converts to constant weight
-   * stored in node_output_map_ with node as the key. */
-  void GetInputAsWeights(const VarNode* node);
-
-  /*! \brief Gets value from ConstantNode data and converts to constant weight
-   * stored in node_output_map_ with node as the key. */
-  void GetConstantAsWeights(const ConstantNode* node);
-
-  /*! \brief Temporary workaround for transposed weights. */
-  void GetInputAsTransposedWeights(const CallNode* transpose,
-                                   const VarNode* node);
-
-  /*! \brief Deallocates weights and destroys network definition. */
+  /*! \brief Clean up resources used to create engine. */
   void CleanUp();
 
-  /*! \brief Initializes network_input_names_, network_input_map_ and
-   * network_input_is_baked_ based on function parameters. */
-  void ProcessInputs(const Function& expr);
-
-  /*! \brief Populates network_output_names_ from the final outputs of the
-   * processed expr. */
-  void ProcessOutputs(const Expr& expr);
+  /*! \brief Allocate a GPU buffer for input or output DLTensor, only if the context is not GPU
+   * already. Inputs that are already on the GPU can be passed directly to TensorRT and will not
+   * need a buffer. */
+  void AllocateDeviceBuffer(nvinfer1::ICudaEngine* engine, const std::string& name,
+                            std::vector<runtime::NDArray>* device_buffers);
 
   /*! \brief Maps a node to its outputs. */
-  std::unordered_map<const ExprNode*, std::vector<TrtOpInput>> node_output_map_;
+  std::unordered_map<int, std::vector<TensorRTOpInput>> node_output_map_;
 
   /*! \brief TensorRT builder. */
   nvinfer1::IBuilder* builder_;
@@ -179,11 +146,11 @@ class TensorRTBuilder : public ExprVisitor {
   /*! \brief List of all weights held in memory. */
   std::vector<nvinfer1::Weights> trt_weights_;
 
-  /*! \brief Execution inputs from this invocation. */
-  const std::vector<DLTensor*>& execution_args_;
+  /*! \brief Input and output tensors from TVM. */
+  const std::vector<const DLTensor*>& data_entry_;
 
-  /*! \brief Batch size of inputs from this invocation. */
-  int batch_size_;
+  /*! \brief Map TensorRT binding name to index in data_entry_. */
+  std::unordered_map<std::string, uint32_t> entry_id_map_;
 
   /*! \brief Max workspace size in bytes for TRT. */
   size_t max_workspace_size_;
@@ -191,47 +158,21 @@ class TensorRTBuilder : public ExprVisitor {
   /*! \brief Whether to use implicit batch mode. */
   bool use_implicit_batch_;
 
-  /*! \brief Input names in same order as execution args during runtime. Some of
-   * these are not actual input bindings in the TRT engine - use
-   * network_input_is_baked_ to find out which. */
+  /*! \brief Whether to automatically convert model to 16-bit floating point precision. */
+  bool use_fp16_;
+
+  /*! \brief Batch size to optimize for. */
+  int batch_size_;
+
+  /*! \brief Input names. */
   std::vector<std::string> network_input_names_;
 
-  /*! \brief Maps input name to execution args index. */
-  std::unordered_map<std::string, int> network_input_map_;
-
-  /*! \brief True if the corresponding input is baked into the TensorRT engine
-   * and therefore should not be included in the input bindings during
-   * execution. */
-  std::vector<bool> network_input_is_baked_;
-
-  /*! \brief Output names in same order as execution args during runtime. */
+  /*! \brief Output names. */
   std::vector<std::string> network_output_names_;
 };
 
-/*!
- * \brief Helper function for GetInputAsTransposedWeights to transpose 4-D
- * weights.
- * \param original_shape Shape of weight before transpose.
- * \param output_strides Multipliers for each index to compute output index in
- * flat buffer. Must be of length 4.
- * \param input_values The original weight values.
- * \param output_values Buffer where transposed values will be placed.
- */
-void TransposeWeights4D(const std::vector<int>& original_shape,
-                        const int* output_strides, const float* input_values,
-                        float* output_values);
-
-/*!
- * \brief Helper function for GetInputAsTransposedWeights to transpose CK to KC.
- * \param original_shape Shape of weight before transpose.
- * \param input_values The original weight values.
- * \param output_values Buffer where transposed values will be placed.
- */
-void TransposeWeights2D(const std::vector<int>& original_shape,
-                        const float* input_values, float* output_values);
-
 }  // namespace contrib
-}  // namespace relay
+}  // namespace runtime
 }  // namespace tvm
 
 #endif  // TVM_RUNTIME_CONTRIB_TENSORRT_TENSORRT_BUILDER_H_

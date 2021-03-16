@@ -30,6 +30,7 @@
 
 #include <algorithm>
 
+#include "../target/datatype/registry.h"
 #include "const_fold.h"
 #include "pattern_match.h"
 
@@ -108,9 +109,9 @@ void RewriteSimplifier::Impl::Update(const Var& var, const PrimExpr& info, bool 
   if (!can_override) {
     auto it = var_map_.find(var);
     if (it != var_map_.end()) {
-      CHECK(ExprDeepEqual()(it->second, info)) << "Trying to update var \'" << var << "\'"
-                                               << " with a different value: "
-                                               << "original=" << it->second << ", new=" << info;
+      ICHECK(ExprDeepEqual()(it->second, info)) << "Trying to update var \'" << var << "\'"
+                                                << " with a different value: "
+                                                << "original=" << it->second << ", new=" << info;
     }
   }
   var_map_[var] = info;
@@ -221,7 +222,7 @@ std::function<void()> RewriteSimplifier::Impl::EnterConstraint(const PrimExpr& c
   literal_constraints_.push_back(operator()(constraint));
   size_t new_literal_size = literal_constraints_.size();
   auto frecover = [old_literal_size, new_literal_size, this]() {
-    CHECK_EQ(literal_constraints_.size(), new_literal_size);
+    ICHECK_EQ(literal_constraints_.size(), new_literal_size);
     literal_constraints_.resize(old_literal_size);
   };
   return frecover;
@@ -460,7 +461,8 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const DivNode* op) {
 
   // x / 2.0 = x * 0.5
   if (const FloatImmNode* ptr = op->b.as<FloatImmNode>()) {
-    CHECK(op->dtype.is_float());
+    ICHECK(op->dtype.is_float() ||
+           datatype::Registry::Global()->GetTypeRegistered(op->dtype.code()));
     return op->a * make_const(op->b.dtype(), 1.0 / ptr->value);
   }
 
@@ -879,6 +881,9 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const FloorModNode* op) {
 
     TVM_TRY_REWRITE_IF(floormod(x + y * c1, c2), floormod(x, c2),
                        c2.Eval()->value > 0 && c1.Eval()->value % c2.Eval()->value == 0);
+
+    TVM_TRY_REWRITE(floormod(x * y, y), ZeroWithTypeLike(x));
+    TVM_TRY_REWRITE(floormod(y * x, y), ZeroWithTypeLike(y));
 
     // try modular analysis
     if (floormod(x, c1).Match(ret)) {
@@ -1535,7 +1540,7 @@ PrimExpr RewriteSimplifier::Impl::VisitExpr_(const CallNode* op) {
   } else if (op->op.same_as(tir::builtin::shift_left())) {
     if (op->args[0].as<IntImmNode>() && op->args[1].as<IntImmNode>()) {
       // the operator overload will eagerly constant fold.
-      return op->args[0] & op->args[1];
+      return op->args[0] << op->args[1];
     }
   }
   ExprDeepEqual expr_equal;
