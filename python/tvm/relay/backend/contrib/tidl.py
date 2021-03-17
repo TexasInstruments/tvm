@@ -2895,6 +2895,7 @@ class TIDLCompiler:
         mod['main'] = RemoveTrainingOperators().visit(mod['main'])
         mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
         if has_qnn_ops:
+            mod = relay.transform.InferType()(mod)
             mod['main'] = RemoveIdentityClip().visit(mod['main'])
         # Removing redundant outputs
         mod = relay.transform.EliminateCommonSubexpr()(mod)
