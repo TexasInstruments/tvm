@@ -2775,6 +2775,7 @@ class TIDLCompiler:
             self.tidl_tools_path = None
             self.tidl_tensor_bits = 8
             self.tidl_denylist = []
+            self.debug_level = None
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
@@ -2795,6 +2796,7 @@ class TIDLCompiler:
             self.tidl_tools_path = None
             self.tidl_tensor_bits = 16
             self.tidl_denylist = []
+            self.debug_level = None
             # more exposed TIDL import options
             self.power_of_2_quantization = 'off'
             self.enable_high_resolution_optimization = 'off'
@@ -2806,6 +2808,7 @@ class TIDLCompiler:
             # Read arguments provided through **kwargs
             for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_calibration_options',
                         'tidl_tools_path', 'tidl_tensor_bits', 'tidl_denylist',
+                        'debug_level',
                         'power_of_2_quantization', 'enable_high_resolution_optimization',
                         'pre_batchnorm_fold', 'reserved_compile_constraints_flag'
                        ):
@@ -2830,6 +2833,8 @@ class TIDLCompiler:
             sys.exit("Unsupported TIDL platform or version!")
         assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
         self.temp_folder = os.path.join(self.artifacts_folder, 'tempDir/')
+        if self.debug_level:
+            os.environ["TIDL_RELAY_IMPORT_DEBUG"] = str(self.debug_level)
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
 
     def enable(self, mod_orig, params, graph_input_list):
