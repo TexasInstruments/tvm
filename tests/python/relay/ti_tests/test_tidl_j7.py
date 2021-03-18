@@ -111,12 +111,14 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
         for d in dirs:
             os.rmdir(os.path.join(root, d))
     tidl_compiler = tidl.TIDLCompiler(tidl_platform, tidl_version,
-                                      num_tidl_subgraphs=num_tidl_subgraphs,
-                                      artifacts_folder=tidl_artifacts_folder,
                                       tidl_tools_path=get_tidl_tools_path(),
+                                      artifacts_folder=tidl_artifacts_folder,
                                       tidl_tensor_bits=8,
-                                      tidl_calibration_options={'iterations': 10},
-                                      tidl_denylist=args.denylist)
+                                      num_tidl_subgraphs=num_tidl_subgraphs,
+                                      tidl_denylist=args.denylist,
+                                      tidl_calibration_accuracy_level=1,
+                                      tidl_calibration_options={'bias_calibration_iterations': 10}
+                                     )
 
     if args.nooffload:
         mod, status = mod_orig, 0
