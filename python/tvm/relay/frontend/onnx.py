@@ -1928,10 +1928,17 @@ class Resize(OnnxOpConverter):
             )
 
         scale = inputs[1]
-        size = _op.cast(_op.shape_of(inputs[0]), infer_type(scale).checked_type.dtype) * scale
+        input_shape = infer_shape(inputs[0])
+        dyn_shape = any(isinstance(dim_shape, tvm.tir.expr.Any) for dim_shape in input_shape)
+        if dyn_shape:
+            size = _op.cast(_op.shape_of(inputs[0]), infer_type(scale).checked_type.dtype) * scale
+            out_size = _op.strided_slice(size, [2], [4])
+        else:
+            known_size = (np.asarray(input_shape) *
+                          params[scale.name_hint].asnumpy()).astype("int32")
+            out_size = (known_size[2], known_size[3])
 
         layout = "NCHW"  # ONNX assumes NCHW layout
-        out_size = _op.strided_slice(size, [2], [4])
         return _op.image.resize(inputs[0], out_size, layout, method, "asymmetric")
 
     @classmethod
@@ -1953,9 +1960,20 @@ class Resize(OnnxOpConverter):
                 len(scale_shape) == 0 or scale_shape[0] == 0
             ), "One of scale or size should be passed, not both."
             size = inputs[3]
+            known_size = params[size.name_hint].asnumpy().astype("int32")
+            out_size = (known_size[2], known_size[3])
         else:
             assert len(scale_shape) != 0, "One of scale or size should be passed."
-            size = _op.cast(_op.shape_of(inputs[0]), infer_type(scale).checked_type.dtype) * scale
+            input_shape = infer_shape(inputs[0])
+            dyn_shape = any(isinstance(dim_shape, tvm.tir.expr.Any) for dim_shape in input_shape)
+            if dyn_shape:
+                size = _op.cast(_op.shape_of(inputs[0]),
+                                infer_type(scale).checked_type.dtype) * scale
+                out_size = _op.strided_slice(size, [2], [4])
+            else:
+                known_size = (np.asarray(input_shape) *
+                              params[scale.name_hint].asnumpy()).astype("int32")
+                out_size = (known_size[2], known_size[3])
 
         coord_trans = attr.get("coordinate_transformation_mode")
         if coord_trans in [b"pytorch_half_pixel", b"half_pixel"]:
@@ -1969,7 +1987,6 @@ class Resize(OnnxOpConverter):
                 "Unsupported coordinate_transformation_mode: {}".format(coord_trans)
             )
         layout = "NCHW"  # ONNX assumes NCHW layout
-        out_size = _op.strided_slice(size, [2], [4])
         return _op.image.resize(inputs[0], out_size, layout, method, coord_trans)
 
 
