@@ -2781,10 +2781,10 @@ class TIDLCompiler:
             self.tidl_tools_path = None
             self.artifacts_folder = None
             self.debug_level = None
-            self.tidl_tensor_bits = 16
+            self.tidl_tensor_bits = 8
             self.num_tidl_subgraphs = 1
             self.tidl_denylist = []
-            self.tidl_calibration_accuracy_level = 0
+            self.tidl_calibration_accuracy_level = 1
             self.tidl_calibration_options = {}
             # more exposed TIDL import options
             self.power_of_2_quantization = 'off'
