@@ -1113,8 +1113,8 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
 
 def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_signed,
                          temp_folder,
-                         net_file, params_file, platform="AM57", tidl_tensor_bits=8,
-                         tidl_calibration_flags=0, tidl_bias_calib_iters=50):
+                         net_file, params_file, platform="AM57", tensor_bits=8,
+                         tidl_calib_flags=0, tidl_bias_calib_iters=50):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Save quantized input vector to a file for calib tool to read
@@ -1126,7 +1126,7 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_si
     # Multiple calibration data are written to the same file, one after another
     for input_quant_vec in input_quant_vec_list:
         for i in range(len(input_quant_vec)):
-            if tidl_tensor_bits == 8:
+            if tensor_bits == 8:
                 if input_signed[i] == 1:
                     input_quant_vec[i].astype('int8').tofile(fid)
                 else:
@@ -1140,7 +1140,7 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_si
 
     if platform == "J7":
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
-        import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calibration_flags,
+        import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_flags,
                                             tidl_bias_calib_iters)
         return (import_ret == 0), 123  ## TODO: do we need dataQ for J7?
 
@@ -1280,20 +1280,20 @@ class TIDLImport:
         TIDL compilation target
     data_layout : string
         Data layout, "NCHW" or "NHWC"
-    tidl_tensor_bits : int
+    tensor_bits : int
         Number of bits for tidl tensors (and consequently params on J7)
     """
     def __init__(self, import_lib, calib_tool, artifacts_folder,
                  tidl_target="tidl", tidl_platform="AM57", data_layout="NCHW",
-                 tidl_tensor_bits=8, tidl_calibration_flags=0, tidl_bias_calib_iters=50):
+                 tensor_bits=8, tidl_calib_flags=0, tidl_bias_calib_iters=50):
         self.import_lib = import_lib
         self.calib_tool = calib_tool
         self.artifacts_folder = artifacts_folder
         self.tidl_target = tidl_target
         self.tidl_platform = tidl_platform
         self.data_layout = data_layout
-        self.tidl_tensor_bits = tidl_tensor_bits
-        self.tidl_calibration_flags = tidl_calibration_flags
+        self.tensor_bits = tensor_bits
+        self.tidl_calib_flags = tidl_calib_flags
         self.tidl_bias_calib_iters = tidl_bias_calib_iters
         self.info_dict = {}
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
@@ -1663,7 +1663,7 @@ class TIDLImport:
             input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
             import_lib_init(subgraph_id, len(input_tensors), input_dscr_ptr, is_nchw,
-                            self.tidl_tensor_bits, self.temp_folder)
+                            self.tensor_bits, self.temp_folder)
             return True
 
         (channel, height, width) = input_shapes[0][1:4]
@@ -1940,7 +1940,7 @@ class TIDLImport:
 
             # Quantize input tensors
             input_quant_vec_list, input_scale, input_signed = \
-                    tensor_quant_flatten(input_fp_list, self.data_layout, self.tidl_tensor_bits)
+                    tensor_quant_flatten(input_fp_list, self.data_layout, self.tensor_bits)
 
             # Initialize TIDL import
             subgraph = mod[tidl_subgraph]
@@ -2011,7 +2011,7 @@ class TIDLImport:
             status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
                                      input_quant_vec_list, input_signed, self.temp_folder,
                                      net_file, par_file, self.tidl_platform,
-                                     self.tidl_tensor_bits, self.tidl_calibration_flags,
+                                     self.tensor_bits, self.tidl_calib_flags,
                                      self.tidl_bias_calib_iters)
 
             self.info_dict['subgraphs'].append(subgraph_info_dict)
@@ -2733,94 +2733,168 @@ class TIDLCompiler:
     ----------
     platform : string
         The platform to deploy the graph on.
-    version : tuple
+    version : string
         The Processor-SDK version for the platform.
     **kwargs : keyword arguments to pass what's needed for Relay IR graph conversion
-        num_tidl_subgraphs : int
-            Number of subgraphs to run on TIDL
+        max_num_subgraphs : int
+            Max number of subgraphs to run on TIDL
         tidl_tools_path : string
             Folder to TIDL tools
         artifacts_folder : string
             Folder to hold TIDL artifacts
-        tidl_denylist : list of strings
-            Force-annotate Relay operators as unsupported
+        tensor_bits : int
+            Bits for import TIDL tensor and weights, default is 8
+        debug_level : int
+            0, 1, 2, 3, 4 for various debug info, default is 0
+        max_num_subgraphs: int
+            Offload up to \<num\> tidl subgraphs, default is 16
+        deny_list : string
+            Force-annotate Relay operators as unsupported, comma-separated string, default is ""
+        accuracy_level: int
+            0 for simple calibration, 1 for advanced bias calibration, 9 for user defined,
+            default is 1
+        advanced_options: dict
+            a dictionary to overwrite default calibration options, default is {}
+            advanced_options keys / values:
+            - 'calibration_iterations' : int
+                  number of calibration iterations, default is 50
+            - 'quantization_scale_type' : int
+                  0 for non-power-of-2, 1 for power-of-2, default is 0
+            - 'high_resolution_optimization' : int
+                  0 for disable, 1 for enable, default is 0
+            - 'pre_batchnorm_fold' : int
+                  0 for disable, 1 for enable, default is 1
+            The following keys / values can only be overwritten at accuracy level 9:
+            - 'activation_clipping' : int
+                  0 for disable, 1 for enable
+            - 'weight_clipping' : int
+                  0 for disable, 1 for enable
+            - 'bias_calibration' : int
+                  0 for disable, 1 for enable
+            - 'channel_wise_quantization' : int
+                  0 for disable, 1 for enable
+            - 'mixed_precision' : int
+                  0 for disable, 1 for enable
+        ti_internal_nc_flag: int
+            Internal use only, default is 0x641
     """
 
-    default_calib_options = {  8 :  { 'bias_calibration_iterations' : 50 },
-                              16 :  { 'bias_calibration_iterations' : 1 },
-                              32 :  { 'bias_calibration_iterations' : 1 } }
+    default_advanced_options = {
+            'calibration_iterations'       : 50,
+            'quantization_scale_type'      : 0,
+            'high_resolution_optimization' : 0,
+            'pre_batchnorm_fold'           : 1,
+            # Below options can only be overwritten at accuracy level 9
+            # Defaults for these options are in default_accuracy_level_options
+            'activation_clipping'          : None,
+            'weight_clipping'              : None,
+            'bias_calibration'             : None,
+            'channel_wise_quantization'    : None,
+            'mixed_precision'              : None,
+            }
+    default_accuracy_level_options = {
+                                   # options for level 0 and 1 cannot be updated
+                                   # only options for level 9 (user-defined) can be overwritten
+                                   0 : { 'activation_clipping'       : 0,
+                                         'weight_clipping'           : 0,
+                                         'bias_calibration'          : 0,
+                                         'channel_wise_quantization' : 0,
+                                         'mixed_precision'           : 0,
+                                       },
+                                   1 : { 'activation_clipping'       : 1,
+                                         'weight_clipping'           : 1,
+                                         'bias_calibration'          : 1,
+                                         'channel_wise_quantization' : 0,
+                                         'mixed_precision'           : 0,
+                                       },
+                                   # 9 : same defaults as accuracy level 1
+                                 }
 
-    def __init__(self, platform, version, max_num_layers=225, max_total_memory_mb=448, **kwargs):
+    def __init__(self, platform="J7", version="7.3", max_num_layers=225, max_total_memory_mb=448, **kwargs):
         self.tidl_platform = platform
         self.version = version
-        if platform == "AM57" and version >= (6, 3):
+        if platform == "AM57": # and float(verion) >= 6.3:
             # Set default values for AM57 6.3
             self.tidl_target = "tidl"
             self.num_tidl_subgraphs = 1
             self.artifacts_folder = None
-            self.tidl_calibration_flags = 0
+            self.tidl_calib_flags = 0
             self.tidl_bias_calib_iters = 50
             self.tidl_tools_path = None
-            self.tidl_tensor_bits = 8
-            self.tidl_denylist = []
+            self.tensor_bits = 8
+            self.deny_list = []
             self.debug_level = None
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
             # Read arguments provided through **kwargs
-            for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_tools_path', 'tidl_denylist'):
+            for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_tools_path', 'deny_list'):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             self.tidl_calib_tool = os.path.join(self.tidl_tools_path,
                                                 "eve_test_dl_algo_ref.out")
             self.tidl_import_lib = os.path.join(self.tidl_tools_path,
                                                 "tidl_relayImport.so")
-        elif platform == "J7" and version >= (7, 0):
+            self.max_num_subgraphs = self.num_tidl_subgraphs;
+        elif platform == "J7": # and float(version) >= 7.3:
             # Set default values for J7, PSDK 7.0 or newer
             self.tidl_target = "tidl"
             self.tidl_tools_path = None
             self.artifacts_folder = None
             self.debug_level = None
-            self.tidl_tensor_bits = 8
-            self.num_tidl_subgraphs = 1
-            self.tidl_denylist = []
-            self.tidl_calibration_accuracy_level = 1
-            self.tidl_calibration_options = {}
-            # more exposed TIDL import options
-            self.power_of_2_quantization = 'off'
-            self.enable_high_resolution_optimization = 'off'
-            self.pre_batchnorm_fold = 1
-            self.reserved_compile_constraints_flag = (0x1 | 0x40 | 0x200 | 0x400)
+            self.tensor_bits = 8
+            self.max_num_subgraphs = 16
+            self.deny_list = []
+            self.accuracy_level = 1
+            self.advanced_options = {}
+            self.ti_internal_nc_flag = (0x1 | 0x40 | 0x200 | 0x400)
+
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
             self.max_total_memory_mb = max_total_memory_mb
             # Read arguments provided through **kwargs
             # Unified names as TFLite runtime and ONNX runtime
             #   see ti_dl/utils/tidlModelImport/tidl_{tfLiteRtImport_delegate, onnxRtImport_EP}.cpp
-            for key in ('tidl_tools_path', 'artifacts_folder', 'debug_level', 'tidl_tensor_bits',
-                        'num_tidl_subgraphs', 'tidl_denylist', 'tidl_calibration_accuracy_level',
-                        'tidl_calibration_options',
-                        'power_of_2_quantization', 'enable_high_resolution_optimization',
-                        'pre_batchnorm_fold', 'reserved_compile_constraints_flag'
+            for key in ('tidl_tools_path', 'artifacts_folder', 'tensor_bits', 'debug_level',
+                        'max_num_subgraphs', 'deny_list', 'accuracy_level',
+                        'advanced_options',
                        ):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
             self.tidl_calib_tool = os.path.join(self.tidl_tools_path, "PC_dsp_test_dl_algo.out")
             self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
 
-            self.tidl_calibration_flags = 7 if (self.tidl_calibration_accuracy_level == 1) else 0
-            calib_options = self.default_calib_options[self.tidl_tensor_bits]
-            if isinstance(self.tidl_calibration_options, dict):
-                for key in self.tidl_calibration_options:
-                    if key in calib_options:
-                        calib_options[key] = self.tidl_calibration_options[key]
-            self.tidl_bias_calib_iters = calib_options['bias_calibration_iterations']
+            calib_options = self.default_advanced_options
+            accu_level_options_index = 0 if self.accuracy_level == 0 else 1
+            accu_level_options = self.default_accuracy_level_options[accu_level_options_index]
+            if isinstance(self.advanced_options, dict):
+                for key in self.advanced_options:
+                    if key in accu_level_options:
+                        if self.accuracy_level == 9:
+                            # only overwritable at level 9
+                            accu_level_options[key] = self.advanced_options[key]
+                    elif key in calib_options:
+                        calib_options[key] = self.advanced_options[key]
+            for key in accu_level_options:
+                calib_options[key] = accu_level_options[key]
+
+            self.tidl_bias_calib_iters = calib_options['calibration_iterations']
+            self.quantization_scale_type = calib_options['quantization_scale_type']
+            self.high_resolution_optimization = calib_options['high_resolution_optimization']
+            self.pre_batchnorm_fold = calib_options['pre_batchnorm_fold']
+            self.tidl_calib_flags = ((1 if (calib_options['activation_clipping'] == 1) else 0) +
+                                     (2 if (calib_options['weight_clipping'] == 1) else 0) +
+                                     (4 if (calib_options['bias_calibration'] == 1) else 0) +
+                                     (8 if (calib_options['channel_wise_quantization'] == 1) else 0)
+                                    )
         else:
             sys.exit("Unsupported TIDL platform or version!")
         assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
         self.temp_folder = os.path.join(self.artifacts_folder, 'tempDir/')
         if self.debug_level:
             os.environ["TIDL_RELAY_IMPORT_DEBUG"] = str(self.debug_level)
+        if self.deny_list:
+            self.deny_list = self.deny_list.split(",")
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
 
     def enable(self, mod_orig, params, graph_input_list):
@@ -2865,16 +2939,16 @@ class TIDLCompiler:
             if self.tidl_platform == "J7":
                 tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
                 is_nchw = data_layout == "NCHW"
-                quant_style = 3 if (self.power_of_2_quantization == 'on') else 2
-                hires = 1 if (self.enable_high_resolution_optimization == 'on') else 0
-                tidl_relay_init(is_nchw, self.tidl_tensor_bits, quant_style, hires,
-                                self.pre_batchnorm_fold, self.reserved_compile_constraints_flag)
+                quant_style = 3 if (self.quantization_scale_type == 1) else 2
+                hires = 1 if (self.high_resolution_optimization == 1) else 0
+                tidl_relay_init(is_nchw, self.tensor_bits, quant_style, hires,
+                                self.pre_batchnorm_fold, self.ti_internal_nc_flag)
         else:
             import_lib = None # Continue with graph annotation and partition for CI testing
 
         # Register TIDL annotation functions
         tidl_annotation = TIDLAnnotation(self.tidl_platform, self.version, import_lib, 
-                                         self.tidl_denylist)
+                                         self.deny_list)
         tidl_annotation.register_allowed_ops()
 
         #============= Prepare graph for partitioning =============
@@ -2915,7 +2989,7 @@ class TIDLCompiler:
         mod = unpack_composites(mod)
         mod = relay.transform.InferType()(mod)
         mod = prune_subgraphs(mod, compiler=self.tidl_target,
-                              num_subgraphs_to_keep=self.num_tidl_subgraphs,
+                              num_subgraphs_to_keep=self.max_num_subgraphs,
                               min_mac_threshold=1)
         mod = relay.transform.InferType()(mod)
         mod = flatten_tuple_params(mod, self.tidl_target)
@@ -2946,8 +3020,8 @@ class TIDLCompiler:
                 tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
                                          self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
-                                         data_layout, self.tidl_tensor_bits,
-                                         self.tidl_calibration_flags, self.tidl_bias_calib_iters)
+                                         data_layout, self.tensor_bits,
+                                         self.tidl_calib_flags, self.tidl_bias_calib_iters)
                 subgraph_tensors_list, relay_quantization = generate_subgraph_tensors(
                                  self.tidl_target, mod, params, graph_input_list, self.temp_folder,
                                  has_qnn_ops)

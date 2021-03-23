@@ -36,7 +36,7 @@ parser.add_argument('--host', action='store_false',
                     dest="target",
                     help='generate code for host emulation (e.g. x86_64 core)')
 parser.add_argument('--deny', dest='denylist', action='append',
-                    help='force Relay operator to be unsupported by TIDL')
+                    help='force Relay operator to be unsupported by TIDL, comma-separated string')
 parser.add_argument('--nooffload', action='store_true',
                     help='produce a host-only deployable module without TIDL offload')
 args = parser.parse_args()
@@ -77,7 +77,7 @@ def get_tidl_tools_path():
     else:
         return tidl_tools_path
 
-def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgraphs=1):
+def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgraphs=16):
     """ Compile a model in Relay IR graph
 
     Parameters
@@ -90,8 +90,8 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
         The parameter dict to be used by relay
     model_input_list : list of dictionary for multiple calibration data
         A dictionary where the key in input name and the value is input tensor
-    num_tidl_subgraphs : int
-        Number of subgraphs to offload to TIDL
+    max_num_subgraphs : int
+        Max number of subgraphs to offload to TIDL
     Returns
     -------
     status: int
@@ -102,7 +102,7 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
     """
 
     tidl_platform = "J7"   # or "AM57"
-    tidl_version = (7, 0)  # corresponding Processor SDK version
+    tidl_version = "7.3"   # corresponding Processor SDK version
     tidl_artifacts_folder = "./artifacts_" + model_name +  ("_target" if args.target else "_host")
     os.makedirs(tidl_artifacts_folder, exist_ok = True)
     for root, dirs, files in os.walk(tidl_artifacts_folder, topdown=False):
@@ -110,14 +110,14 @@ def model_compile(model_name, mod_orig, params, model_input_list, num_tidl_subgr
             os.remove(os.path.join(root, f))
         for d in dirs:
             os.rmdir(os.path.join(root, d))
-    tidl_compiler = tidl.TIDLCompiler(tidl_platform, tidl_version,
+    tidl_compiler = tidl.TIDLCompiler(platform=tidl_platform, version=tidl_version,
                                       tidl_tools_path=get_tidl_tools_path(),
                                       artifacts_folder=tidl_artifacts_folder,
-                                      tidl_tensor_bits=8,
-                                      num_tidl_subgraphs=num_tidl_subgraphs,
-                                      tidl_denylist=args.denylist,
-                                      tidl_calibration_accuracy_level=1,
-                                      tidl_calibration_options={'bias_calibration_iterations': 10}
+                                      tensor_bits=8,
+                                      max_num_subgraphs=max_num_subgraphs,
+                                      deny_list=args.denylist,
+                                      accuracy_level=1,
+                                      advanced_options={'calibration_iterations': 10}
                                      )
 
     if args.nooffload:
@@ -427,7 +427,7 @@ def test_tidl_pytorch(model_name, img_file_list):
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
     status = model_compile(model_name, pytorch_mod, pytorch_params, input_dict_list, 
-                           num_tidl_subgraphs=2)
+                           max_num_subgraphs=2)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
 def test_tidl_tflite_deeplabv3(img_file_list):
@@ -449,7 +449,7 @@ def test_tidl_tflite_deeplabv3(img_file_list):
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
     status = model_compile(model_name, tf_mod, tf_params, input_dict_list,
-                           num_tidl_subgraphs=2)
+                           max_num_subgraphs=2)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
 if __name__ == '__main__':
