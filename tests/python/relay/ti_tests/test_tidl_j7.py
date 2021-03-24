@@ -381,8 +381,10 @@ def test_tidl_onnx(model_name, img_file_list):
 
     #============= Create a Relay graph for MobileNet model ==============
     if model_name == "ONNX_MobileNetV2":
+        #commit = 'master'  # latest version has dynamic shape in network  ('shape', ...)
+        commit = 'cbda9ebd037241c6c6a0826971741d5532af8fa4'
         model = download_testdata(
-                'https://github.com/onnx/models/raw/master/vision/classification/mobilenet/' + 
+                'https://github.com/onnx/models/raw/'+commit+'/vision/classification/mobilenet/' +
                 'model/mobilenetv2-7.onnx', 'mobilenetv2-7.onnx', module='models')
         #model = "./onnx_mobileNet2/mobilenetv2-1.0.onnx"
 
