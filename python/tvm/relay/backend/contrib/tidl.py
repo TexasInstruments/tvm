@@ -711,6 +711,8 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
             op_name = expr.op.name
             if op_name == 'qnn.requantize':
                 return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
+            elif op_name == 'qnn.quantize':
+                return expr.args[2].data.asnumpy().item(), expr.args[1].data.asnumpy().item()
             elif op_name in ['qnn.conv2d', 'qnn.dense']:
                 return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
             elif op_name in ['qnn.add', 'qnn.mul']:
