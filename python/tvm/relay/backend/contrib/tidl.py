@@ -183,7 +183,7 @@ def find_out_nodes(all_nodes, this_node, field_index=-1):
 
     return output_nodes
 
-def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names):
+def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names, tidl_subgraph):
     r""" Find the input and output nodes of a given relay.expr.Call node.
 
     Parameters
@@ -194,18 +194,30 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names):
         A relay.expr.Call node whose input and output nodes are to be found
     input_prefix : string
         Prefix of input tensor name, e.g. "tidl" when target is "tidl"
+    output_names : list
+        List of output names of current subgraph
+    tidl_subgraph: string
+        Name of the current subgraph, e.g. 'tidl_0', 'tidl_1', etc.
 
     Returns
     -------
     in_out_nodes : InOutNodes
-        Structure that stores indices of input nodes and output nodes
+        Structure that stores names (encoded indices) of input nodes and output nodes
+        All names are prefixed with tidl_subgraph name, so that we can differentiate them from
+        different subgraphs, e.g. when specified in output_feature_16bit_names_list in TIDLCompiler
     """
+
+    def add_prefix(nodes, prefix):
+        r""" Add tidl_subgraph name prefix if the node name does not already has the prefix"""
+        r""" e.g. 69 -> tidl_0_69,  tidl_0_i0 -> tidl_0_i0,  tidl_0_o0 -> tidl_0_o0"""
+        return [ (node if node.startswith(prefix) else (prefix + '_' + node)) for node in nodes ]
 
     in_out_nodes = InOutNodes()    # instantiate structure
 
-    in_out_nodes.this_node = bytes(str(all_nodes[this_node]), 'utf-8')
+    in_out_nodes.this_node = bytes(tidl_subgraph + '_' + str(all_nodes[this_node]), 'utf-8')
 
     in_nodes = find_in_nodes(all_nodes, this_node, input_prefix) # node indices of input nodes
+    in_nodes = add_prefix(in_nodes, tidl_subgraph)
     if len(in_nodes) == 0:
         in_out_nodes.in_nodes = None
     else:
@@ -216,6 +228,7 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names):
     in_out_nodes.num_in_nodes = len(in_nodes)
 
     out_nodes = find_out_nodes(all_nodes, this_node) # node indices of output nodes
+    out_nodes = add_prefix(out_nodes, tidl_subgraph)
     if len(out_nodes) == 0:
         # This is the last node, use the output tensor name as this node's name
         # When the last node is a call node, it can have only one output tensor.
@@ -1116,7 +1129,8 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
 def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_signed,
                          temp_folder,
                          net_file, params_file, platform="AM57", tensor_bits=8,
-                         tidl_calib_flags=0, tidl_bias_calib_iters=50):
+                         tidl_calib_flags=0, tidl_bias_calib_iters=50,
+                         output_feature_16bit_names_list='', params_16bit_names_list=''):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Save quantized input vector to a file for calib tool to read
@@ -1143,7 +1157,9 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_si
     if platform == "J7":
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
         import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_flags,
-                                            tidl_bias_calib_iters)
+                                            tidl_bias_calib_iters,
+                                            output_feature_16bit_names_list,
+                                            params_16bit_names_list)
         return (import_ret == 0), 123  ## TODO: do we need dataQ for J7?
 
     output_tmp_file = temp_folder + 'precalib_net.bin'
@@ -1287,7 +1303,8 @@ class TIDLImport:
     """
     def __init__(self, import_lib, calib_tool, artifacts_folder,
                  tidl_target="tidl", tidl_platform="AM57", data_layout="NCHW",
-                 tensor_bits=8, tidl_calib_flags=0, tidl_bias_calib_iters=50):
+                 tensor_bits=8, tidl_calib_flags=0, tidl_bias_calib_iters=50,
+                 output_feature_16bit_names_list='', params_16bit_names_list=''):
         self.import_lib = import_lib
         self.calib_tool = calib_tool
         self.artifacts_folder = artifacts_folder
@@ -1297,6 +1314,8 @@ class TIDLImport:
         self.tensor_bits = tensor_bits
         self.tidl_calib_flags = tidl_calib_flags
         self.tidl_bias_calib_iters = tidl_bias_calib_iters
+        self.output_feature_16bit_names_list = output_feature_16bit_names_list
+        self.params_16bit_names_list = params_16bit_names_list
         self.info_dict = {}
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
 
@@ -1681,8 +1700,8 @@ class TIDLImport:
 
         return True
 
-    def tidl_import_node(self, all_nodes, this_node, params, output_names, inout_quant_dict,
-                         has_qnn_ops=False):
+    def tidl_import_node(self, all_nodes, this_node, params, output_names, tidl_subgraph,
+                         inout_quant_dict, has_qnn_ops=False):
         r""" Importing a given node (operator) to TIDL
             # https://docs.tvm.ai/langref/relay_op.html#relay-core-tensor-operators
 
@@ -1695,6 +1714,7 @@ class TIDLImport:
         params : dict of str to tvm.NDArray
             The parameter dict to be used by relay
         output_names: names of the subgraph outputs
+        tidl_subgraph: name of current tidl subgraph, e.g. 'tidl_0', 'tidl_1', etc.
         inout_quant_dict: input/output expr to quantization dictionary
 
         Returns
@@ -1709,7 +1729,8 @@ class TIDLImport:
                 zp, scale = 0, 1.0
             if import_lib_node(this_node, zp, scale) != 0:
                 return False
-            in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names)
+            in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names,
+                                             tidl_subgraph)
             import_lib_linknode = tvm.get_global_func("TIDL_relayImportLinkNode")
             if import_lib_linknode(ctypes.cast(ctypes.byref(in_out_nodes), ctypes.c_void_p)) == 0:
                 return True
@@ -1786,7 +1807,8 @@ class TIDLImport:
 
         # (AM57) Common for all nodes:
         # fill tensor names, update consumer counts, link input/output tensors
-        in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names)
+        in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names,
+                                         tidl_subgraph)
 
         import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
         import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
@@ -1972,7 +1994,7 @@ class TIDLImport:
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params, output_names,
-                                                   inout_quant_dict, has_qnn_ops)
+                                                   tidl_subgraph, inout_quant_dict, has_qnn_ops)
                     if not result:
                         return import_fail
                     self._tally_op(str(node.op), subgraph_info_dict['nodes'])
@@ -2014,7 +2036,9 @@ class TIDLImport:
                                      input_quant_vec_list, input_signed, self.temp_folder,
                                      net_file, par_file, self.tidl_platform,
                                      self.tensor_bits, self.tidl_calib_flags,
-                                     self.tidl_bias_calib_iters)
+                                     self.tidl_bias_calib_iters,
+                                     self.output_feature_16bit_names_list,
+                                     self.params_16bit_names_list)
 
             self.info_dict['subgraphs'].append(subgraph_info_dict)
             if self.tidl_platform == "J7":
@@ -2786,6 +2810,8 @@ class TIDLCompiler:
             'quantization_scale_type'      : 0,
             'high_resolution_optimization' : 0,
             'pre_batchnorm_fold'           : 1,
+            'output_feature_16bit_names_list' : '',
+            'params_16bit_names_list'         : '',
             # Below options can only be overwritten at accuracy level 9
             # Defaults for these options are in default_accuracy_level_options
             'activation_clipping'          : None,
@@ -2884,6 +2910,8 @@ class TIDLCompiler:
             self.quantization_scale_type = calib_options['quantization_scale_type']
             self.high_resolution_optimization = calib_options['high_resolution_optimization']
             self.pre_batchnorm_fold = calib_options['pre_batchnorm_fold']
+            self.output_feature_16bit_names_list = calib_options['output_feature_16bit_names_list']
+            self.params_16bit_names_list = calib_options['params_16bit_names_list']
             self.tidl_calib_flags = ((1 if (calib_options['activation_clipping'] == 1) else 0) +
                                      (2 if (calib_options['weight_clipping'] == 1) else 0) +
                                      (4 if (calib_options['bias_calibration'] == 1) else 0) +
@@ -3023,7 +3051,9 @@ class TIDLCompiler:
                                          self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
                                          data_layout, self.tensor_bits,
-                                         self.tidl_calib_flags, self.tidl_bias_calib_iters)
+                                         self.tidl_calib_flags, self.tidl_bias_calib_iters,
+                                         self.output_feature_16bit_names_list,
+                                         self.params_16bit_names_list)
                 subgraph_tensors_list, relay_quantization = generate_subgraph_tensors(
                                  self.tidl_target, mod, params, graph_input_list, self.temp_folder,
                                  has_qnn_ops)
