@@ -71,6 +71,43 @@ def find_qnn_ops(mod):
     return any(isinstance(node, relay.expr.Call) and node.op.name.startswith('qnn.')
                for node in all_nodes)
 
+# borrowed from python/tvm/relay/op/contrib/tensorrt.py, modified to check all dimensions
+def check_dynamism(args, op_name):
+    """
+    Check for dynamism inside any of the args in the op.
+
+    Parameters
+    ----------
+    args : tvm.ir.container.Array
+        Arguments of the op. Each of the argument shape is checked for presence of dynamic
+        components.
+    op_name: str
+        Name of the op for debugging purposes only.
+    Returns
+    ----------
+    ret : bool
+        True if dynamism is present, False otherwise
+    """
+    for arg in args:
+        if isinstance(arg, (relay.expr.Call, relay.expr.Var, relay.expr.Constant,
+                            relay.expr.TupleGetItem)):
+            for dim_shape in arg.checked_type.shape:
+                if isinstance(dim_shape, tvm.tir.expr.Any):
+                    return True
+        elif isinstance(arg, Tuple):
+            return check_dynamism(arg.fields, op_name)
+        else:
+            print(f"Arg not supported in TIDL for {op_name} with type {type(arg)}")
+            return True
+    return False
+
+def find_dynamic_shape(mod):
+    all_nodes = {}
+    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
+    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    return any(isinstance(node, relay.expr.Call) and check_dynamism(node.args, node.op.name)
+               for node in all_nodes)
+
 def convert_str_list_to_char_array(str_list):
     """ Convert list of strings to array of ctypes char * """
     char_array = (ctypes.c_char_p * len(str_list))()
@@ -2996,6 +3033,11 @@ class TIDLCompiler:
         mod = relay.transform.EliminateCommonSubexpr()(mod)
         #print("----------- original graph-----------")
         #print(mod.astext(show_meta_data=False))
+
+        #============= Reject dynamic shape/network for now ==============
+        if find_dynamic_shape(mod):
+            print("\n\nDynamic shape/network not supported by TVM+TIDL yet!!!\n\n")
+            return mod_orig, 0
 
         #============= Graph annotation ==============
         mod = tidl_annotation.merge_sequential_ops(mod)
