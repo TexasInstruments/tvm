@@ -2138,7 +2138,7 @@ class TIDLImport:
             def get_tidl_layer_varname(self, node):
                 node_name = str(self.all_nodes_tidl[node])
                 for l in self.layer_info:
-                    if l[2] == node_name:
+                    if l[2] == node_name or l[2] == f'tidl_{subgraph_id}_{node_name}':
                         return f"tidl_{self.subgraph_id}_layer{int(l[0]):04d}"
                 return None
 
