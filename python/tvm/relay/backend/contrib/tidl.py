@@ -1338,12 +1338,13 @@ class TIDLImport:
     tensor_bits : int
         Number of bits for tidl tensors (and consequently params on J7)
     """
-    def __init__(self, import_lib, calib_tool, artifacts_folder,
+    def __init__(self, import_lib, calib_tool, tidl_tools_path, artifacts_folder,
                  tidl_target="tidl", tidl_platform="AM57", data_layout="NCHW",
                  tensor_bits=8, tidl_calib_flags=0, tidl_bias_calib_iters=50,
                  output_feature_16bit_names_list='', params_16bit_names_list=''):
         self.import_lib = import_lib
         self.calib_tool = calib_tool
+        self.tidl_tools_path = tidl_tools_path
         self.artifacts_folder = artifacts_folder
         self.tidl_target = tidl_target
         self.tidl_platform = tidl_platform
@@ -1721,7 +1722,7 @@ class TIDLImport:
             input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
             import_lib_init(subgraph_id, len(input_tensors), input_dscr_ptr, is_nchw,
-                            self.tensor_bits, self.temp_folder)
+                            self.tensor_bits, self.tidl_tools_path, self.temp_folder)
             return True
 
         (channel, height, width) = input_shapes[0][1:4]
@@ -3104,7 +3105,7 @@ class TIDLCompiler:
         if self.tidl_tools_path is not None:
             if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
                 tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
-                                         self.artifacts_folder,
+                                         self.tidl_tools_path, self.artifacts_folder,
                                          self.tidl_target, self.tidl_platform,
                                          data_layout, self.tensor_bits,
                                          self.tidl_calib_flags, self.tidl_bias_calib_iters,

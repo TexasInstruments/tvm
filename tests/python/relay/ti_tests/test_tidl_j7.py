@@ -70,12 +70,12 @@ def get_compiler_path():
             return None
 
 def get_tidl_tools_path():
-    tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
-    if tidl_tools_path is None:
-        print("Environment variable TIDL_TOOLS_PATH is not set! Model won't be compiled!")
+    tidl_base_path = os.getenv("TIDL_BASE_PATH")
+    if tidl_base_path is None:
+        print("Environment variable TIDL_BASE_PATH is not set! Model won't be compiled!")
         return None
     else:
-        return tidl_tools_path
+        return os.path.join(tidl_base_path, "tidl_tools")
 
 def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgraphs=16):
     """ Compile a model in Relay IR graph
