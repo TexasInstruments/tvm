@@ -220,6 +220,11 @@ def find_out_nodes(all_nodes, this_node, field_index=-1):
 
     return output_nodes
 
+def add_prefix(nodes, prefix):
+    r""" Add tidl_subgraph name prefix if the node name does not already has the prefix"""
+    r""" e.g. 69 -> tidl_0_69,  tidl_0_i0 -> tidl_0_i0,  tidl_0_o0 -> tidl_0_o0"""
+    return [ (node if node.startswith(prefix) else (prefix + '_' + node)) for node in nodes ]
+
 def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names, tidl_subgraph):
     r""" Find the input and output nodes of a given relay.expr.Call node.
 
@@ -243,11 +248,6 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names, tidl_sub
         All names are prefixed with tidl_subgraph name, so that we can differentiate them from
         different subgraphs, e.g. when specified in output_feature_16bit_names_list in TIDLCompiler
     """
-
-    def add_prefix(nodes, prefix):
-        r""" Add tidl_subgraph name prefix if the node name does not already has the prefix"""
-        r""" e.g. 69 -> tidl_0_69,  tidl_0_i0 -> tidl_0_i0,  tidl_0_o0 -> tidl_0_o0"""
-        return [ (node if node.startswith(prefix) else (prefix + '_' + node)) for node in nodes ]
 
     in_out_nodes = InOutNodes()    # instantiate structure
 
@@ -1855,16 +1855,29 @@ class TIDLImport:
 
         return True
 
-    def tidl_import_out_tuple_node(self, all_nodes, node, out_tensor_names):
+    def tidl_import_out_tuple_node(self, all_nodes, node, out_tensor_names, tidl_subgraph):
         """ Importing a Relay tuple node, e.g. (%232, %279, %283, %274).
             If this node is the last node, import it to TIDL output data layer.
             If this node is not the last node, do nothing.
+
+        Parameters
+        ----------
+        all_nodes : dictionary
+            Dictionary of all relay.expr.Call nodes of the graph
+        node : relay.expr.Tuple
+            A relay.expr.Tuple node that represents the multiple outputs of the subgraph
+        out_tensor_names: names of the subgraph outputs
+        tidl_subgraph: name of current tidl subgraph, e.g. 'tidl_0', 'tidl_1', etc.
+
+        Returns
+        True if import succeeds or False if import fails
         """
 
         # make sure 16 matches TIDL_NUM_OUT_BUFS defined in itidl_ti.h
         max_num_outputs_per_data_layer = 16
         # this is the last node of the graph - import this to out data layer
         in_nodes = find_in_nodes(all_nodes, node, self.tidl_target)
+        in_nodes = add_prefix(in_nodes, tidl_subgraph)
         imported_nodes = 0
         new_node_ind = len(all_nodes) + 1
         status = True
@@ -2041,7 +2054,8 @@ class TIDLImport:
                 if isinstance(node, relay.expr.Tuple) and \
                    len(find_out_nodes(all_nodes_tidl, node)) == 0:
                     #node.fields: array of expr.call nodes
-                    result = self.tidl_import_out_tuple_node(all_nodes_tidl, node, output_names)
+                    result = self.tidl_import_out_tuple_node(all_nodes_tidl, node, output_names,
+                                                             tidl_subgraph)
                     if not result:
                         print('Error importing output tuple node')
                         return import_fail
