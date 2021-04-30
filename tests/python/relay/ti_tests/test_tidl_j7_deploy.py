@@ -132,17 +132,11 @@ def run_module(model_name, input_tensor, mean, scale, is_nchw, img_file, resize_
     if args.dlr:
         module = DLRModel(artifacts_dir)
         results = module.run({input_tensor : input_data})
-        tvm_output = results[0]
+        tvm_outputs = results
 
-        # get optional tidl info
-        #for c in range(16):
-        #    try:
-        #        arr, status = module.get_custom_data222('tidl_getinfo_%d' % c, np.zeros((1,3)).astype('float32'))
-        #    except AttributeError as e:
-        #        break
-        #    if not status:
-        #        break
-        #    print(arr)
+        # get optional tidl info, run with TIDL_RT_PERFSTATS=1
+        #perf_data = module.get_TI_benchmark_data()
+        #print(perf_data)
 
     else:
         loaded_json = open(artifacts_dir + "deploy_graph.json").read()
@@ -162,19 +156,25 @@ def run_module(model_name, input_tensor, mean, scale, is_nchw, img_file, resize_
         module.run()
 
         # get output
-        tvm_output = module.get_output(0).asnumpy()
+        tvm_outputs = []
+        for i in range(module.get_num_outputs()):
+            tvm_outputs.append(module.get_output(i).asnumpy())
 
-        # get optional tidl info
+        # get optional tidl info, run with TIDL_RT_PERFSTATS=1
+        #import ctypes
         #for c in range(16):
         #    try:
-        #        func = loaded_lib.get_function('tidl_getinfo_%d' % c)
+        #        func = loaded_lib.get_function(f'tidl_get_custom_data_{c}')
         #    except AttributeError as e:
         #        break
-        #    arr = func()
-        #    print(arr)
+        #    vec_void = func()
+        #    # vec_void is pointer to C++ std::vector<uint64_t>, hack into memory layout
+        #    data_ptr = ctypes.cast(vec_void, ctypes.POINTER(ctypes.POINTER(ctypes.c_ulonglong)))
+        #    data = data_ptr[0]
+        #    print(f"tidl_{c}: cp_in {data[1]-data[0]} process {data[3]-data[2]} cp_out {data[5]-data[4]}")
 
     print(model_name + " execution finished")
-    return tvm_output
+    return tvm_outputs
 
 def print_top5(output):
     top5 = []
@@ -187,6 +187,10 @@ def print_top5(output):
     print(top5)
     print(values)
 
+colors = [ (255, 0, 0), (0, 255, 0), (0, 0, 255), (128, 128, 0), (128, 0, 128), (0, 128, 128),
+           (255, 128, 0), (255, 0, 128), (0, 255, 128), (128, 255, 0), (0, 128, 255), (128, 0, 255),
+         ]
+
 if __name__ == '__main__':
 
     #img_file = "~/.tvm_test_data/data/airshow.jpg"
@@ -195,34 +199,64 @@ if __name__ == '__main__':
     img_file = args.input
     print(f"Input image file: {img_file}")
 
-    output1 = run_module("MobileNetV1", "input", [128, 128, 128],
-                         [0.0078125, 0.0078125, 0.0078125], False,
-                         img_file, [256,256], [224,224])
+    outputs1 = run_module("MobileNetV1", "input", [128, 128, 128],
+                          [0.0078125, 0.0078125, 0.0078125], False,
+                          img_file, [256,256], [224,224])
 
-    output1q = run_module("MobileNetV2_quant", "input", [128, 128, 128],
-                         [0.0078125, 0.0078125, 0.0078125], False,
-                         img_file, [256,256], [224,224])
+    outputs1q = run_module("MobileNetV2_quant", "input", [128, 128, 128],
+                          [0.0078125, 0.0078125, 0.0078125], False,
+                          img_file, [256,256], [224,224])
 
-    output2 = run_module("ONNX_MobileNetV2", "data", [123.675, 116.28, 103.53],
-                         [0.017125, 0.017507, 0.017429], True,
-                         img_file, [256,256], [224,224])
+    outputs2 = run_module("ONNX_MobileNetV2", "data", [123.675, 116.28, 103.53],
+                          [0.017125, 0.017507, 0.017429], True,
+                          img_file, [256,256], [224,224])
 
-    output2p = run_module("pytorch_mobilenetv2", "data", [123.675, 116.28, 103.53],
-                         [0.017125, 0.017507, 0.017429], True,
-                         img_file, [256,256], [224,224])
+    outputs2p = run_module("pytorch_mobilenetv2", "data", [123.675, 116.28, 103.53],
+                          [0.017125, 0.017507, 0.017429], True,
+                          img_file, [256,256], [224,224])
 
-    output3 = run_module("deeplabv3", "sub_7", [128, 128, 128],
-                         [0.0078125, 0.0078125, 0.0078125], False,
-                         img_file, [257,257], [257,257])
+    outputs3 = run_module("deeplabv3", "sub_7", [128, 128, 128],
+                          [0.0078125, 0.0078125, 0.0078125], False,
+                          img_file, [257,257], [257,257])
+
+    outputs4 = run_module("yolo3_mobilenet1.0_coco", "data", [123.675, 116.28, 103.53],
+                          [0.017125, 0.017507, 0.017429], True,
+                          img_file, [416,416], [416,416])
 
     print("TensorFlow MobileNetV1 output: (index of 1001)")
-    print_top5(output1)
+    print_top5(outputs1[0])
     print("TFLite quantized MobileNetV2 output: (index of 1001)")
-    print_top5(output1q)
+    print_top5(outputs1q[0])
     print("ONNX MobileNetV2 output: (index of 1000)")
-    print_top5(output2)
+    print_top5(outputs2[0])
     print("Pytorch MobileNetV2 output: (index of 1000)")
-    print_top5(output2p)
-    print("deeplabv3 output shape: {}".format(output3.shape))
-    output3 = np.squeeze(output3, axis=0)
-    np.savetxt("deeplabv3.results", np.argmax(output3, axis=2).astype(int), "%2d", "")
+    print_top5(outputs2p[0])
+
+    import cv2
+    orig_img = cv2.imread(img_file)
+    resized_img = cv2.resize(orig_img, (257, 257), interpolation=cv2.INTER_CUBIC)
+    output3 = np.squeeze(outputs3[0], axis=0)
+    class_IDs = np.argmax(output3, axis=2).astype(int)
+    mask_img = resized_img.copy()
+    for i in range(257):
+        for j in range(257):
+            if class_IDs[i][j] != 0:
+                mask_img[i][j] = list(colors[class_IDs[i][j]%len(colors)])
+    output_img = cv2.addWeighted(resized_img, 0.7, mask_img, 0.3, 0.0)
+    output_img = cv2.resize(output_img, (orig_img.shape[0], orig_img.shape[1]),
+                            interpolation=cv2.INTER_CUBIC)
+    cv2.imwrite("deeplabv3.png", output_img)
+    print("deeplabv3 results in deeplabv3.png")
+
+    resized_img = cv2.resize(orig_img, (416, 416), interpolation=cv2.INTER_CUBIC)
+    class_IDs, scores, bounding_boxes = outputs4
+    for i, score in enumerate(np.squeeze(scores)):
+        if score > 0.2:
+            cv2.rectangle(resized_img, (bounding_boxes[0][i][0], bounding_boxes[0][i][1]),
+                                       (bounding_boxes[0][i][2], bounding_boxes[0][i][3]),
+                                       colors[int(class_IDs[0][i][0])%len(colors)], 2)
+    output_img = cv2.resize(resized_img, (orig_img.shape[0], orig_img.shape[1]),
+                            interpolation=cv2.INTER_CUBIC)
+    cv2.imwrite("yolo3_mobilenet1.0_coco.png", output_img)
+    print("yolo3_mobilenet1.0_coco results in yolo3_mobilenet1.0_coco.png")
+

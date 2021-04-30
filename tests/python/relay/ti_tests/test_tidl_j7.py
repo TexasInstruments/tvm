@@ -454,6 +454,28 @@ def test_tidl_tflite_deeplabv3(img_file_list):
                            max_num_subgraphs=2)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
+def test_tidl_mxnet(model_name, img_file_list):
+    from gluoncv import model_zoo
+
+    input_node = "data"
+    input_shape = (1, 3, 416, 416)
+    input_data_list = [ load_image(1, img_file, [416, 416], [416, 416],
+                            [123.675, 116.28, 103.53], [0.017125, 0.017507, 0.017429], True,
+                            model_name.endswith('_quant'))
+                            for img_file in img_file_list ]
+    if input_data_list[0].shape != input_shape:
+        sys.exit("Input data shape is not correct!")
+    print("input_data shape: {}".format(input_data_list[0].shape))
+
+    #============= Create a Relay graph from mxnet model ===============
+    model = model_zoo.get_model(model_name, pretrained=True)
+    mod, params = relay.frontend.from_mxnet(model, {input_node:input_shape})
+
+    #======================== TIDL code generation ====================
+    input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
+    status = model_compile(model_name, mod, params, input_dict_list, max_num_subgraphs=8)
+    assert status != -1, "TIDL compilation failed"   # For CI test
+
 if __name__ == '__main__':
     img_cat = download_testdata(
          'https://github.com/dmlc/mxnet.js/blob/master/data/cat.png?raw=true',
@@ -470,15 +492,17 @@ if __name__ == '__main__':
     #test_tidl_tf_mobilenets("MobileNetV2", [ img_cat ], "tflite")
     test_tidl_tf_mobilenets("MobileNetV2_quant", [ img_cat ], "tflite")
     test_tidl_onnx("ONNX_MobileNetV2", [ img_airshow, img_cat2, img_cat ])
+    test_tidl_pytorch("pytorch_mobilenetv2", [ img_airshow, img_cat, img_cat2 ])
 
     img_street = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
                                  'gluoncv/detection/street_small.jpg?raw=true',
                                  'street_small.jpg', module='data')
     #img_kidbike = "./deeplab_kidbike_input.png"
     test_tidl_tflite_deeplabv3([ img_street ])
+    test_tidl_mxnet("yolo3_mobilenet1.0_coco", [ img_street ])
+
     #test_tidl_classification()
     #test_tidl_object_detection()
     #test_tidl_segmentation()
 
-    test_tidl_pytorch("pytorch_mobilenetv2", [ img_airshow, img_cat, img_cat2 ])
 
