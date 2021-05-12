@@ -453,7 +453,7 @@ class J7CSourceCodegen : public TIDLJ7ModuleCodeGen {
     // Create a CSource module
     const auto* pf = runtime::Registry::Get("runtime.CSourceModuleCreate");
     CHECK(pf != nullptr) << "Cannot find csource module to create the external runtime module";
-    return (*pf)(code, "c", sym, Array<String>{});
+    return (*pf)(code, "c", Array<String>{sym}, Array<String>{});
   }
 
  private:
