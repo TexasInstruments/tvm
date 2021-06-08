@@ -62,6 +62,7 @@ from . import image
 from . import sparse
 from . import hls
 from . import random
+from . import c7x
 
 # error reporting
 from .utils import InvalidShapeError

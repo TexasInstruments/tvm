@@ -14,18 +14,26 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+"""Definition of c7x operator strategy."""
+# pylint: disable=invalid-name,unused-argument,wildcard-import,unused-wildcard-import
+import logging
 
-# pylint: disable=wildcard-import
-"""Relay op strategies."""
-from __future__ import absolute_import as _abs
-
+from tvm import topi
+from tvm.te import SpecializedCondition
 from .generic import *
-from . import x86
-from . import arm_cpu
-from . import cuda
-from . import hls
-from . import mali
-from . import bifrost
-from . import rocm
-from . import intel_graphics
-from . import c7x
+from .. import op as _op
+
+logger = logging.getLogger('strategy')
+
+@schedule_pool.register("c7x")
+def schedule_pool_c7x(attrs, outs, target):
+    """schedule pooling ops for c7x"""
+    with target:
+        return topi.c7x.schedule_pool(outs, attrs.layout)
+
+@schedule_injective.register(["c7x"])
+def schedule_injective_c7x(_, outs, target):
+    """schedule injective ops for c7x"""
+    print("schedule_injective_c7x(_, outs, target):")
+    with target:
+        return topi.c7x.schedule_injective(outs)

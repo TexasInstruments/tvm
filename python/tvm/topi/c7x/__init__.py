@@ -15,17 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# pylint: disable=wildcard-import
-"""Relay op strategies."""
-from __future__ import absolute_import as _abs
-
-from .generic import *
-from . import x86
-from . import arm_cpu
-from . import cuda
-from . import hls
-from . import mali
-from . import bifrost
-from . import rocm
-from . import intel_graphics
-from . import c7x
+# pylint: disable=redefined-builtin, wildcard-import
+"""c7x specific declaration and schedules."""
+from .pooling import schedule_pool, schedule_adaptive_pool
+from .injective import schedule_injective
