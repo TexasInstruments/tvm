@@ -35,6 +35,7 @@ def build_module(mod, target):
     module : runtime.Module
         The corressponding module.
     """
+    print(f"build_module, target={target}")
     target = Target(target) if isinstance(target, str) else target
     return _ffi_api.Build(mod, target)
 

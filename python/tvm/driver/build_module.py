@@ -159,10 +159,12 @@ def _build_for_device(input_mod, target, target_host):
 
     mod_mixed = input_mod
     mod_mixed = tvm.tir.transform.Apply(lambda f: f.with_attr("target", target))(mod_mixed)
+    print(f"_build_for_device: {len(mod_mixed.functions)} functions")
 
     opt_mixed = [tvm.tir.transform.VerifyMemory()]
     if len(mod_mixed.functions) == 1:
         opt_mixed += [tvm.tir.transform.Apply(lambda f: f.with_attr("tir.is_entry_func", True))]
+    print(f"before _build_for_device opt pipeline, {len(mod_mixed.functions)} functions")
 
     if PassContext.current().config.get("tir.detect_global_barrier", False):
         opt_mixed += [tvm.tir.transform.ThreadSync("global")]
@@ -176,6 +178,7 @@ def _build_for_device(input_mod, target, target_host):
     ]
     mod_mixed = tvm.transform.Sequential(opt_mixed)(mod_mixed)
 
+    print(f"after _build_for_device device pipeline, {len(mod_mixed.functions)} functions")
     # device optimizations
     opt_device = tvm.transform.Sequential(
         [
@@ -191,8 +194,11 @@ def _build_for_device(input_mod, target, target_host):
         ]
     )
     mod_dev = opt_device(mod_mixed)
+    print(f"_build_for_device: after device pipeline, {len(mod_dev.functions)} functions");
+
 
     # host optimizations
+    print(f"_build_for_device: before host pipeline");
     opt_host = tvm.transform.Sequential(
         [
             tvm.tir.transform.Filter(
@@ -208,6 +214,7 @@ def _build_for_device(input_mod, target, target_host):
         ]
     )
     mod_host = opt_host(mod_mixed)
+    print(f"_build_for_device: after host pipeline, {len(mod_host.functions)} functions");
 
     if device_type == ndarray.cpu(0).device_type and target_host == target:
         assert len(mod_dev.functions) == 0
@@ -216,7 +223,14 @@ def _build_for_device(input_mod, target, target_host):
             "Specified target %s, but cannot find device code, did you do " "bind?" % target
         )
 
-    rt_mod_dev = codegen.build_module(mod_dev, target) if len(mod_dev.functions) != 0 else None
+
+#    rt_mod_dev = codegen.build_module(mod_dev, target) if len(mod_dev.functions) != 0 else None
+    if len(mod_dev.functions) != 0:
+        print(f"_build_for_device: device module\n{mod_dev}");
+        print(f"_build_for_device: calling build_module for dev mod, target={target}")
+        rt_mod_dev = codegen.build_module(mod_dev, target)
+    else:
+        rt_mod_dev = None
     return mod_host, rt_mod_dev
 
 
@@ -298,6 +312,7 @@ def build(
     ----
     See the note on :any:`tvm.target` on target string format.
     """
+    print("tvm.build")
     if isinstance(inputs, schedule.Schedule):
         if args is None:
             raise ValueError("args must be given for build from schedule")
@@ -350,11 +365,15 @@ def build(
 
     device_modules = []
     for tar, input_mod in target_input_mod.items():
+        print(f"tvm.build: target: {tar} target_host:{target_host}")
+        print(f"tvm.build: module:\n{input_mod}")
         mod_host, mdev = _build_for_device(input_mod, tar, target_host)
         mod_host_all.update(mod_host)
         device_modules.append(mdev)
 
     # Generate a unified host module.
+    print(f"tvm.build: host module\n{mod_host_all}");
+    print(f"tvm.build: calling build_module for host module, target_host={target_host}")
     rt_mod_host = codegen.build_module(mod_host_all, target_host)
 
     # Import all modules.
