@@ -369,6 +369,7 @@ runtime::Module BuildCHost(IRModule mod, Target target) {
   bool emit_asserts = false;
   CodeGenCHost cg;
   cg.Init(output_ssa, emit_asserts, target->str());
+  printf("BuildCHost\n");
 
   Map<String, LinkedParam> linked_params;
   bool found_linked_params = false;
