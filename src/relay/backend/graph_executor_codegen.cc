@@ -37,6 +37,7 @@
 
 #include "compile_engine.h"
 #include "utils.h"
+#include "stdio.h"
 
 namespace tvm {
 namespace relay {
@@ -271,6 +272,7 @@ class GraphExecutorCodegen : public backend::MemoizedExprTranslator<std::vector<
   }
 
   LoweredOutput Codegen(relay::Function func) {
+    printf("GraphRuntimeCodegen::Codegen:\n");
     auto pf = GetPackedFunc("relay.backend.GraphPlanMemory");
     storage_device_map_ = (*pf)(func);
     UpdateMainWorkspaceSize(func);
@@ -514,6 +516,7 @@ class GraphExecutorCodegen : public backend::MemoizedExprTranslator<std::vector<
   }
 
   std::vector<GraphNodeRef> VisitExpr_(const CallNode* op) override {
+    printf("VisitExpr CallNode\n");
     Expr expr = GetRef<Expr>(op);
     Function func;
     if (op->op.as<OpNode>()) {
@@ -573,6 +576,7 @@ class GraphExecutorCodegen : public backend::MemoizedExprTranslator<std::vector<
     // Normal Relay Function
 
     CCacheKey key = (*pf0)(func, target);
+    printf("calling CompleEngineLower?\n");
     CachedFunc lowered_func = (*pf1)(compile_engine_, key);
     if (!lowered_funcs_.count(target->str())) {
       lowered_funcs_[target->str()] = IRModule(Map<GlobalVar, BaseFunc>({}));
@@ -754,6 +758,7 @@ class GraphExecutorCodegenModule : public runtime::ModuleNode {
                                                           targets);
       });
     } else if (name == "codegen") {
+      printf("GraphRuntimeCodegenModule:->codegen\n");
       return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
         Function func = args[0];
         this->output_ = this->codegen_->Codegen(func);

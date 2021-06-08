@@ -164,8 +164,10 @@ class ScheduleGetter : public backend::MemoizedExprTranslator<Array<te::Tensor>>
 
       // Use TOPI schedule if user specificed, or the function has no auto_scheduler schedule.
       if (!schedule.defined()) {
+        printf("ScheduleGetter\n");
         ICHECK(anchor_implementation_.defined());
         schedule = anchor_implementation_.Schedule(anchor_attrs_, tensor_outs, target_);
+        printf("got schedule\n");
       }
       for (const auto& scalar : scalars_) {
         if (schedule->Contain(scalar)) {
@@ -211,6 +213,7 @@ class ScheduleGetter : public backend::MemoizedExprTranslator<Array<te::Tensor>>
   }
 
   Array<te::Tensor> VisitExpr_(const CallNode* call_node) final {
+    printf("ScheduleGetter::VisitExpr_\n");
     static auto fpattern = Op::GetAttrMap<TOpPattern>("TOpPattern");
     static auto flower_call = tvm::runtime::Registry::Get("relay.backend.lower_call");
     ICHECK(flower_call) << "relay.backend.lower_call is not registered.";
@@ -711,6 +714,7 @@ class CompileEngineImpl : public CompileEngineNode {
  private:
   // implement lowered func
   CCacheValue LowerInternal(const CCacheKey& key) {
+    printf("CompileEngineImpl::LowerInternal()\n");
     std::lock_guard<std::mutex> lock(mutex_);
     CCacheValue value;
     auto it = cache_.find(key);
@@ -756,6 +760,7 @@ class CompileEngineImpl : public CompileEngineNode {
     }
 
     cache_node->func_name = GetUniqueName(cache_node->func_name);
+    printf("LowerInternal(): func_name=%s\n", cache_node->func_name.c_str());
     // NOTE: array will copy on write.
     Array<te::Tensor> all_args = cache_node->inputs;
     for (te::Tensor arg : cache_node->outputs) {
