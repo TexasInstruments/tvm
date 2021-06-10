@@ -700,6 +700,10 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
     }
     this->PrintGetFuncFromBackend(func_name, packed_func_name);
     this->PrintFuncCall(packed_func_name, num_args);
+  } else if (op->op.same_as(builtin::tvm_call_packed())) {
+    const StringImmNode* s = op->args[0].as<StringImmNode>();
+    std::string func_name = s->value;
+    this->PrintCallExtern(GetType(GetRef<PrimExpr>(op)), s->value, op->args, true, os);
   } else if (op->op.same_as(builtin::tvm_throw_last_error())) {
     this->PrintIndent();
     this->stream << "return -1;\n";
