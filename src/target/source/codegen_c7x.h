@@ -41,6 +41,81 @@ namespace codegen {
 
 using namespace tir;
 
+//---------------------------------------------------------------------------
+// Record config parameters for a single SE/SA instance
+class StreamDesc {
+public:
+  // Parse a c7x_stream_config call and capture the parameters
+  // @tir.call_extern("c7x_stream_config", "SE0", "float32", 
+  //                  196, 8, 1, 1, 196, 0, 0)
+  StreamDesc(const VarNode* CV, const CallNode* CC) :
+    config_var(CV),
+    engine(Downcast<StringImm>(CC->args[1])->value),
+    kind(engine.substr(0,2)),
+    dtype(runtime::String2DLDataType(Downcast<StringImm>(CC->args[2])->value)),
+    veclen(0) {
+    int argnum = 3;
+    for (int i = 0; i < 4; ++i)
+      icnts[i] = CC->args[argnum++];
+    for (int i = 0; i < 3; ++i)
+      dims[i] = CC->args[argnum++];
+  }
+public:
+  const VarNode* config_var;
+  std::string engine;    // SE0, SE1, SA0, SA1, SA2, SA3
+  std::string kind;      // SE or SA
+  DataType dtype;
+  int veclen;
+  PrimExpr icnts[4];
+  PrimExpr dims[3];
+  // debug
+  void dump() const {
+    printf("StreamDesc: config=%s engine=%s kind=%s dtype=... "
+           "veclen=%d icnts=... dims=...\n",
+    config_var->name_hint.c_str(),
+    engine.c_str(),
+    kind.c_str(),
+    veclen);
+  }
+};
+
+//---------------------------------------------------------------------------
+// Database of stream setups for the current function
+class StreamInfo {
+  // Map from config varaiable to config info
+  std::map<const VarNode*, StreamDesc> config_map_;
+public:
+  // Called during pre-scan for Let config_var = c7x_stream_config(...)
+  void AddConfig(const VarNode* CV, const CallNode* CC) { 
+    config_map_.emplace(CV, StreamDesc(CV, CC));
+    // GetDesc(CV).dump();
+  }
+  // Given config var, lookup config info
+  StreamDesc& GetDesc(const VarNode* CV) {
+    auto it = config_map_.find(CV);
+    ICHECK(it != config_map_.end());
+    return it->second; 
+  }
+  // Update the vector length for a given config. The vector length is not
+  // passed in the TIR config call, to avoid having to update it during 
+  // vectorization. Instead we run a pre-pass in the codegen to detect it.
+  void UpdateVecLen(const CallNode* access) {
+    const VarNode* config_var = Downcast<Var>(access->args[1]).get();
+    int lanes = access->dtype.lanes();
+    GetDesc(config_var).veclen = lanes;
+  }
+  void Clear() {
+    config_map_.clear();
+  }
+};
+
+//---------------------------------------------------------------------------
+// Customized Code Generator for C7x
+// This codegen is adapted from CodeGenC. 
+// Partial list of customizations:
+//   - generates C++ instead of C
+//   - handles C7x DMA instrinsics
+//   - handles C7x SE/SA instrinsics
 class CodeGenC7x final : public CodeGenC {
  public:
   CodeGenC7x();
@@ -49,6 +124,7 @@ class CodeGenC7x final : public CodeGenC {
   void AddFunction(const PrimFunc& f);
   void InitFuncState(const PrimFunc& f) override;
   void PreFunctionBody(const PrimFunc& f) override;
+  void DeclarePackedCalls(const PrimFunc& f);
 
   /*! \brief Add linked parameters, if they are present. */
   //void LinkParameters(Map<String, LinkedParam> params);
@@ -142,21 +218,26 @@ class CodeGenC7x final : public CodeGenC {
   /* \brief names of variables that are used as src or dst in dma intrinsics */
   std::set<const VarNode*> dma_buffers_;
   /* \brief map of dma buffer variables to dma manager objects */
-  std::map<const VarNode*, Var> dma_map_;
+  std::map<const VarNode*, const VarNode*> dma_map_;
+  /* \brief SE/SA config information */
+  StreamInfo stream_info_;
 
-  bool IsDMA(Var var) {
-    return dma_buffers_.find(var.get()) != dma_buffers_.end();
+  // Is variable used in DMA copy-in/copy-out
+  bool IsDMA(const VarNode* var) {
+    return dma_buffers_.find(var) != dma_buffers_.end();
   }
 
-  bool IsLocal(Var var) { 
-    auto it = alloc_storage_scope_.find(var.get());
+  // Is variable a locally allocated buffer
+  bool IsLocal(const VarNode* var) { 
+    auto it = alloc_storage_scope_.find(var);
     return it != alloc_storage_scope_.end() && it->second == "local";
   }
 
   void PrintGetFuncFromBackend(const std::string& func_name, const std::string& packed_func_name);
   void PrintFuncCall(const std::string& packed_func_name, int num_args);
   void PrintStorageScope(const std::string& scope, std::ostream& os);  // NOLINT(*)
-  void PrintDMASetup(Var dma_var, Call call);
+  void PrintDMASetup(const VarNode* dma_var, const CallNode* call);
+  void PrintStreamConfig(const VarNode* config_var);
 
   /*!
    * \brief Print ternary conditional operator implementing binary `op`

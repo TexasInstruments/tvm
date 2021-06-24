@@ -38,6 +38,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <set>
+#include <map>
 
 #include "../../arith/pattern_match.h"
 #include "../../support/str_escape.h"
@@ -48,19 +50,61 @@
 namespace tvm {
 namespace codegen {
 
+// Helper functions to detect specific c7x intrinsic calls
+static bool is_call_extern(const CallNode *call, String fname) {
+  return call->op.same_as(builtin::call_extern()) &&
+	 Downcast<StringImm>(call->args[0])->value == fname;
+}
+static bool is_call_extern(PrimExpr op, String fname) {
+  const CallNode *call = op.as<CallNode>();
+  return call && is_call_extern(call, fname);
+}
+
 // A simple pre-pass to find all the variables that are the src and dst
 // of DMA calls.
 class ScanDMA : public StmtExprVisitor { 
-  public:
   std::set<const VarNode *>& dma_set_;
+public:
   ScanDMA(std::set<const VarNode *>& vs) : dma_set_(vs) {}
   void VisitExpr_(const CallNode* op) override {
-    if (op->op.same_as(builtin::call_extern()) && 
-        Downcast<StringImm>(op->args[0])->value == "c7x_dma_setup")
+    if (is_call_extern(op, "c7x_dma_setup"))
     {
       dma_set_.insert(Downcast<Var>(op->args[1]).get());
       dma_set_.insert(Downcast<Var>(op->args[6]).get());
     }
+  }
+};
+
+// A pre-pass to find "packed calls" which is how the host kernel 
+// calls the device kernel. This is so we can emit declarations.
+// @tir.tvm_call_packed("fused_multiply_58_kernel0", A, B, C)
+class ScanPackedCalls : public StmtExprVisitor { 
+public:
+  std::set<const CallNode *>& calls_;
+public:
+  ScanPackedCalls(std::set<const CallNode*>& cs) : calls_(cs) {}
+  void VisitExpr_(const CallNode* op) override {
+    if (op->op.same_as(builtin::tvm_call_packed())) {
+      calls_.insert(op);
+    }
+  }
+};
+
+// A pre-pass to find and collect stream (SE/SA) configurations
+class ScanStreamAccess : public StmtExprVisitor {
+public:
+  StreamInfo& info_;
+  ScanStreamAccess(StreamInfo& info) : info_(info) {}
+  // Look for Let config_var = c7x_stream_config(...) and capture setup info
+  void VisitStmt_(const LetStmtNode* op) override {
+    if (is_call_extern(op->value, "c7x_stream_config"))
+      info_.AddConfig(op->var.get(), Downcast<Call>(op->value).get());
+    VisitStmt(op->body);
+  }
+  // Look for c7x_stream_access(...) and update vector lengths in setup
+  void VisitExpr_(const CallNode* op) override {
+    if (is_call_extern(op, "c7x_stream_access"))
+      info_.UpdateVecLen(op);
   }
 };
 		   
@@ -72,9 +116,11 @@ void CodeGenC7x::Init(bool output_ssa, bool emit_asserts, std::string target_str
   declared_globals_.clear();
   decl_stream << "// custom backend for C7x" << "\n";
   decl_stream << "// tvm target: " << target_str << "\n";
+  // We don't need packed func API
   decl_stream << "//#include \"tvm/runtime/c_runtime_api.h\"\n";
-  decl_stream << "//#include \"tvm/runtime/c_backend_api.h\"\n";
+  decl_stream << "#include \"tvm/runtime/c_backend_api.h\"\n";
   decl_stream << "//#include <math.h>\n";
+  // C7x-specific runtime support (DMA, SE, etc)
   decl_stream << "#include \"c7x_tvm_runtime.h\"\n\n";
   //decl_stream << "void* " << module_name_ << " = NULL;\n";
   CodeGenC::Init(output_ssa);
@@ -92,6 +138,8 @@ void CodeGenC7x::AddFunction(const PrimFunc& f) {
   this->InitFuncState(f);
   // reserve keywords
   ReserveKeywordsAsUnique();
+  // declare functions called via "packed calls"
+  DeclarePackedCalls(f);
 
   bool no_alias = f->HasNonzeroAttr(tir::attr::kNoAlias);
   this->PrintFuncPrefix();
@@ -140,10 +188,44 @@ void CodeGenC7x::InitFuncState(const PrimFunc& f) {
   // Run the pre-pass to find all the variables used in DMA copy
   // intrinsics
   dma_buffers_.clear();
-  ScanDMA Scanner(dma_buffers_);
-  Scanner(f->body);
+  ScanDMA DMAScanner(dma_buffers_);
+  DMAScanner(f->body);
+
+  // Run the pre-pass to gather SE/SA info
+  stream_info_.Clear();
+  ScanStreamAccess StreamScanner(stream_info_);
+  StreamScanner(f->body);
 
   CodeGenC::InitFuncState(f);
+}
+
+// When a kernel is split between host and device (via tir.SplitHostDevice), 
+// the host kernel uses the packed_func protocol to call the device
+// kernel. We disable packed call lowering (by disabling tir.LowerTVMBuiltin)
+// so that packed calls appear as normal calls. But this requires declarations
+// for the callee.
+void CodeGenC7x::DeclarePackedCalls(const PrimFunc& f) {
+  // Find all the packed calls
+  std::set<const CallNode*> packed_calls;
+  ScanPackedCalls CallScanner(packed_calls);
+  CallScanner(f->body);
+
+  // declare the callees
+  for(const CallNode *call : packed_calls) {
+    std::string fname = Downcast<StringImm>(call->args[0])->value;
+    PrintIndent();
+    stream << "extern \"C\" ";
+    PrintType(call->dtype, stream);
+    stream << " " << fname << "(";
+    for (size_t i = 1; i < call->args.size(); ++i) {
+      PrintType(call->args[i].dtype(), stream);
+      if (i < call->args.size() - 1)
+        stream << ", ";
+    }
+    stream << ");\n";
+  }
+  if (packed_calls.size() > 0)
+    stream << "\n";
 }
 
 // adapted
@@ -552,8 +634,9 @@ void CodeGenC7x::VisitExpr_(const NotNode* op, std::ostream& os) {  // NOLINT(*)
 }
 
 // adapted from CodegenC
-void CodeGenC7x::PrintCallExtern(Type ret_type, String global_symbol, const Array<PrimExpr>& args,
-                               bool skip_first_arg, std::ostream& os) {  // NOLINT(*)
+void CodeGenC7x::PrintCallExtern(Type ret_type, String global_symbol, 
+                                 const Array<PrimExpr>& args,
+                                 bool skip_first_arg, std::ostream& os) {  // NOLINT(*)
 
   // dma copy call handled by EvaluateNode, so ignore here
   if (global_symbol == "c7x_dma_copy")
@@ -731,8 +814,24 @@ void CodeGenC7x::PrintVecBinaryOp(const std::string& op, DataType t, PrimExpr lh
   }
 }
 
-// verbatim from CodegenC
+// adapted from CodegenC
 void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*)
+  if (is_call_extern(op->index, "c7x_stream_access")) { 
+    // @tir.call_extern("c7x_stream_access", config_var, "pred", "adv", ...)
+    const CallNode* call = Downcast<Call>(op->index).get();
+    const VarNode* ConfigVar = Downcast<Var>(call->args[1]).get();
+    const std::string& adv = Downcast<StringImm>(call->args[3])->value;
+    const StreamDesc& desc = stream_info_.GetDesc(ConfigVar);
+
+    // example: __SE0_ADV(float16)
+    os << "__" << desc.engine;
+    if (adv == "adv")
+      os << "ADV";
+    os << "(";
+    PrintType(op->dtype, os);
+    os << ")";
+    return;
+  }
   int lanes = op->dtype.lanes();
   // delcare type.
   if (op->dtype.lanes() == 1) {
@@ -775,11 +874,61 @@ void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*
   }
 }
 
-// verbatim from CodegenC
+// adapted from CodegenC
 void CodeGenC7x::VisitStmt_(const StoreNode* op) {
   //stream << "// VisitStmt<StoreNode>\n";
   DataType t = op->value.dtype();
-  if (t.lanes() == 1) {
+  if (is_call_extern(op->index, "c7x_stream_access")) { 
+    // @tir.call_extern("c7x_stream_access", config_var, "pred", "adv", ...)
+    std::string vid = GetVarID(op->buffer_var.get());
+    std::string rhs_value = this->PrintExpr(op->value);
+
+    const CallNode* call = Downcast<Call>(op->index).get();
+    const VarNode* config_var = Downcast<Var>(call->args[1]).get();
+    const std::string& pred = Downcast<StringImm>(call->args[2])->value;
+    const std::string& adv = Downcast<StringImm>(call->args[3])->value;
+    const StreamDesc& desc = stream_info_.GetDesc(config_var); 
+
+    // example: __SA0ADV(float16, ptr)
+    std::ostringstream sa_os;
+    sa_os << "__" << desc.engine;
+    if (adv == "adv")
+      sa_os << "ADV";
+    sa_os << "(";
+    PrintType(t, sa_os);
+    sa_os << ", " << vid << ")";
+
+    // If access requires predication, generate a predicate and a predicated 
+    // store. Example:
+    //   float16 value = <rhs expression>
+    //   __vpred pred = __SA0_VPRED(float16);
+    //   __vstore_pred(pred, __SA0ADV(float16, ptr), value);
+    if (pred == "pred") {
+      auto rhs_var = Var("value", t);
+      auto pred_var = Var("pred", DataType::Handle());
+
+      this->PrintIndent();
+      PrintType(t, stream);
+      stream << " " << AllocVarID(rhs_var.get()) << " = " << rhs_value << ";\n";
+
+      this->PrintIndent();
+      stream << "__vpred " << AllocVarID(pred_var.get()) << " = " 
+             << "__" << desc.engine << "_VPRED(";
+      PrintType(t, stream);
+      stream << ");\n";
+
+      this->PrintIndent();
+      stream << "__vstore_pred(" << GetVarID(pred_var.get()) << ", " 
+                                 << sa_os.str() << ", "
+				 << GetVarID(rhs_var.get()) << ");\n";
+    }
+    // no predication: just generate __SA0ADV(float16, ptr)
+    else { 
+      this->PrintIndent();
+      stream << "*" << sa_os.str() << " = " << rhs_value << ";\n";
+    }
+  }
+  else if (t.lanes() == 1) {
     std::string value = this->PrintExpr(op->value);
     std::string ref = this->GetBufferRef(t, op->buffer_var.get(), op->index);
     this->PrintIndent();
@@ -787,7 +936,6 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
   } else {
     ICHECK(is_one(op->predicate)) << "Predicated store is not supported";
     arith::PVar<PrimExpr> base;
-
 
     if (arith::ramp(base, 1, t.lanes()).Match(op->index)) {
       std::string value = this->PrintExpr(op->value);
@@ -907,88 +1055,110 @@ void CodeGenC7x::VisitExpr_(const SelectNode* op, std::ostream& os) {  // NOLINT
 //       A_local_buffer(L2Context.allocate(A_local_buffer.size));
 //  auto A_dma = create_DMA(DMAContext, A_buffer, A_local_buffer);
 
-void CodeGenC7x::PrintDMASetup(Var dma_var, Call call) {
+void CodeGenC7x::PrintDMASetup(const VarNode* dma_var, const CallNode* call) {
   // Helper function to declare each buffer
-  auto declare_buffer = [&](Var buffer_ptr, int n) -> Var {
-    bool is_local = IsLocal(buffer_ptr);
-    dma_map_[buffer_ptr.get()] = dma_var;
-    std::string buffer_type = is_local ? "DoubleBuffer" : "Buffer";
-    auto buffer_var = Var(buffer_ptr->name_hint + "_buffer", DataType::Handle());
-    std::string buffer_name = AllocVarID(buffer_var.get());
-    const PointerTypeNode *ptr_type;
-    const PrimTypeNode *prim_type = nullptr;
-    if ((ptr_type = buffer_ptr->type_annotation.as<PointerTypeNode>())) 
-      prim_type = ptr_type->element_type.as<PrimTypeNode>();
-    assert(prim_type);
+  auto declare_buffer =
+    [&](const VarNode* buffer_ptr, int n) -> const VarNode* {
+      bool is_local = IsLocal(buffer_ptr);
+      dma_map_[buffer_ptr] = dma_var;
+      std::string buffer_type = is_local ? "DoubleBuffer" : "Buffer";
+      auto buffer_var = Var(buffer_ptr->name_hint + "_buffer", DataType::Handle());
+      std::string buffer_name = AllocVarID(buffer_var.get());
+      const PointerTypeNode *ptr_type;
+      const PrimTypeNode *prim_type = nullptr;
+      if ((ptr_type = buffer_ptr->type_annotation.as<PointerTypeNode>())) 
+	prim_type = ptr_type->element_type.as<PrimTypeNode>();
+      ICHECK(prim_type);
 
-    this->PrintIndent();
-    stream << buffer_type << "<";
-    stream << "Layout<";
-    PrintType(prim_type->dtype, stream);
-    for (int i = 1; i <= 4; ++i)
-      stream << ", " << call->args[n+i];
-    stream << ">> " << buffer_name << "(";
-    // If this is a local buffer, call the allocator to initialize it
-    if (is_local)
-      stream << "L2Context.allocate(" << buffer_name << ".size)";
-    else
-      stream << GetVarID(buffer_ptr.get());
-    stream << ");\n";
+      // example output: Buffer<Layout<float, 1, 672, 14, 14>> A_buffer(A);
+      this->PrintIndent();
+      stream << buffer_type << "<";
+      stream << "Layout<";
+      PrintType(prim_type->dtype, stream);
+      for (int i = 1; i <= 4; ++i)
+	stream << ", " << call->args[n+i];
+      stream << ">> " << buffer_name << "(";
+      // If this is a local buffer, call the allocator to initialize it
+      if (is_local)
+	stream << "L2Context.allocate(" << buffer_name << ".size)";
+      else
+	stream << GetVarID(buffer_ptr);
+      stream << ");\n";
 
-    return buffer_var;
+      return buffer_var.get();
   };
   // Signature is:
-  // call_extern("c7x_dma_setup", src_var, dim3, dim2, dim1, dim0, 
-  //                              dst_var, dim3, dim2, dim1, dim0)                         
-  Var src = Downcast<Var>(call->args[1]);
-  Var dst = Downcast<Var>(call->args[6]);
-  Var src_buf = declare_buffer(src, 1);
-  Var dst_buf = declare_buffer(dst, 6);
+  // @tir.call_extern("c7x_dma_setup", src_var, dim3, dim2, dim1, dim0, 
+  //                                   dst_var, dim3, dim2, dim1, dim0)                         
+  const VarNode* src = Downcast<Var>(call->args[1]).get();
+  const VarNode* dst = Downcast<Var>(call->args[6]).get();
+  const VarNode* src_buf = declare_buffer(src, 1);
+  const VarNode* dst_buf = declare_buffer(dst, 6);
 
   // auto A_dma = create_DMA(DMAContext, A_buffer, A_local_buffer);
   this->PrintIndent();
-  std::string dma_var_name = AllocVarID(dma_var.get()); 
+  std::string dma_var_name = AllocVarID(dma_var); 
   stream << "auto " << dma_var_name
          << " = create_DMA(DMAContext, "
-         << GetVarID(src_buf.get()) << ", "
-         << GetVarID(dst_buf.get()) << ");\n";
+         << GetVarID(src_buf) << ", "
+         << GetVarID(dst_buf) << ");\n";
 
   // For local (allocated) buffers, initialize the TVM variable using the 
   // accessor of the DMA object:
   //   void* __restrict__ A_local = A_dma.dst_ptr();
-  auto define_ptr = [&](Var ptr_var, bool is_src) -> void {
+  auto define_ptr = [&](const VarNode* ptr_var, bool is_src) -> void {
     if (!IsLocal(ptr_var)) 
       return;
     this->PrintIndent();
     PrintType(ptr_var->dtype, stream);
     stream << ' ' << restrict_keyword_;
-    stream << ' ' << AllocVarID(ptr_var.get()) << " = ";
+    stream << ' ' << AllocVarID(ptr_var) << " = ";
     std::string method = is_src ? "src_ptr" : "dst_ptr";
-    stream << GetVarID(dma_var.get()) << "." << method << "();\n";
+    stream << GetVarID(dma_var) << "." << method << "();\n";
   };
   define_ptr(src, true);
   define_ptr(dst, false);
 }
 
+// Emit setup code for SE/SA config
+void CodeGenC7x::PrintStreamConfig(const VarNode* config_var) {
+  const std::string vid = AllocVarID(config_var);
+  const StreamDesc& desc = stream_info_.GetDesc(config_var);
+
+  // SEConfig<type, veclen, icnt0, icnt1, icnt2, icnt3, dim0, dim1, dim2> vid;
+  this->PrintIndent();
+  stream << desc.kind << "Config<";
+  PrintType(desc.dtype, stream);
+  stream << ", " << desc.veclen;
+  for (int i = 0; i < 4; ++i) { 
+    stream << ", ";
+    this->PrintExpr(desc.icnts[i], stream);
+  }
+  for (int i = 0; i < 3; ++i) { 
+    stream << ", ";
+    this->PrintExpr(desc.dims[i], stream);
+  }
+  stream << "> " << vid << ";\n";
+}
+
 // adapted from CodegenC
 void CodeGenC7x::VisitStmt_(const LetStmtNode* op) {
   //stream << "// VisitStmt<LetStmtNode>\n";
-  Var lhs = op->var;
-  auto call = op->value.as<CallNode>();
-  if (call && call->op.same_as(builtin::call_extern())) {
-    String func = Downcast<StringImm>(call->args[0])->value;
-    // Emit custom sequence for DMA setup
-    if (func == "c7x_dma_setup") {
-      PrintDMASetup(lhs, GetRef<Call>(call));
-      PrintStmt(op->body);
-      return;
-    }
+  if (is_call_extern(op->value, "c7x_dma_setup")) { 
+    PrintDMASetup(op->var.get(), Downcast<Call>(op->value).get());
+    PrintStmt(op->body);
+    return;
+  }
     // Skip allocation calls for DMA buffers; they are allocated as part
     // of DMA setup
-    else if (func == "C7xAllocate" && IsDMA(lhs)) {
-      PrintStmt(op->body);
-      return;
-    }
+  else if (is_call_extern(op->value, "C7xAllocate") && IsDMA(op->var.get())) {
+    PrintStmt(op->body);
+    return;
+  }
+  else if (is_call_extern(op->value, "c7x_stream_config")) {
+    PrintStreamConfig(op->var.get());
+    PrintStmt(op->body);
+    return;
   }
   PrintIndent();
   std::string value = PrintExpr(op->value);
@@ -1017,7 +1187,7 @@ void CodeGenC7x::VisitStmt_(const AllocateNode* op) {
   ICHECK(!is_zero(op->condition));
   // Skip allocation calls for DMA buffers; they are allocated as part
   // of DMA setup
-  if (IsDMA(op->buffer_var)) {
+  if (IsDMA(op->buffer_var.get())) {
     this->PrintStmt(op->body);
     return;
   }
@@ -1038,7 +1208,7 @@ void CodeGenC7x::VisitStmt_(const AllocateNode* op) {
   stream << ' ' << restrict_keyword_; 
   stream << ' ' << vid << " = static_cast<";
   PrintType(ptype, stream);
-  stream << ">(c7x_runtime_allocate(" << constant_size << "));\n";
+  stream << ">(L2Context.allocate(" << constant_size << "));\n";
 
   RegisterHandleType(op->buffer_var.get(), op->dtype);
   this->PrintStmt(op->body);
@@ -1180,21 +1350,45 @@ void CodeGenC7x::VisitStmt_(const EvaluateNode* op) {
       // Calls to c7x_dma_copy turn into X_dma.copy().
       // The src and dst pointers are captured in the DMA object.
       if (func == "c7x_dma_copy") {
-	Var src = Downcast<Var>(call->args[1]);
-	Var dst = Downcast<Var>(call->args[2]);
-	Var dma_var = dma_map_.at(src.get());
+	const VarNode* src = Downcast<Var>(call->args[1]).get();
+	const VarNode* dst = Downcast<Var>(call->args[2]).get();
+	const VarNode* dma_var = dma_map_.at(src);
         this->PrintIndent();
-	stream << GetVarID(dma_var.get()) << ".copy();\n";
-	auto reset_ptr = [&](Var ptr_var, bool is_src) -> void {
+	stream << GetVarID(dma_var) << ".copy();\n";
+	auto reset_ptr = [&](const VarNode* ptr_var, bool is_src) -> void {
 	  if (!IsLocal(ptr_var)) 
 	    return;
 	  this->PrintIndent();
-	  stream << GetVarID(ptr_var.get()) << " = ";
+	  stream << GetVarID(ptr_var) << " = ";
 	  std::string method = is_src ? "src_ptr" : "dst_ptr";
-	  stream << GetVarID(dma_var.get()) << "." << method << "();\n";
+	  stream << GetVarID(dma_var) << "." << method << "();\n";
 	};
 	reset_ptr(src, true);
 	reset_ptr(dst, false);
+        return;
+      }
+      else if (func == "c7x_stream_open") {
+	const VarNode* config_var = Downcast<Var>(call->args[1]).get();
+	PrimExpr buf_ptr = call->args[2];
+	const StreamDesc& desc = stream_info_.GetDesc(config_var);
+        const std::string vid = GetVarID(config_var);
+
+        this->PrintIndent();
+        stream << "__" << desc.engine << "_OPEN(";
+	if (desc.kind == "SE") {
+	  stream << "(void *)(";
+          PrintExpr(buf_ptr, stream);
+	  stream  << "), ";
+	}
+	stream << vid << ".params());\n";
+        return;
+      }
+      else if (func == "c7x_stream_close") {
+	const VarNode* config_var = Downcast<Var>(call->args[1]).get();
+	const StreamDesc& desc = stream_info_.GetDesc(config_var);
+
+        this->PrintIndent();
+        stream << "__" << desc.engine << "_CLOSE();\n";
         return;
       }
     }
