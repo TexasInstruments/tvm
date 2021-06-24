@@ -768,6 +768,15 @@ void TVMGraphExecutor_SetInput(TVMGraphExecutor* executor, const char* name, DLT
   executor->data_entry[eid].dl_tensor.data = data_in->data;
 }
 
+void TVMGraphExecutor_SetInputRaw(TVMGraphExecutor* executor, const char* name, void* data_in_raw) {
+  uint32_t index = TVMGraphExecutor_GetInputIndex(executor, name);
+  if (index >= executor->input_nodes_count) {
+    fprintf(stderr, "given index is greater than num of input nodes.\n");
+  }
+  uint32_t eid = TVMGraphExecutor_GetEntryId(executor, executor->input_nodes[index], 0);
+  executor->data_entry[eid].dl_tensor.data = data_in_raw;
+}
+
 /*!
  * \brief Load parameters from parameter blob.
  * \param executor The graph executor.
@@ -908,6 +917,20 @@ int TVMGraphExecutor_GetOutput(TVMGraphExecutor* executor, const int32_t idx, DL
   CHECK(out->dtype.bits == tensor->dtype.bits);
   CHECK(Shape_Accumulate(out->shape, out->ndim) == Shape_Accumulate(tensor->shape, tensor->ndim));
   memcpy(out->data, tensor->data, size * elem_bytes);
+  return status;
+}
+
+int TVMGraphExecutor_GetOutputRaw(TVMGraphExecutor* executor, const int32_t idx, void* out_raw) {
+  int status = 0;
+  uint32_t nid = executor->outputs[idx].node_id;
+  uint32_t index = executor->outputs[idx].index;
+  uint32_t eid = TVMGraphExecutor_GetEntryId(executor, nid, index);
+
+  // copy data section to allocated output tensor
+  DLTensor* tensor = &(executor->data_entry[eid].dl_tensor);
+  int32_t elem_bytes = tensor->dtype.bits / 8;
+  int64_t size = Shape_Accumulate(tensor->shape, tensor->ndim);
+  memcpy(out_raw, tensor->data, size * elem_bytes);
   return status;
 }
 
