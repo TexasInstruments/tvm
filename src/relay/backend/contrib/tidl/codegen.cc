@@ -496,10 +496,11 @@ void J7CSourceCodegen::EmitInitFunction(const std::string& prefix, uint32_t subg
     const char* TS = "    ";
     code_stream_ << "void " << prefix << "_init(void) {\n"
                  << TS  << prefix << "_instance = init_tidl_subgraph((void *) subgraph" << subgraph_id << "_net_bin,\n"
+                 << TS << TS << TS << "subgraph" << subgraph_id << "_net_bin_len,\n"
                  << TS << TS << TS << "(void* ) subgraph" << subgraph_id << "_params_1_bin,\n"
                  << TS << TS << TS << "getUDMADrvObjPtr(),\n"
                  << TS << TS << TS << subgraph_info.is_nchw << " /* is_nchw */);\n\n"
-                 << TS << "atexit(&" << prefix << "_destroy);\n"
+                 << TS << "// atexit(&" << prefix << "_destroy);\n"
                  << "}\n\n";
 }
 
@@ -536,7 +537,7 @@ void J7CSourceCodegen::EmitWrapperFunction(const std::string& prefix, const runt
 
 void J7CSourceCodegen::EmitDestroyFunction(const std::string& prefix)
 {
-    code_stream_ << "static void " << prefix << "_destroy(void) {\n"
+    code_stream_ << "void " << prefix << "_destroy(void) {\n"
                  << "    free_tidl_subgraph(" << prefix << "_instance);\n"
                  << "}\n\n";
 }
