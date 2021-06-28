@@ -64,12 +64,15 @@ class TIDLContextNode : public Object {
   std::string artifacts_directory;
 
   std::string platform;
+  int         c7x_codegen;
 
-  TIDLContextNode() : artifacts_directory(""), platform("AM57") {}
+  TIDLContextNode() : artifacts_directory(""), platform("AM57"),
+                      c7x_codegen(0) {}
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("artifacts_directory", &artifacts_directory);
     v->Visit("platform", &platform);
+    v->Visit("c7x_codegen", &c7x_codegen);
   }
 
   static constexpr const char* _type_key = "tidl.TIDLContext";
@@ -219,8 +222,10 @@ TVM_REGISTER_GLOBAL("tidl.CreateTIDLContext")
   auto ctx = TIDLContext::Create();
   runtime::String artifacts_directory = args[0];
   runtime::String platform = args[1];
+  int             c7x_codegen = args[2];
   ctx->artifacts_directory = artifacts_directory;
   ctx->platform = platform;
+  ctx->c7x_codegen = c7x_codegen;
   *ret = ctx;
 });
 
@@ -554,10 +559,16 @@ runtime::Module TIDLCompiler(const ObjectRef& ref) {
     TIDLJ6ModuleCodeGen tidl;
     return tidl.CreateCSourceModule(ref);
   } else if (ctx->platform == "J7") {
-    //TIDLJ7ModuleCodeGen tidl;
-    //return tidl.CreateCSourceModule(ref);
-    J7CSourceCodegen csource;
-    return csource.CreateCSourceModule(ref);
+    if (ctx->c7x_codegen == 0)
+    {
+      TIDLJ7ModuleCodeGen tidl;
+      return tidl.CreateCSourceModule(ref);
+    }
+    else
+    {
+      J7CSourceCodegen csource;
+      return csource.CreateCSourceModule(ref);
+    }
   } else {
     LOG(FATAL) << "Illegal TIDL platform " << ctx->platform;
     return runtime::Module();

@@ -2916,6 +2916,8 @@ class TIDLCompiler:
         accuracy_level: int
             0 for simple calibration, 1 for advanced bias calibration, 9 for user defined,
             default is 1
+        c7x_codegen : int
+            Generating C7x code for TIDL-unsupported layers.  0 for disable, 1 for enable, default is 0
         advanced_options: dict
             a dictionary to overwrite default calibration options, default is {}
             advanced_options keys / values:
@@ -3011,6 +3013,7 @@ class TIDLCompiler:
             self.max_num_subgraphs = 16
             self.deny_list = []
             self.accuracy_level = 1
+            self.c7x_codegen = 0
             self.advanced_options = {}
             self.ti_internal_nc_flag = (0x1 | 0x40 | 0x200 | 0x400)
 
@@ -3022,7 +3025,7 @@ class TIDLCompiler:
             #   see ti_dl/utils/tidlModelImport/tidl_{tfLiteRtImport_delegate, onnxRtImport_EP}.cpp
             for key in ('tidl_tools_path', 'artifacts_folder', 'tensor_bits', 'debug_level',
                         'max_num_subgraphs', 'deny_list', 'accuracy_level',
-                        'advanced_options',
+                        'c7x_codegen', 'advanced_options',
                        ):
                 if key in kwargs:
                     setattr(self, key, kwargs[key])
@@ -3259,12 +3262,14 @@ class TIDLContext(tvm.runtime.Object):
 
 class build_config():
     def __init__(self, tidl_compiler=None, artifacts_folder=None, platform="AM57"):
+        c7x_codegen = 0
         if tidl_compiler != None:
             artifacts_folder = tidl_compiler.artifacts_folder
             platform         = tidl_compiler.tidl_platform
+            c7x_codegen      = tidl_compiler.c7x_codegen
         assert artifacts_folder, "artifacts_folder must be specified for TVM+TIDL compilation"
         CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
-        self.tidl_context = CreateTIDLContext(artifacts_folder, platform)
+        self.tidl_context = CreateTIDLContext(artifacts_folder, platform, c7x_codegen)
         self.tvm_context  = tvm.transform.PassContext(opt_level=3)
 
     def __enter__(self):
