@@ -79,6 +79,34 @@ public:
   }
 };
 
+// Parse stream access call 
+class StreamAccess {
+public:
+  // Helper function to bypass broadcast node. (The vectorizer turns all 
+  // the arguments into broadcast expressions)
+  static PrimExpr scalar(PrimExpr e) {
+    const BroadcastNode *bcst = e.as<BroadcastNode>();
+    if (bcst)
+      return bcst->value;
+    else
+      return e; 
+  }
+  // Parse a c7x_stream_config call and capture the parameters
+  // @tir.c7x_stream_access(config_var, "pred", "adv", index_expr)
+  StreamAccess(const CallNode* CC) : 
+    config_var(Downcast<Var>(scalar(CC->args[0])).get()),
+    pred(Downcast<StringImm>(scalar(CC->args[1])).get()->value == "pred"),
+    adv(Downcast<StringImm>(scalar(CC->args[2])).get()->value == "adv"),
+    index(CC->args[3].get()) {
+  }
+
+public:
+  const VarNode *config_var;
+  bool pred;
+  bool adv;
+  const PrimExprNode *index;
+};
+
 //---------------------------------------------------------------------------
 // Database of stream setups for the current function
 class StreamInfo {
@@ -99,10 +127,11 @@ public:
   // Update the vector length for a given config. The vector length is not
   // passed in the TIR config call, to avoid having to update it during 
   // vectorization. Instead we run a pre-pass in the codegen to detect it.
-  void UpdateVecLen(const CallNode* access) {
-    const VarNode* config_var = Downcast<Var>(access->args[1]).get();
-    int lanes = access->dtype.lanes();
-    GetDesc(config_var).veclen = lanes;
+  void UpdateVecLen(const CallNode* call) {
+//    const VarNode* config_var = Downcast<Var>(access->args[1]).get();
+    StreamAccess access(call);
+    int lanes = call->dtype.lanes();
+    GetDesc(access.config_var).veclen = lanes;
   }
   void Clear() {
     config_map_.clear();

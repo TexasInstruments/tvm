@@ -34,6 +34,8 @@
 #include <tvm/runtime/module.h>
 #include <tvm/target/codegen.h>
 #include <tvm/tir/stmt_functor.h>
+#include <tvm/ir/op.h>
+#include <tvm/tir/op_attr_types.h>
 
 #include <sstream>
 #include <string>
@@ -50,14 +52,28 @@
 namespace tvm {
 namespace codegen {
 
+// We use a registered op (rather than a call_extern) for the stream
+// access intrinsic, because we can indicate that it can be vectorized.
+TVM_REGISTER_OP("tir.c7x.stream_access")
+    .set_num_inputs(4)
+    .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kUpdateState))
+    .set_attr<TVectorizable>("TVectorizable", true);
+
 // Helper functions to detect specific c7x intrinsic calls
-static bool is_call_extern(const CallNode *call, String fname) {
+static bool is_call_extern(const CallNode *call, const String& fname) {
   return call->op.same_as(builtin::call_extern()) &&
 	 Downcast<StringImm>(call->args[0])->value == fname;
 }
-static bool is_call_extern(PrimExpr op, String fname) {
+static bool is_call_extern(PrimExpr op, const String& fname) {
   const CallNode *call = op.as<CallNode>();
   return call && is_call_extern(call, fname);
+}
+static bool is_call_builtin(const CallNode *call, const String& fname) {
+  return call->op.same_as(Op::Get(fname));
+}
+static bool is_call_builtin(PrimExpr op, const String& fname) {
+  const CallNode *call = op.as<CallNode>();
+  return call && is_call_builtin(call, fname);
 }
 
 // A simple pre-pass to find all the variables that are the src and dst
@@ -101,9 +117,9 @@ public:
       info_.AddConfig(op->var.get(), Downcast<Call>(op->value).get());
     VisitStmt(op->body);
   }
-  // Look for c7x_stream_access(...) and update vector lengths in setup
+  // Look for @tir.c7x.stream_access(...) and update vector lengths in setup
   void VisitExpr_(const CallNode* op) override {
-    if (is_call_extern(op, "c7x_stream_access"))
+    if (is_call_builtin(op, "tir.c7x.stream_access"))
       info_.UpdateVecLen(op);
   }
 };
@@ -816,17 +832,12 @@ void CodeGenC7x::PrintVecBinaryOp(const std::string& op, DataType t, PrimExpr lh
 
 // adapted from CodegenC
 void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*)
-  if (is_call_extern(op->index, "c7x_stream_access")) { 
-    // @tir.call_extern("c7x_stream_access", config_var, "pred", "adv", ...)
-    const CallNode* call = Downcast<Call>(op->index).get();
-    const VarNode* ConfigVar = Downcast<Var>(call->args[1]).get();
-    const std::string& adv = Downcast<StringImm>(call->args[3])->value;
-    const StreamDesc& desc = stream_info_.GetDesc(ConfigVar);
-
+  if (is_call_builtin(op->index, "tir.c7x.stream_access")) {
+    StreamAccess access(op->index.as<CallNode>());
+    const StreamDesc& desc = stream_info_.GetDesc(access.config_var);
     // example: __SE0_ADV(float16)
     os << "__" << desc.engine;
-    if (adv == "adv")
-      os << "ADV";
+    if (access.adv) os << "ADV";
     os << "(";
     PrintType(op->dtype, os);
     os << ")";
@@ -878,22 +889,15 @@ void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*
 void CodeGenC7x::VisitStmt_(const StoreNode* op) {
   //stream << "// VisitStmt<StoreNode>\n";
   DataType t = op->value.dtype();
-  if (is_call_extern(op->index, "c7x_stream_access")) { 
-    // @tir.call_extern("c7x_stream_access", config_var, "pred", "adv", ...)
-    std::string vid = GetVarID(op->buffer_var.get());
+  if (is_call_builtin(op->index, "tir.c7x.stream_access")) {
+    StreamAccess access(op->index.as<CallNode>());
+    const StreamDesc& desc = stream_info_.GetDesc(access.config_var);
+    std::string vid = GetVarID(Downcast<Var>(op->buffer_var).get());
     std::string rhs_value = this->PrintExpr(op->value);
-
-    const CallNode* call = Downcast<Call>(op->index).get();
-    const VarNode* config_var = Downcast<Var>(call->args[1]).get();
-    const std::string& pred = Downcast<StringImm>(call->args[2])->value;
-    const std::string& adv = Downcast<StringImm>(call->args[3])->value;
-    const StreamDesc& desc = stream_info_.GetDesc(config_var); 
-
     // example: __SA0ADV(float16, ptr)
     std::ostringstream sa_os;
     sa_os << "__" << desc.engine;
-    if (adv == "adv")
-      sa_os << "ADV";
+    if (access.adv) sa_os << "ADV";
     sa_os << "(";
     PrintType(t, sa_os);
     sa_os << ", " << vid << ")";
@@ -903,7 +907,7 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
     //   float16 value = <rhs expression>
     //   __vpred pred = __SA0_VPRED(float16);
     //   __vstore_pred(pred, __SA0ADV(float16, ptr), value);
-    if (pred == "pred") {
+    if (access.pred) { 
       auto rhs_var = Var("value", t);
       auto pred_var = Var("pred", DataType::Handle());
 
@@ -922,7 +926,7 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
                                  << sa_os.str() << ", "
 				 << GetVarID(rhs_var.get()) << ");\n";
     }
-    // no predication: just generate __SA0ADV(float16, ptr)
+    // no predication: just generate *__SA0ADV(float16, ptr) = rhs;
     else { 
       this->PrintIndent();
       stream << "*" << sa_os.str() << " = " << rhs_value << ";\n";
