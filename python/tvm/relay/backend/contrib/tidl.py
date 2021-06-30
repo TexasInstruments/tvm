@@ -1376,15 +1376,7 @@ class TIDLImport:
         self.params_16bit_names_list = params_16bit_names_list
         self.info_dict = {}
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
-
-        # Prepare for import
         self.temp_folder = os.path.join(artifacts_folder, 'tempDir/')
-        os.makedirs(self.temp_folder, exist_ok=True)
-        for root, dirs, files in os.walk(self.temp_folder, topdown=False):
-            for f in files:
-                os.remove(os.path.join(root, f))
-            for d in dirs:
-                os.rmdir(os.path.join(root, d))
 
     def tidl_import_conv2d(self, this_node, params):
         r""" Import conv2d operator to TIDL
@@ -1978,8 +1970,6 @@ class TIDLImport:
         -1: if TIDL import fails
         0: if there are no subgraphs for TIDL offload
         """
-        with open(os.path.join(self.temp_folder, "relay_graph.import.txt"), "w") as relay_txt:
-            print(mod.astext(show_meta_data=False), file=relay_txt)
 
         # Generate svg for partitined graph
         visualize_relay_graph(module=mod, filename=self.temp_folder+'/relay.gv')
@@ -3035,6 +3025,14 @@ class TIDLCompiler:
         data_layout = find_data_layout(mod_orig)
         has_qnn_ops = find_qnn_ops(mod_orig)
 
+        # Initialize the temp folder
+        os.makedirs(self.temp_folder, exist_ok=True)
+        for root, dirs, files in os.walk(self.temp_folder, topdown=False):
+            for f in files:
+                os.remove(os.path.join(root, f))
+            for d in dirs:
+                os.rmdir(os.path.join(root, d))
+
         # Open TIDL import library
         if os.path.exists(self.tidl_import_lib):
             import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
@@ -3054,6 +3052,8 @@ class TIDLCompiler:
         tidl_annotation.register_allowed_ops()
 
         #============= Prepare graph for partitioning =============
+        with open(os.path.join(self.temp_folder, "relay_graph.orig.txt"), "w") as relay_txt:
+            print(mod_orig.astext(show_meta_data=False), file=relay_txt)
         mod = relay.transform.RemoveUnusedFunctions()(mod_orig)
         # Bind params so that weights will appear as constants instead of variables
         mod['main'] = relay.build_module.bind_params_by_name(mod['main'], params)
@@ -3067,8 +3067,8 @@ class TIDLCompiler:
             mod['main'] = RemoveIdentityClip().visit(mod['main'])
         # Removing redundant outputs
         mod = relay.transform.EliminateCommonSubexpr()(mod)
-        #print("----------- original graph-----------")
-        #print(mod.astext(show_meta_data=False))
+        with open(os.path.join(self.temp_folder, "relay_graph.prepared.txt"), "w") as relay_txt:
+            print(mod.astext(show_meta_data=False), file=relay_txt)
 
         #============= Reject dynamic shape/network for now ==============
         if find_dynamic_shape(mod):
@@ -3078,14 +3078,14 @@ class TIDLCompiler:
         #============= Graph annotation ==============
         mod = tidl_annotation.merge_sequential_ops(mod)
         mod = relay.transform.AnnotateTarget(self.tidl_target)(mod)
-        #print("----------- annotated graph-----------")
-        #print(mod.astext(show_meta_data=False))
+        with open(os.path.join(self.temp_folder, "relay_graph.annotated.txt"), "w") as relay_txt:
+            print(mod.astext(show_meta_data=False), file=relay_txt)
 
         #============= Graph partition ==============
         mod = relay.transform.MergeCompilerRegions()(mod)
         mod = relay.transform.PartitionGraph()(mod)
-        #print("-----------initial partitioned graph-----------")
-        #print(mod.astext(show_meta_data=False))
+        with open(os.path.join(self.temp_folder, "relay_graph.partitioned.txt"), "w") as relay_txt:
+            print(mod.astext(show_meta_data=False), file=relay_txt)
         if self.tidl_platform == "AM57":
             mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
             mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
@@ -3119,8 +3119,8 @@ class TIDLCompiler:
                 mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs
                 mod = relay.transform.InferType()(mod)
 
-        #print("-----------final partitioned graph-----------")
-        #print(mod.astext(show_meta_data=False))
+        with open(os.path.join(self.temp_folder, "relay_graph.import.txt"), "w") as relay_txt:
+            print(mod.astext(show_meta_data=False), file=relay_txt)
 
         #================ Import the graph to TIDL =====================
         if self.tidl_tools_path is not None:
