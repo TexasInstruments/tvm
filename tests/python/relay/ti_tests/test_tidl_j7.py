@@ -57,16 +57,16 @@ def restore_outputs(fds):
     os.close(fds[0])
 
 def get_compiler_path():
-    arm_gcc_path = os.getenv("ARM_GCC_PATH")
+    arm_gcc_path = os.getenv("ARM64_GCC_PATH")
     if arm_gcc_path is None:
-        print("Environment variable ARM_GCC_PATH is not set! Model won't be compiled!")
+        print("Environment variable ARM64_GCC_PATH is not set! Model won't be compiled!")
         return None
     else:
-        arm_gcc = os.path.join(arm_gcc_path, "aarch64-none-linux-gnu-g++")
+        arm_gcc = os.path.join(arm_gcc_path, "bin", "aarch64-none-linux-gnu-g++")
         if os.path.exists(arm_gcc):
             return arm_gcc
         else:
-            print("ARM GCC aarch64-none-linux-gnu-g++ does not exist! Model won't be compiled!")
+            print("ARM64 GCC aarch64-none-linux-gnu-g++ does not exist! Model won't be compiled!")
             return None
 
 def get_tidl_tools_path():
@@ -98,8 +98,13 @@ def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgra
         Status of compilation:
             1  - compilation for TIDL offload succeeded
             -1 - compilation for TIDL offload failed - failure for CI testing
-            0  - no compilation due to missing TIDL tools or GCC ARM tools
+            0  - no compilation due to missing TIDL tools or ARM64 GCC tools
     """
+    if args.target:
+        arm_gcc = get_compiler_path()
+        if arm_gcc is None:
+            print("Skip build because ARM64_GCC_PATH is not set")
+            return 0  # No graph compilation
 
     tidl_platform = "J7"   # or "AM57"
     tidl_version = "7.3"   # corresponding Processor SDK version
@@ -124,12 +129,6 @@ def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgra
         mod, status = mod_orig, 0
     else:
         mod, status = tidl_compiler.enable(mod_orig, params, model_input_list)
-
-    if args.target:
-        arm_gcc = get_compiler_path()
-        if arm_gcc is None:
-            print("Skip build because ARM_GCC_PATH is not set")
-            return 0  # No graph compilation
 
     if status == 1: # TIDL compilation succeeded
         print("Graph execution with TIDL")
