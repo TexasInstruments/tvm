@@ -572,6 +572,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
              return TIDLRT_Int16;
            case 32:
              return TIDLRT_Int32;
+           case 64:
+             return TIDLRT_Int64;
            default:
              LOG(FATAL) << "Invalid bit size (" << dtype.bits << ") for int\n";
              return -1;
@@ -585,6 +587,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
              return TIDLRT_Uint16;
            case 32:
              return TIDLRT_Uint32;
+           case 64:
+             return TIDLRT_Uint64;
            default:
              LOG(FATAL) << "Invalid bit size (" << dtype.bits << ") for uint\n";
              return -1;
