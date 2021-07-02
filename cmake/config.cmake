@@ -236,8 +236,8 @@ set(USE_TENSORRT_RUNTIME OFF)
 # Whether use VITIS-AI codegen
 set(USE_VITIS_AI OFF)
 
-# Build Verilator codegen and runtime, example located in 3rdparty/vta-hw/apps/verilator
-set(USE_VERILATOR_HW OFF)
+# Build Verilator codegen and runtime
+set(USE_VERILATOR OFF)
 
 # Build ANTLR parser for Relay text format
 # Possible values:
@@ -280,3 +280,6 @@ set(USE_TIDL OFF)
 
 # Whether to use ONNX codegen
 set(USE_TARGET_ONNX OFF)
+
+# Whether to enable MLAS library that provides sgemm pre-packing optimization
+set(USE_MLAS OFF)

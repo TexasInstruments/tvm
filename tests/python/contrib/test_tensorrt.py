@@ -27,6 +27,7 @@ from tvm.relay.op.contrib import tensorrt
 from tvm.contrib import graph_runtime, utils
 from tvm.runtime.vm import VirtualMachine
 from tvm.relay import Any, GlobalVar, transform
+from tvm.relay.expr_functor import ExprVisitor
 from typing import Dict, Tuple, Union
 from tvm.contrib.download import download
 from tvm.relay.op.contrib import tensorrt
@@ -226,7 +227,7 @@ def test_tensorrt_not_compatible():
 
     x = relay.var("x", shape=(xshape), dtype=dtype)
     y = relay.add(x, x)
-    z = relay.erf(y)
+    z = relay.cast(relay.cast(y, "int32"), "float32")
     out = relay.nn.relu(z)
     f = relay.Function([x], out)
     mod = tvm.IRModule()
@@ -460,6 +461,17 @@ def test_dense():
     run_and_verify_func(get_graph(k_shape=(1, 16)))
 
 
+def test_batch_matmul():
+    def get_graph(x_shape=(12, 128, 64), y_shape=(12, 128, 64)):
+        x = relay.var("x", shape=(x_shape), dtype="float32")
+        y = relay.var("y", shape=(y_shape), dtype="float32")
+        out = relay.nn.batch_matmul(x, y)
+        f = relay.Function([x, y], out)
+        return f, {"x": x_shape, "y": y_shape}, []
+
+    run_and_verify_func(get_graph())
+
+
 def test_bias_add():
     def get_graph(x_shape=(1, 16), channels=16):
         x = relay.var("x", shape=(x_shape), dtype="float32")
@@ -631,6 +643,106 @@ def test_reshape():
     run_and_verify_func(get_graph((1, 1, 2, 3), (1, 6)))
 
 
+class AreOpsOnGraph(ExprVisitor):
+    """
+    Visits the Graph recursively and checks if it contains ops in the op_list
+    """
+
+    def __init__(self, op_list):
+        ExprVisitor.__init__(self)
+        self.op_list = op_list
+        self.on_graph = False
+
+    def visit_call(self, call):
+        if isinstance(call.op, tvm.tir.op.Op):
+            if str(call.op) in self.op_list:
+                self.on_graph = True
+
+        return super().visit_call(call)
+
+    def are_ops_on_graph(self, subgraph) -> bool:
+        """
+        This function recursively visits the graph and checks if op_list ops are ongraph"
+        """
+        self.visit(subgraph)
+        return self.on_graph
+
+
+def are_ops_on_trt(mod, op_list):
+    for subgraph in mod.get_global_vars():
+        name = subgraph.name_hint
+        op_on_trt = False
+        op_on_tvm = True
+        if name == "main":
+            op_on_tvm = AreOpsOnGraph(op_list).are_ops_on_graph(mod[name].body)
+        elif mod[name].attrs and mod[name].attrs["Compiler"] == "tensorrt":
+            op_on_trt = AreOpsOnGraph(op_list).are_ops_on_graph(mod[name].body)
+        else:
+            op_on_tvm &= AreOpsOnGraph(op_list).are_ops_on_graph(mod[name].body)
+
+        if not op_on_trt or op_on_tvm:
+            return False
+
+    return True
+
+
+def test_dynamic_reshape():
+    if skip_codegen_test():
+        return
+
+    def test_run(x_data_list, x_shape, new_shape, should_offload_to_trt):
+        result_arr = [{} for _ in range(len(x_data_list))]
+        for use_trt in [True, False]:
+            x = relay.var("x", shape=x_shape, dtype="float32")
+            out = relay.reshape(x, new_shape)
+            f = relay.Function([x], out)
+            mod = tvm.IRModule()
+            mod["main"] = f
+            if use_trt:
+                mod, _ = tensorrt.partition_for_tensorrt(
+                    mod, params={}, remove_no_mac_subgraphs=False
+                )
+                assert are_ops_on_trt(mod, op_list=["reshape"]) == should_offload_to_trt
+            if not skip_runtime_test():
+                with relay.build_config(opt_level=3):
+                    relay_exec = relay.create_executor("vm", mod=mod, ctx=tvm.cpu(0), target="llvm")
+
+                for i, x_data in enumerate(x_data_list):
+                    result_arr[i][use_trt] = relay_exec.evaluate()(x_data)
+
+        if not skip_runtime_test():
+            for i in range(len(x_data_list)):
+                assert_result_dict_holds(result_arr[i])
+
+    dim_values = [1, 1, 0, 2, 3, 0, 1, 3, 2]
+    x_shape = (relay.Any(), 3, 2, 3)
+    x_data_list = [
+        np.ones([dim_value] + list(x_shape)[1:]).astype("float32") for dim_value in dim_values
+    ]
+    new_shape = (-1, 3, 2, 3)
+    should_offload_to_trt = True
+    test_run(x_data_list, x_shape, new_shape, should_offload_to_trt)
+
+    dim_values = [1, 1, 0, 2, 3, 0, 1, 3, 2]
+    x_shape = (relay.Any(), 3, 2, 3)
+    x_data_list = [
+        np.ones([dim_value] + list(x_shape)[1:]).astype("float32") for dim_value in dim_values
+    ]
+    new_shape = (-1, 1, 2, 3)
+    should_offload_to_trt = False
+    test_run(x_data_list, x_shape, new_shape, should_offload_to_trt)
+
+    dim_values = [1, 1, 0, 2, 3, 0, 1, 3, 2]
+    x_shape = (1, relay.Any(), 2, 3)
+    x_data_list = [
+        np.ones(list(x_shape[:1]) + [dim_value] + list(x_shape)[2:]).astype("float32")
+        for dim_value in dim_values
+    ]
+    new_shape = (1, -1, 2, 3)
+    should_offload_to_trt = False
+    test_run(x_data_list, x_shape, new_shape, should_offload_to_trt)
+
+
 def test_transpose():
     def get_graph(x_shape, order):
         x = relay.var("x", shape=(x_shape), dtype="float32")
@@ -720,6 +832,36 @@ def test_batch_norm():
     run_and_verify_func(get_graph((1, 3, 8), (8,), axis=2))
 
 
+def test_layer_norm():
+    def get_graph(x_shape, param_shape, axis=1, epsilon=1e-5):
+        x = relay.var("x", shape=(x_shape), dtype="float32")
+        gamma = relay.var("gamma", shape=(param_shape), dtype="float32")
+        beta = relay.var("beta", shape=(param_shape), dtype="float32")
+        out = relay.nn.layer_norm(
+            x,
+            gamma=gamma,
+            beta=beta,
+            axis=axis,
+            epsilon=epsilon,
+            center=True,
+            scale=True,
+        )
+        f = relay.Function([x, gamma, beta], out)
+        return (
+            f,
+            {
+                "x": x_shape,
+                "beta": param_shape,
+                "gamma": param_shape,
+            },
+            ["beta", "gamma"],
+        )
+
+    run_and_verify_func(get_graph((1, 32, 8, 8), (32,)))
+    run_and_verify_func(get_graph((1, 8, 8, 32), (32,), axis=3, epsilon=1.001e-05))
+    run_and_verify_func(get_graph((1, 8), (8,), axis=1))
+
+
 def test_unary():
     def get_graph(op, x_shape=(1, 8, 3, 3)):
         x = relay.var("x", shape=(x_shape), dtype="float32")
@@ -741,6 +883,7 @@ def test_unary():
         relay.atan,
         relay.ceil,
         relay.floor,
+        relay.erf,
     ]:
         run_and_verify_func(get_graph(op))
 
@@ -1083,12 +1226,12 @@ def test_tensorrt_dynamic_batch():
 def test_tensorrt_dynamic_batch_conv():
     if skip_codegen_test():
         return
-    batches_to_test = [1, 1, 0, 2, 3, 0, 1, 3, 2]
+    batches_to_test = [1, 5, 1, 0, 2, 3, 0, 1, 3, 2]
     x_shape = (relay.Any(), 32, 8, 8)
     x_data = np.ones([max(batches_to_test)] + list(x_shape)[1:]).astype("float32")
     k_shape = (16, 32, 3, 3)
     params = {"kernel": np.random.uniform(-1, 1, k_shape).astype("float32")}
-    result_arr = [{} for _ in range(len(batches_to_test))]
+    result_arr = [{"cuda": {}, "llvm": {}} for _ in range(len(batches_to_test))]
     for use_trt in [True, False]:
         x = relay.var("x", shape=x_shape, dtype="float32")
         kernel = relay.var("kernel", shape=k_shape, dtype="float32")
@@ -1100,15 +1243,21 @@ def test_tensorrt_dynamic_batch_conv():
             mod, _ = tensorrt.partition_for_tensorrt(mod, params)
 
         if not skip_runtime_test():
-            with relay.build_config(opt_level=3):
-                relay_exec = relay.create_executor("vm", mod=mod, ctx=tvm.cpu(0), target="llvm")
+            for target in ["llvm", "cuda"]:
+                with relay.build_config(opt_level=3):
+                    relay_exec = relay.create_executor(
+                        "vm", mod=mod, ctx=tvm.cpu(0), target="llvm"
+                    )
 
-            for i, batch_size in enumerate(batches_to_test):
-                result_arr[i][use_trt] = relay_exec.evaluate()(x_data[:batch_size, ...], **params)
+                for i, batch_size in enumerate(batches_to_test):
+                    result_arr[i][target][use_trt] = relay_exec.evaluate()(
+                        x_data[:batch_size, ...], **params
+                    )
 
     if not skip_runtime_test():
         for i in range(len(batches_to_test)):
-            assert_result_dict_holds(result_arr[i])
+            for target in ["llvm", "cuda"]:
+                assert_result_dict_holds(result_arr[i][target])
 
 
 def test_maskrcnn_resnet50() -> None:

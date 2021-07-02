@@ -85,6 +85,7 @@ tvm_option(USE_TENSORRT_CODEGEN "Build with TensorRT Codegen support" OFF)
 tvm_option(USE_TENSORRT_RUNTIME "Build with TensorRT runtime" OFF)
 tvm_option(USE_RUST_EXT "Build with Rust based compiler extensions, STATIC, DYNAMIC, or OFF" OFF)
 tvm_option(USE_VITIS_AI "Build with VITIS-AI Codegen support" OFF)
+tvm_option(USE_MLAS "Build with MLAS library" OFF)
 
 # include directories
 include_directories(${CMAKE_INCLUDE_PATH})
@@ -134,6 +135,12 @@ if(MSVC)
   add_compile_options(/wd4180)
   # DLL interface warning in c++
   add_compile_options(/wd4251)
+  # destructor was implicitly defined as deleted
+  add_compile_options(/wd4624)
+  # unary minus operator applied to unsigned type, result still unsigned
+  add_compile_options(/wd4146)
+  # 'inline': used more than once
+  add_compile_options(/wd4141)
 else(MSVC)
 
   if(USE_TF_COMPILE_FLAGS)
@@ -146,6 +153,7 @@ else(MSVC)
     string(REGEX REPLACE "\n" "" TF_COMPILE_FLAGS "${TF_COMPILE_FLAGS}")
     message("Use TensorFlow Compile flags=\"${TF_COMPILE_FLAGS}\"")
     set(CMAKE_CXX_FLAGS "${TF_COMPILE_FLAGS} ${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CUDA_FLAGS "${TF_COMPILE_FLAGS} ${CMAKE_CUDA_FLAGS}")
   endif(USE_TF_COMPILE_FLAGS)
 
   set(WARNING_FLAG -Wall)
@@ -168,7 +176,6 @@ else(MSVC)
       CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.0)
     set(CMAKE_CXX_FLAGS "-faligned-new ${CMAKE_CXX_FLAGS}")
   endif()
-  include(cmake/modules/ClangFlags.cmake)
 
   # Detect if we're compiling for Hexagon.
   set(TEST_FOR_HEXAGON_CXX
@@ -376,6 +383,7 @@ include(cmake/modules/contrib/Verilator.cmake)
 include(cmake/modules/Git.cmake)
 include(cmake/modules/LibInfo.cmake)
 include(cmake/modules/RustExt.cmake)
+include(cmake/modules/contrib/MLAS.cmake)
 
 include(CheckCXXCompilerFlag)
 if(NOT MSVC)
@@ -392,13 +400,13 @@ add_lib_info(${CMAKE_CURRENT_LIST_DIR}/src/support/libinfo.cc)
 
 # TODO(trevmorr): Update tvm_runtime_static to match other targets
 add_library(tvm_runtime_static STATIC ${RUNTIME_SRCS})
-add_library(tvm_objs OBJECT ${COMPILER_SRCS} ${RUNTIME_SRCS})
+add_library(tvm_objs OBJECT ${COMPILER_SRCS})
 add_library(tvm_runtime_objs OBJECT ${RUNTIME_SRCS})
 
-add_library(tvm SHARED $<TARGET_OBJECTS:tvm_objs>)
-set_property(TARGET tvm APPEND PROPERTY LINK_OPTIONS "${TVM_VISIBILITY_FLAGS}")
+add_library(tvm SHARED $<TARGET_OBJECTS:tvm_objs> $<TARGET_OBJECTS:tvm_runtime_objs>)
+set_property(TARGET tvm APPEND PROPERTY LINK_OPTIONS "${TVM_VISIBILITY_FLAG}")
 add_library(tvm_runtime SHARED $<TARGET_OBJECTS:tvm_runtime_objs>)
-set_property(TARGET tvm_runtime APPEND PROPERTY LINK_OPTIONS "${TVM_VISIBILITY_FLAGS}")
+set_property(TARGET tvm_runtime APPEND PROPERTY LINK_OPTIONS "${TVM_VISIBILITY_FLAG}")
 
 if(USE_MICRO)
   # NOTE: cmake doesn't track dependencies at the file level across subdirectories. For the
@@ -415,16 +423,21 @@ if(USE_RELAY_DEBUG)
   message(STATUS "Building Relay in debug mode...")
   target_compile_definitions(tvm_objs PRIVATE "USE_RELAY_DEBUG")
   target_compile_definitions(tvm_objs PRIVATE "DMLC_LOG_DEBUG")
+  target_compile_definitions(tvm_runtime_objs PRIVATE "USE_RELAY_DEBUG")
+  target_compile_definitions(tvm_runtime_objs PRIVATE "DMLC_LOG_DEBUG")
 else()
   target_compile_definitions(tvm_objs PRIVATE "NDEBUG")
+  target_compile_definitions(tvm_runtime_objs PRIVATE "NDEBUG")
 endif(USE_RELAY_DEBUG)
 
 if(USE_FALLBACK_STL_MAP)
   message(STATUS "Building with STL Map...")
   target_compile_definitions(tvm_objs PRIVATE "USE_FALLBACK_STL_MAP=1")
+  target_compile_definitions(tvm_runtime_objs PRIVATE "USE_FALLBACK_STL_MAP=1")
 else()
   message(STATUS "Building with TVM Map...")
   target_compile_definitions(tvm_objs PRIVATE "USE_FALLBACK_STL_MAP=0")
+  target_compile_definitions(tvm_runtime_objs PRIVATE "USE_FALLBACK_STL_MAP=0")
 endif(USE_FALLBACK_STL_MAP)
 
 if(BUILD_FOR_HEXAGON)
@@ -451,6 +464,9 @@ endif()
 target_link_libraries(tvm PRIVATE ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS})
 target_link_libraries(tvm_runtime PRIVATE ${TVM_RUNTIME_LINKER_LIBS})
 
+# Set flags for clang
+include(cmake/modules/ClangFlags.cmake)
+
 # Related headers
 target_include_directories(
   tvm
@@ -468,7 +484,7 @@ target_include_directorieS(
 
 set(TVM_TEST_LIBRARY_NAME tvm)
 if (HIDE_PRIVATE_SYMBOLS AND NOT ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-  add_library(tvm_allvisible SHARED $<TARGET_OBJECTS:tvm_objs>)
+  add_library(tvm_allvisible SHARED $<TARGET_OBJECTS:tvm_objs> $<TARGET_OBJECTS:tvm_runtime_objs>)
   target_include_directories(tvm_allvisible PUBLIC "$<TARGET_PROPERTY:tvm,INCLUDE_DIRECTORIES>")
   target_link_libraries(tvm_allvisible PRIVATE "$<TARGET_PROPERTY:tvm,LINK_LIBRARIES>")
   set(TVM_TEST_LIBRARY_NAME tvm_allvisible)

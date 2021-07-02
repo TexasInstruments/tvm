@@ -54,7 +54,6 @@ def check_result(
     for kind in ["debug", "vm"]:
         targets = targets or tvm.testing.enabled_targets()
         for tgt, ctx in targets:
-            print(tgt)
             if disable_targets and tgt in disable_targets:
                 continue
             if kind == "debug" and (only_vm or ctx.device_type != tvm.cpu().device_type):
@@ -120,6 +119,7 @@ def test_any_elemwise():
     verify_any_elemwise((relay.Any(),), (3,), relay.sqrt, np.sqrt)
     verify_any_elemwise((relay.Any(), 2), (5, 2), relay.negative, np.negative)
     verify_any_elemwise((relay.Any(), relay.Any()), (5, 4), relay.exp, np.exp)
+    verify_any_elemwise((relay.Any(),), (3,), relay.round, np.round)
 
 
 @tvm.testing.uses_gpu
@@ -207,6 +207,27 @@ def test_any_concat():
     x_np = [np.random.uniform(size=(1,)).astype("float32") for _ in range(num_inputs)]
     ref = np.concatenate(x_np, axis=0)
     check_result(x_np, mod, ref)
+
+    def test_oshape(in_vars, axis, oshape):
+        z = relay.op.concatenate(in_vars, axis=axis)
+        mod = tvm.IRModule()
+        mod["main"] = relay.Function(in_vars, z)
+        typed_mod = relay.transform.InferType()(mod)
+        assert typed_mod["main"].body.checked_type == relay.TensorType(oshape, dtype="float32")
+
+    x = [relay.var("x", shape=(relay.Any(), 3), dtype="float32") for _ in range(3)]
+    x.append(relay.var("x", shape=(relay.Any(), relay.Any()), dtype="float32"))
+
+    test_oshape(x, 0, (relay.Any(), 3))
+    test_oshape(x, 1, (relay.Any(), relay.Any()))
+
+    # [(1, 3), (1, ?)] -> (2, ?)
+    x = [
+        relay.var("x", shape=(1, 3), dtype="float32"),
+        relay.var("x", shape=(1, relay.Any()), dtype="float32"),
+    ]
+    test_oshape(x, 0, (2, relay.Any()))
+    test_oshape(x, 1, (1, relay.Any()))
 
 
 def verify_any_reshape(x_shape, newshape, x_np_shape, out_shape, variable_newshape=False):

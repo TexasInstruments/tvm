@@ -38,9 +38,15 @@ from .transform import *
 from .broadcast import *
 from .sort import *
 from .scatter import *
+from .sparse_fill_empty_rows import *
+from .sparse_reshape import *
 from .scatter_add import *
 from .argwhere import *
 from .interpolate import *
+from .cumsum import *
+from .einsum import *
+from .unique import *
+from .mlas_op import *
 from . import generic
 from . import nn
 from . import x86

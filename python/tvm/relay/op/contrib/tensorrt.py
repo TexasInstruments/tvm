@@ -304,6 +304,7 @@ _register_external_op_helper_with_checker("sin", trt_version_annotate_fn((5, 1, 
 _register_external_op_helper_with_checker("cos", trt_version_annotate_fn((5, 1, 5)))
 _register_external_op_helper_with_checker("atan", trt_version_annotate_fn((5, 1, 5)))
 _register_external_op_helper_with_checker("ceil", trt_version_annotate_fn((5, 1, 5)))
+_register_external_op_helper_with_checker("erf", trt_version_annotate_fn((7, 0, 0)))
 
 
 @_register_external_dynamic_check_func("add")
@@ -406,6 +407,34 @@ def dense_annotate_fn(expr):  # pylint: disable=unused-variable
         return False
     if weight_rank != 2:
         logger.info("nn.dense: weight has rank %d but must be 2.", weight_rank)
+        return False
+    return True
+
+
+@_register_external_dynamic_check_func("nn.batch_matmul")
+def batch_matmul_annotate_fn(expr):
+    """Check if dense is supported by TensorRT."""
+
+    if any([x.checked_type.dtype != "float32" for x in expr.args]):
+        logger.info("Only float32 inputs are supported for TensorRT.")
+        return False
+    if get_tensorrt_use_implicit_batch_mode() and len(expr.args[0].checked_type.shape) != len(
+        expr.args[1].checked_type.shape
+    ):
+        logger.info("nn.batch_matmul: requires use_implict_batch=False.")
+        return False
+    return True
+
+
+@_register_external_dynamic_check_func("nn.layer_norm")
+def layer_norm_annotate_fn(expr):
+    """Check if dense is supported by TensorRT."""
+
+    if any([x.checked_type.dtype != "float32" for x in expr.args]):
+        logger.info("Only float32 inputs are supported for TensorRT.")
+        return False
+    if get_tensorrt_use_implicit_batch_mode() and int(expr.attrs.axis) == 0:
+        logger.info("nn.layer_norm: requires use_implict_batch=False.")
         return False
     return True
 
@@ -615,7 +644,6 @@ def layout_transform_annotate_fn(expr):  # pylint: disable=unused-variable
 @_register_external_dynamic_check_func("reshape")
 def reshape_annotate_fn(expr):  # pylint: disable=unused-variable
     """Check if reshape is supported by TensorRT."""
-
     attrs, args = expr.attrs, expr.args
     if args[0].checked_type.dtype != "float32":
         logger.info("Only float32 inputs are supported for TensorRT.")
@@ -629,23 +657,23 @@ def reshape_annotate_fn(expr):  # pylint: disable=unused-variable
         if len(new_shape) == 0 or len(shape) == 0:
             logger.info("reshape: Can't reshape to or from scalar.")
             return False
-
         dynamic_reshape = any([isinstance(x, tvm.tir.expr.Any) for x in shape])
 
         if dynamic_reshape:
             # Make sure that the batch dim is unmodified.
             if int(new_shape[0]) < 0:
-                for shape_val, new_shape_val in enumerate(shape[1:], new_shape[1:]):
+                for shape_val, new_shape_val in zip(shape[1:], new_shape[1:]):
                     if not (
-                        isinstance(shape_val, int)
-                        and isinstance(new_shape_val, int)
+                        isinstance(shape_val, (int, tvm.tir.expr.IntImm))
+                        and isinstance(new_shape_val, (int, tvm.tir.expr.IntImm))
                         and int(shape_val) == int(new_shape_val)
                     ):
                         return False
             elif int(new_shape[0]) > 0:
+                # Currently we only allow dim[0] to be Any, so this branch will always be False
                 if not (
-                    isinstance(shape[0], int)
-                    and isinstance(new_shape[0], int)
+                    isinstance(shape[0], (int, tvm.tir.expr.IntImm))
+                    and isinstance(new_shape[0], (int, tvm.tir.expr.IntImm))
                     and int(shape[0]) == int(new_shape[0])
                 ):
                     return False

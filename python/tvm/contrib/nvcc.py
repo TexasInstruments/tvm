@@ -89,6 +89,12 @@ def compile_cuda(code, target="ptx", arch=None, options=None, path_target=None):
     cmd += ["-o", file_target]
     cmd += [temp_code]
 
+    cxx_compiler_path = tvm.support.libinfo().get("TVM_CXX_COMPILER_PATH")
+    if cxx_compiler_path != "":
+        # This tells nvcc where to find the c++ compiler just in case it is not in the path.
+        # On Windows it is not in the path by default.
+        cmd += ["-ccbin", cxx_compiler_path]
+
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
     (out, _) = proc.communicate()
@@ -186,7 +192,7 @@ def find_libdevice_path(arch):
     selected_ver = 0
     selected_path = None
     cuda_ver = get_cuda_version(cuda_path)
-    if cuda_ver in (9.0, 9.1, 10.0, 10.1, 10.2, 11.0, 11.1):
+    if cuda_ver in (9.0, 9.1, 10.0, 10.1, 10.2, 11.0, 11.1, 11.2):
         path = os.path.join(lib_path, "libdevice.10.bc")
     else:
         for fn in os.listdir(lib_path):
@@ -208,6 +214,47 @@ def callback_libdevice_path(arch):
     except RuntimeError:
         warnings.warn("Cannot find libdevice path")
         return ""
+
+
+def get_target_compute_version(target=None):
+    """Utility function to get compute capability of compilation target.
+
+    Looks for the arch in three different places, first in the target attributes, then the global
+    scope, and finally the GPU device (if it exists).
+
+    Parameters
+    ----------
+    target : tvm.target.Target, optional
+        The compilation target
+
+    Returns
+    -------
+    compute_version : str
+        compute capability of a GPU (e.g. "8.0")
+    """
+    # 1. Target
+    if target:
+        if "arch" in target.attrs:
+            compute_version = target.attrs["arch"]
+            major, minor = compute_version.split("_")[1]
+            return major + "." + minor
+
+    # 2. Global scope
+    from tvm.autotvm.env import AutotvmGlobalScope  # pylint: disable=import-outside-toplevel
+
+    if AutotvmGlobalScope.current.cuda_target_arch:
+        major, minor = AutotvmGlobalScope.current.cuda_target_arch.split("_")[1]
+        return major + "." + minor
+
+    # 3. GPU
+    if tvm.gpu(0).exist:
+        return tvm.gpu(0).compute_version
+
+    warnings.warn(
+        "No CUDA architecture was specified or GPU detected."
+        "Try specifying it by adding '-arch=sm_xx' to your target."
+    )
+    return None
 
 
 def parse_compute_version(compute_version):
