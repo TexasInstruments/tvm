@@ -799,12 +799,9 @@ class Pad(OnnxOpConverter):
         pad_width_expr = _op.transpose(_op.reshape(pads, (2, -1)))
         #TI: pads are always constants, manually transpose until fold_constant() fully works
         if isinstance(pads, tvm.relay.Var):
-            pads = tuple(params[pads.name_hint].asnumpy().astype("int64"))
+            pads = params[pads.name_hint].asnumpy().astype("int64")
         dims = int(len(pads) / 2)
-        pad_width = []
-        for i in range(dims):
-            pad_width.append([pads[i], pads[i+dims]])
-        pad_width_expr = pad_width
+        pad_width_expr = [list(pair) for pair in zip(pads[:dims], pads[dims:])]
         #endTI
         pad_mode = attr.get("mode", b"constant").decode("utf-8")
 
