@@ -735,6 +735,10 @@ class RemoveIdentityClip(ExprMutator):
                call.checked_type.dtype == 'uint8' and \
                call.attrs.a_min == 0 and call.attrs.a_max == 255:
                 return super().visit_call(call.args[0])
+            if call.args[0].checked_type.dtype == 'int8' and \
+               call.checked_type.dtype == 'int8' and \
+               call.attrs.a_min == -128 and call.attrs.a_max == 127:
+                return super().visit_call(call.args[0])
         return super().visit_call(call)
 
 def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_index=0):
