@@ -108,6 +108,9 @@ def find_dynamic_shape(mod):
     return any(isinstance(node, relay.expr.Call) and check_dynamism(node.args, node.op.name)
                for node in all_nodes)
 
+def get_default_quantization():
+    return np.array(0, dtype=np.int32), np.array(1.0, dtype=np.float32)
+
 def convert_str_list_to_char_array(str_list):
     """ Convert list of strings to array of ctypes char * """
     char_array = (ctypes.c_char_p * len(str_list))()
@@ -298,7 +301,8 @@ def obtain_subgraph_tensor(subgraph_tensors_list, tensor_name_prefix):
     return tensors_list, names_list
 
 def obtain_tensor_quantization(names, relay_quantization):
-    r""" Obtain quantization for the named tensors"""
+    """ Obtain quantization for the named tensors, only per-tensor quantization is supported!
+    """
 
     zp_list = []
     scale_inv_list = []
@@ -306,9 +310,11 @@ def obtain_tensor_quantization(names, relay_quantization):
         if name in relay_quantization:
             zp, scale = relay_quantization[name]
         else:
-            zp, scale = 0, 1.0
-        zp_list.append(zp)
-        scale_inv_list.append(1.0 / scale)  ### TIDL uses inverse of TVM/Relay scale
+            zp, scale = get_default_quantization()
+        assert zp.size == 1 and scale.size == 1, \
+               f'Per-channel quantization on boundary input/output tensors not supported'
+        zp_list.append(zp.item())
+        scale_inv_list.append(1.0 / scale.item())  ### TIDL uses inverse of TVM/Relay scale
 
     return zp_list, scale_inv_list
 
@@ -755,19 +761,19 @@ def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_i
             if expr in node.args:
                 if node.op.name in ['qnn.conv2d', 'qnn.dense']:
                     if expr == node.args[0]:
-                        return node.args[2].data.asnumpy().item(),node.args[4].data.asnumpy().item()
+                        return node.args[2].data.asnumpy(), node.args[4].data.asnumpy()
                     elif expr == node.args[1]:
-                        return node.args[3].data.asnumpy().item(),node.args[5].data.asnumpy().item()
+                        return node.args[3].data.asnumpy(), node.args[5].data.asnumpy()
                 if node.op.name in ['qnn.add', 'qnn.mul']:
                     if expr == node.args[0]:
-                        return node.args[3].data.asnumpy().item(),node.args[2].data.asnumpy().item()
+                        return node.args[3].data.asnumpy(), node.args[2].data.asnumpy()
                     elif expr == node.args[1]:
-                        return node.args[5].data.asnumpy().item(),node.args[4].data.asnumpy().item()
+                        return node.args[5].data.asnumpy(), node.args[4].data.asnumpy()
                 if node.op.name == 'qnn.concatenate':
-                    return node.args[2].fields[field_index].data.asnumpy().item(), \
-                           node.args[1].fields[field_index].data.asnumpy().item()
-                if node.op.name == 'qnn.dequantize':
-                    return node.args[2].data.asnumpy().item(),node.args[1].data.asnumpy().item()
+                    return node.args[2].fields[field_index].data.asnumpy(), \
+                           node.args[1].fields[field_index].data.asnumpy()
+                if node.op.name in ['qnn.dequantize', 'qnn.requantize']:
+                    return node.args[2].data.asnumpy(), node.args[1].data.asnumpy()
                 if node.op.name in ['cast', 'reshape']:
                     return get_quantization(node, mod, all_nodes, inout_quant_dict)
         elif isinstance(node, relay.expr.Tuple):
@@ -777,27 +783,45 @@ def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_i
     assert False, 'Do not know how to get arg quantization for expr'
 
 def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
-    """ Get quantization (zp, scale) of the expr's output
+    """ Get quantization (zp, scale) of the expr's output from info embedded in Relay IR
         If expr is a CallNode, we can compute quantization directly
+    Parameters
+    ----------
+    expr : tvm.relay.Expr
+        Get quantization of the expr's output tensor
+    mod : tvm.IRModule
+        Module containing subgraphs using external codegen "compiler"
+    all_nodes : dict { node : index }
+        dictionary of nodes in the module to corresponding traversal indices
+    inout_quant_dict: dict { node : quantization }
+        dictionary of input/output nodes and their quantization, computed from unpartitioned graph
+
+    Returns
+    -------
+    quantization : (numpy.int32 or numpy.ndarray for zp, numpy.float32 or numpy.ndarray for scale)
+        Use numpy array so that (broadcasting) multiplication can be performed easily
+        For per-tensor quantization, zp and scale are arrays containing single scalar value
+        For per-axis/channel quantization, zp and/or scale are arrays containing vector of values
     """
     def get_known_quantization(expr):
         if isinstance(expr, relay.expr.Call):
             op_name = expr.op.name
             if op_name == 'qnn.requantize':
-                return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
+                return expr.args[4].data.asnumpy(), expr.args[3].data.asnumpy()
             elif op_name == 'qnn.quantize':
-                return expr.args[2].data.asnumpy().item(), expr.args[1].data.asnumpy().item()
+                return expr.args[2].data.asnumpy(), expr.args[1].data.asnumpy()
             elif op_name in ['qnn.conv2d', 'qnn.dense']:
-                return 0, expr.args[4].data.asnumpy().item() * expr.args[5].data.asnumpy().item()
+                return np.array(0, dtype=np.int32), \
+                       expr.args[4].data.asnumpy() * expr.args[5].data.asnumpy()
             elif op_name in ['qnn.add', 'qnn.mul']:
-                return expr.args[7].data.asnumpy().item(), expr.args[6].data.asnumpy().item()
+                return expr.args[7].data.asnumpy(), expr.args[6].data.asnumpy()
             elif op_name == 'qnn.concatenate':
-                return expr.args[4].data.asnumpy().item(), expr.args[3].data.asnumpy().item()
+                return expr.args[4].data.asnumpy(), expr.args[3].data.asnumpy()
         return None
 
     if isinstance(expr.checked_type, relay.ty.TensorType):
         if expr.checked_type.dtype == 'float32':
-            return 0, 1.0
+            return get_default_quantization()
         if expr in inout_quant_dict:
             return inout_quant_dict[expr]
         known_quantization = get_known_quantization(expr)
@@ -823,21 +847,59 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
                     return arg_quant
                 return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
             elif op_name == 'argmax':
-                return 0, 1.0
+                return get_default_quantization()
             else:
                 assert False, f'Do not know how to get quantization for {op_name}'
         else:
             return get_arg_quantization(expr, mod, all_nodes, inout_quant_dict)
     elif isinstance(expr.checked_type, relay.ty.TupleType):
         if expr.checked_type.fields[0].dtype == 'float32':
-            return 0, 1.0
+            return get_default_quantization()
         else:
             assert False, f'Do not yet support getting quantization for Tuple'
     else:
         assert False, f'Do not know how to get quantization for expr'
 
+def dequantize_tensor(tensor, zp, scale, data_layout):
+    """Dequantize tensor into floating point using zp and scale
+    Parameters
+    ----------
+    tensor: numpy.ndarray
+        input tensor (maybe quantized, if float, then zp will 0 and scale be 1.0)
+    zp: numpy.ndarray
+    scale: numpy.ndarray
+        contatins single scalar for zero-point/scale if per-tensor quantization,
+        contatins vector of  values for zero-points/scales if per-channel quantization,
+    data_layout: string
+        "NCHW" or "NHWC"
+    Returns
+    -------
+    dequantized : numpy.ndarray
+        dequantized tensor
+    """
+    dequantized = tensor.astype('float32')
+    if zp.size == 1 and scale.size == 1:      # per-tensor quantization
+        if zp.item() != 0 or scale.item() != 1.0:
+            dequantized = (tensor.astype('float32') - zp.item()) * scale.item()
+    elif len(tensor.shape) == 4:              # per-channel quantization on 4D tensor
+        num_ch = max(len(zp.shape), len(scale.shape))
+        if data_layout == "NHWC":
+            assert num_ch == tensor.shape[3], \
+                   f'Channels of tensor and quantization mismatch: {tensor.shape},{num_ch}'
+            dequantized = (tensor.astype('float32') - zp) * scale
+        else: # "NCHW"
+            assert num_ch == tensor.shape[1], \
+                   f'Channels of tensor and quantization mismatch: {tensor.shape},{num_ch}'
+            for ch in range(num_ch):
+                zp_ch = zp.item() if zp.size == 1 else zp[ch]
+                scale_ch = scale.item() if scale.size == 1 else scale[ch]
+                dequantized[:,ch,:,:] = (tensor[:,ch,:,:].astype('float32') - zp_ch) * scale_ch
+    else:
+        assert False, f'Cannot dequantize boundary tensor {tensor.shape} channel-wise'
+    return dequantized
+
 def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_folder,
-                              has_qnn_ops=False, save_output=False):
+                              data_layout, has_qnn_ops=False, save_output=False):
     """Creates calibration graph from mod and executes on the cpu to generate boundary tensors.
     """
 
@@ -851,8 +913,8 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
     calib_mutator = CalibrationGraphMutator(tidl_target)
     mod_tvm["main"] = calib_mutator.make_calibration_graph(mod_tvm["main"])
     mod_tvm = relay.transform.InferType()(mod_tvm)
-    #print("----------- CPU-only graph for generating subgraph boundary tensors -----------")
-    #print(mod_tvm.astext(show_meta_data=False))
+    with open(os.path.join(temp_folder, "relay_graph.boundary.txt"), "w") as relay_txt:
+        print(mod_tvm.astext(show_meta_data=False), file=relay_txt)
 
     relay_quantization = {}
     outputs_expr = mod_tvm["main"].body
@@ -862,13 +924,15 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
                 relay_quantization[calib_mutator.name_map[i]] = get_quantization(output_i_expr,
                                                                                  mod_tvm)
             else:
-                relay_quantization[calib_mutator.name_map[i]] = 0, 1.0
+                relay_quantization[calib_mutator.name_map[i]] = get_default_quantization()
 
+    print("Building graph on host for tensor data collection...")
     # Build and execute calibration graph on host to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
     # Use opt_level=2 to support quantized models, which requires lowering at opt_level 2
-    with relay.build_config(opt_level=2):
+    with tvm.transform.PassContext(opt_level=2):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
+    print("Running graph on host for tensor data collection...")
     mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
     mod.set_input(**params)
 
@@ -907,9 +971,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
                 #     - we then compute (minTensorValue, maxTensorValue) from relay layer,
                 #       without any calibration data, set 
                 zp, scale = relay_quantization[calib_mutator.name_map[i]]
-                if zp != 0 or scale != 1.0:
-                    res = (res.astype('float32') - zp) * scale
-
+                res = dequantize_tensor(res, zp, scale, data_layout)
                 subgraph_tensors[calib_mutator.name_map[i]] = res
                 if save_output:
                     file_name = os.path.join(temp_folder, calib_mutator.name_map[i] + ".txt")
@@ -945,7 +1007,7 @@ def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp
         if i in calib_perlayer_mutator.name_map:
             output_i_name = calib_perlayer_mutator.name_map[i]
             if (not has_qnn_ops) or output_i_name.startswith('graph_output_'):
-                relay_quantization[output_i_name] = 0, 1.0
+                relay_quantization[output_i_name] = get_default_quantization()
             else:
                 relay_quantization[output_i_name] = get_quantization(output_i_expr, mod_tvm)
 
@@ -964,8 +1026,8 @@ def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp
     for i in range(mod.get_num_outputs()):
         tensor = mod.get_output(i).asnumpy()
         zp, scale = relay_quantization[calib_perlayer_mutator.name_map[i]]
-        if zp != 0 or scale != 1.0:
-            tensor = (tensor.astype('float32') - zp) * scale
+        tensor = dequantize_tensor(tensor, zp, scale, data_layout)
+
         if data_layout == "NHWC" and len(tensor.shape) == 4:
             tensor = tensor.transpose(0, 3, 1, 2)
         file_name = os.path.join(temp_folder, calib_perlayer_mutator.name_map[i] + ".npy")
@@ -1780,8 +1842,13 @@ class TIDLImport:
             if has_qnn_ops:
                 zp, scale = get_quantization(this_node, None, all_nodes, inout_quant_dict)
             else:
-                zp, scale = 0, 1.0
-            if import_lib_node(this_node, zp, scale) != 0:
+                zp, scale = get_default_quantization()
+            if not isinstance(zp, np.ndarray):
+                zp = np.array(zp, dtype=np.int32)
+            if not isinstance(scale, np.ndarray):
+                scale = np.array(scale, dtype=np.float32)
+            if import_lib_node(this_node, zp.size, zp.ctypes.data_as(ctypes.c_void_p),
+                               scale.size, scale.ctypes.data_as(ctypes.c_void_p)) != 0:
                 return False
             in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names,
                                              tidl_subgraph)
@@ -3136,9 +3203,11 @@ class TIDLCompiler:
                                          self.tidl_calib_flags, self.tidl_bias_calib_iters,
                                          self.output_feature_16bit_names_list,
                                          self.params_16bit_names_list)
+                print("Generating subgraph boundary tensors for calibration...")
                 subgraph_tensors_list, relay_quantization = generate_subgraph_tensors(
                                  self.tidl_target, mod, params, graph_input_list, self.temp_folder,
-                                 has_qnn_ops)
+                                 data_layout, has_qnn_ops)
+                print("Importing subgraph into TIDL...")
                 import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list,
                                                             relay_quantization, has_qnn_ops)
                 _ctypes.dlclose(import_lib._handle)
