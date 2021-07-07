@@ -834,9 +834,8 @@ void CodeGenC7x::PrintVecBinaryOp(const std::string& op, DataType t, PrimExpr lh
 void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*)
   if (is_call_builtin(op->index, "tir.c7x.stream_access")) {
     StreamAccess access(op->index.as<CallNode>());
-    const StreamDesc& desc = stream_info_.GetDesc(access.config_var);
     // example: __SE0_ADV(float16)
-    os << "__" << desc.engine;
+    os << "__" << access.engine;
     if (access.adv) os << "ADV";
     os << "(";
     PrintType(op->dtype, os);
@@ -891,12 +890,11 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
   DataType t = op->value.dtype();
   if (is_call_builtin(op->index, "tir.c7x.stream_access")) {
     StreamAccess access(op->index.as<CallNode>());
-    const StreamDesc& desc = stream_info_.GetDesc(access.config_var);
     std::string vid = GetVarID(Downcast<Var>(op->buffer_var).get());
     std::string rhs_value = this->PrintExpr(op->value);
     // example: __SA0ADV(float16, ptr)
     std::ostringstream sa_os;
-    sa_os << "__" << desc.engine;
+    sa_os << "__" << access.engine;
     if (access.adv) sa_os << "ADV";
     sa_os << "(";
     PrintType(t, sa_os);
@@ -917,7 +915,7 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
 
       this->PrintIndent();
       stream << "__vpred " << AllocVarID(pred_var.get()) << " = " 
-             << "__" << desc.engine << "_VPRED(";
+             << "__" << access.engine << "_VPRED(";
       PrintType(t, stream);
       stream << ");\n";
 
@@ -1373,13 +1371,13 @@ void CodeGenC7x::VisitStmt_(const EvaluateNode* op) {
       }
       else if (func == "c7x_stream_open") {
 	const VarNode* config_var = Downcast<Var>(call->args[1]).get();
-	PrimExpr buf_ptr = call->args[2];
-	const StreamDesc& desc = stream_info_.GetDesc(config_var);
+	const std::string& engine = Downcast<StringImm>(call->args[2]).get()->value;
+	PrimExpr buf_ptr = call->args[3];
         const std::string vid = GetVarID(config_var);
 
         this->PrintIndent();
-        stream << "__" << desc.engine << "_OPEN(";
-	if (desc.kind == "SE") {
+        stream << "__" << engine << "_OPEN(";
+	if (engine.compare(0, 2, "SE") == 0) {
 	  stream << "(void *)(";
           PrintExpr(buf_ptr, stream);
 	  stream  << "), ";
@@ -1388,11 +1386,9 @@ void CodeGenC7x::VisitStmt_(const EvaluateNode* op) {
         return;
       }
       else if (func == "c7x_stream_close") {
-	const VarNode* config_var = Downcast<Var>(call->args[1]).get();
-	const StreamDesc& desc = stream_info_.GetDesc(config_var);
-
+	const std::string& engine = Downcast<StringImm>(call->args[2]).get()->value;
         this->PrintIndent();
-        stream << "__" << desc.engine << "_CLOSE();\n";
+        stream << "__" << engine << "_CLOSE();\n";
         return;
       }
     }

@@ -46,12 +46,11 @@ using namespace tir;
 class StreamDesc {
 public:
   // Parse a c7x_stream_config call and capture the parameters
-  // @tir.call_extern("c7x_stream_config", "SE0", "float32", 
+  // @tir.call_extern("c7x_stream_config", "SE", "float32", 
   //                  196, 8, 1, 1, 196, 0, 0)
   StreamDesc(const VarNode* CV, const CallNode* CC) :
     config_var(CV),
-    engine(Downcast<StringImm>(CC->args[1])->value),
-    kind(engine.substr(0,2)),
+    kind(Downcast<StringImm>(CC->args[1])->value),
     dtype(runtime::String2DLDataType(Downcast<StringImm>(CC->args[2])->value)),
     veclen(0) {
     int argnum = 3;
@@ -62,7 +61,6 @@ public:
   }
 public:
   const VarNode* config_var;
-  std::string engine;    // SE0, SE1, SA0, SA1, SA2, SA3
   std::string kind;      // SE or SA
   DataType dtype;
   int veclen;
@@ -70,10 +68,9 @@ public:
   PrimExpr dims[3];
   // debug
   void dump() const {
-    printf("StreamDesc: config=%s engine=%s kind=%s dtype=... "
+    printf("StreamDesc: config=%s kind=%s dtype=... "
            "veclen=%d icnts=... dims=...\n",
     config_var->name_hint.c_str(),
-    engine.c_str(),
     kind.c_str(),
     veclen);
   }
@@ -92,9 +89,10 @@ public:
       return e; 
   }
   // Parse a c7x_stream_config call and capture the parameters
-  // @tir.c7x_stream_access(config_var, "pred", "adv", index_expr)
+  // @tir.c7x_stream_access(config_var, "SE0", "pred", "adv", index_expr)
   StreamAccess(const CallNode* CC) : 
     config_var(Downcast<Var>(scalar(CC->args[0])).get()),
+    engine(Downcast<StringImm>(scalar(CC->args[1])).get()->value),
     pred(Downcast<StringImm>(scalar(CC->args[1])).get()->value == "pred"),
     adv(Downcast<StringImm>(scalar(CC->args[2])).get()->value == "adv"),
     index(CC->args[3].get()) {
@@ -102,6 +100,7 @@ public:
 
 public:
   const VarNode *config_var;
+  const String& engine;
   bool pred;
   bool adv;
   const PrimExprNode *index;
