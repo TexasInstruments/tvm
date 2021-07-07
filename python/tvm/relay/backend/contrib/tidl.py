@@ -930,8 +930,10 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
     # Build and execute calibration graph on host to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
     # Use opt_level=2 to support quantized models, which requires lowering at opt_level 2
+    os.environ["TIDL_TVM_HOST_REF_ONLY_BUILD"] = "1"
     with tvm.transform.PassContext(opt_level=2):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
+    os.environ.pop("TIDL_TVM_HOST_REF_ONLY_BUILD")
     print("Running graph on host for tensor data collection...")
     mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
     mod.set_input(**params)
@@ -1014,8 +1016,10 @@ def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp
     # Build and execute calibration graph on host to get outputs
     # Use opt_level=0 to avoid optimizations which modify the module (could change original module)
     # Use opt_level=2 to support quantized models, which requires lowering at opt_level 2
-    with relay.build_config(opt_level=2):
+    os.environ["TIDL_TVM_HOST_REF_ONLY_BUILD"] = "1"
+    with tvm.transform.PassContext(opt_level=2):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
+    os.environ.pop("TIDL_TVM_HOST_REF_ONLY_BUILD")
     mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
     mod.set_input(**params)
 

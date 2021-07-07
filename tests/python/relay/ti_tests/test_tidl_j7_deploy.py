@@ -252,8 +252,8 @@ if __name__ == '__main__':
     class_IDs, scores, bounding_boxes = outputs4
     for i, score in enumerate(np.squeeze(scores)):
         if score > 0.2:
-            cv2.rectangle(resized_img, (bounding_boxes[0][i][0], bounding_boxes[0][i][1]),
-                                       (bounding_boxes[0][i][2], bounding_boxes[0][i][3]),
+            cv2.rectangle(resized_img, (int(bounding_boxes[0][i][0]), int(bounding_boxes[0][i][1])),
+                                       (int(bounding_boxes[0][i][2]), int(bounding_boxes[0][i][3])),
                                        colors[int(class_IDs[0][i][0])%len(colors)], 2)
     output_img = cv2.resize(resized_img, (orig_img.shape[0], orig_img.shape[1]),
                             interpolation=cv2.INTER_CUBIC)
