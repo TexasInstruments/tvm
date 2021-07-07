@@ -19,7 +19,6 @@
 import os
 import numpy as np
 import pytest
-import tvm
 from tvm import relay
 from tvm.contrib.download import download_testdata
 from tvm.contrib.tar import untar
@@ -142,8 +141,7 @@ def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgra
         target = "llvm"
 
     with tidl.build_config(tidl_compiler=tidl_compiler):
-        with tvm.transform.PassContext(opt_level=3):
-            graph, lib, params = relay.build_module.build(mod, target=target, params=params)
+        graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     tidl.remove_tidl_params(params)
 
     path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")

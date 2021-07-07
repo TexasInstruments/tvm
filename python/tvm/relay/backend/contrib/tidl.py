@@ -3257,13 +3257,23 @@ class TIDLContext(tvm.runtime.Object):
         """Return the current pass context."""
         return _ffi_tidl_api.GetCurrentTIDLContext()
 
-def build_config(tidl_compiler=None, artifacts_folder=None, platform="AM57"):
-    if tidl_compiler != None:
-        artifacts_folder = tidl_compiler.artifacts_folder
-        platform         = tidl_compiler.tidl_platform
-    assert artifacts_folder, "artifacts_folder must be specified for TIDL codegen in compilation"
-    CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
-    return CreateTIDLContext(artifacts_folder, platform)
+class build_config():
+    def __init__(self, tidl_compiler=None, artifacts_folder=None, platform="AM57"):
+        if tidl_compiler != None:
+            artifacts_folder = tidl_compiler.artifacts_folder
+            platform         = tidl_compiler.tidl_platform
+        assert artifacts_folder, "artifacts_folder must be specified for TVM+TIDL compilation"
+        CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
+        self.tidl_context = CreateTIDLContext(artifacts_folder, platform)
+        self.tvm_context  = tvm.transform.PassContext(opt_level=3)
+
+    def __enter__(self):
+        self.tidl_context.__enter__()
+        self.tvm_context.__enter__()
+
+    def __exit__(self, ctx_type, ctx_value, ctx_trace):
+        self.tidl_context.__exit__(ctx_type, ctx_value, ctx_trace)
+        self.tvm_context.__exit__(ctx_type, ctx_value, ctx_trace)
 
 def remove_tidl_params(params):
     """ Remove params used by TIDL subgraphs from deployable module params
