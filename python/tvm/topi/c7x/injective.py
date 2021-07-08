@@ -18,11 +18,12 @@
 """Schedule for injective operators"""
 import tvm
 from tvm import te
-from .. import tag
+import logging
 
-
+#----------------------------------------------------------------
+# Experimental C7x-specific schedule for injective (elementwise) ops.
 def schedule_injective(outs):
-    """C7X CPU schedule for injective op.
+    """C7X CPU schedule for injective op: C = A op B
 
     Parameters
     ----------
@@ -36,58 +37,94 @@ def schedule_injective(outs):
         The computation schedule for the op.
     """
     target = tvm.target.Target.current(allow_none=False)
-    print(f"schedule_injective for c7x, target={target}")
+    logging.debug(f"schedule_injective for c7x, target={target}")
 
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
-    s : te.schedule.Schedule = te.create_schedule([E.op for E in outs])
-    E : te.tensor.Tensor = outs[0]
+    s = te.create_schedule([E.op for E in outs])
+    C = outs[0]
 
-    stage : te.schedule.Stage = s[E]
-    op : te.tensor.ComputeOp = stage.op
-    a : te.tensor.Tensor = op.input_tensors[0]
-    b : te.tensor.Tensor = op.input_tensors[1]
-    aa : te.tensor.Tensor = s.cache_read(a, "global", op);
-    bb : te.tensor.Tensor = s.cache_read(b, "global", op);
-    #cc : te.tensor.Tensor = s.cache_write(E, "global");
+    op = s[C].op
+    a = op.input_tensors[0]
+    b = op.input_tensors[1]
+    inner = s[C].op.axis[-1]
 
     axes = list(op.axis)  # type ir.container.Array[tir.expr.IterVar]
-    # double buffer
-    if 1:
-        s[aa].compute_at(stage, axes[0])
-        s[aa].double_buffer()
-    #split, vectorize by 8
-    if 0:
-        (xo, xi) = stage.split(axes[-1], 8)
-        stage.vectorize(xi)
-    #tile
-    if 0:
-       (xo, yo, xi, yi) = stage.tile(axes[0], axes[1], 16, 32)
-       stage.double_buffer()
-    #fuse
-    if 0:
-        xy : tir.expr.IterVar = stage.fuse(axes[0], axes[1])
-    #te.schedule.AutoInlineInjective(s)
-    show(s)
+    # local buffers
+    if 1: 
+        aa = s.cache_read(a, "local", op)
+        cc : te.tensor.Tensor = s.cache_write(C, "local")
+        inner = s[cc].op.axis[-1]
+        #print_schedule(s)
 
+    # use streaming for local buffer access on compute loop
+    if 0:
+        s[cc].pragma(s[cc].op.axis[0], "stream")
+
+    # block on channel axis
+    if 1:
+        (io, ii) = s[C].split(axes[0], factor=8)
+        #print("after split")
+        #print_schedule(s)
+
+    # sink copies into loop nest
+    if 1:
+        s[aa].compute_at(s[C], io)
+        s[cc].compute_at(s[C], io)
+        #print("after sink")
+        #print_schedule(s)
+
+    # double buffer
+    # currently integrated as part of custom DMA pass
+    if 0:
+        s[aa].double_buffer()
+        s[cc].double_buffer()
+
+    # mark local<->ext copies as using dma.
+    if 1:
+        s[aa].pragma(s[aa].op.axis[0], "dma")
+        s[C].pragma(ii, "dma")
+
+    # fuse inner loops
+    if 1:
+        inner : tir.expr.IterVar = s[cc].fuse(s[cc].op.axis[-2], s[cc].op.axis[-1])
+        #print("after fuse")
+        #print_schedule(s)
+
+    # split by 16 for vectorization
+    if 1:
+        (xyo, inner) = s[cc].split(inner, 16)
+        #print("after split")
+        #print_schedule(s)
+
+    # vectorize on inner axis
+    if 1:
+        s[cc].vectorize(inner)
+        #print("after vectorize")
+        #print_schedule(s)
+
+    show(s)
     return s
 
+#----------------------------------------------------------------
+# Debug code to print and visualize the schedules
 from tvm.contrib import tedd
 import graphviz as gv
 
 def show(s):
-#    code = tvm.lower(s, args=[], simple_mode=True)
-#    print(code)
-    print(f"schedule:\n{s}")
-
     dotstr = tedd.viz_dataflow_graph(s, output_dot_string = True)
-    gv.Source(source=dotstr, format='svg', filename='df').render()
+    gv.Source(source=dotstr, format='svg', filename='df.dot').render()
 
     dotstr = tedd.viz_schedule_tree(s, output_dot_string = True)
-    gv.Source(source=dotstr, format='svg', filename='tree').render()
+    gv.Source(source=dotstr, format='svg', filename='tree.dot').render()
 
     dotstr = tedd.viz_itervar_relationship_graph(s, output_dot_string = True)
-    gv.Source(source=dotstr, format='svg', filename='iter').render()
+    gv.Source(source=dotstr, format='svg', filename='iter.dot').render()
 
-#    print(dot)
-#    tedd.viz_dataflow_graph(s, show_svg = True)
-#    tedd.viz_dataflow_graph(s, dot_file_path="./dfg.dot")
+
+def print_schedule(s):
+   print("schedule------")
+   for st in s.stages:
+       print(f"stage: {st}")
+       for iv in st.all_iter_vars:
+           print(f"   iter: {iv}")
+

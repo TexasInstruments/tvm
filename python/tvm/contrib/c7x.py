@@ -1,0 +1,759 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+# pylint: disable=invalid-name
+"""Support for C7x TVM Target """
+
+import tvm
+import logging
+
+#----------------------------------------------------------------
+# Sets up custom Target and PassConfig contexts for C7x. 
+# Usage:
+#   with c7x_target_config():
+#      tvm.lower()
+#      tvm.build()
+# This would be a C7x-specific module in TVM. 
+# FIXME: should properly use contextlib.ExitStack
+class c7x_target_config():
+   def __init__(self):
+      self.target = tvm.target.Target("c7x -device=c7x")
+      self.pass_context = c7x_pass_context()
+   def __enter__(self):
+      self.target.__enter__()
+      self.pass_context.__enter__()
+      return self
+   def __exit__(self, type, value, traceback):
+      self.target.__exit__(type, value, traceback)
+      self.pass_context.__exit__(type, value, traceback)
+
+# in python/tvm/contrib/c7x.py
+# Create custom PassContext, used by tvm.lower and tvm.build.
+# Used within a 'with' statement, the context is saved in persistent state and available
+# via PassContext.current().
+# See also vta/build_module.py
+def c7x_pass_context():
+   # optimization level; not sure how this applies
+   opt=2
+   # Passes to disable
+   disable = []
+   # Disable the pass that shares buffers whose lifetimes don't overlap; 
+   # it messes up our DMA transformation
+   disable.append("tir.StorageRewrite")
+   # Leave allocations of "local" buffers alone
+   disable.append("tir.LowerDeviceStorageAccessInfo")
+   # Disable lowering TVM calls; this prevents the host kernel from using 
+   # the packed func protocol to call the device kernel
+   disable.append("tir.LowerTVMBuiltin")
+
+   # pass-specific config options
+   #   add passes to lowering pipeline as a list of (phase, pass) tuples, 
+   #   where 'phase' indicates the position in the lowering pipeline (0-3). 
+   #   See tvm.lower.
+   config = {}
+   config["tir.add_lower_pass"] = [
+        # Move storage_scope attributes and allocate nodes out of their
+        # enclosing scope
+        #(1, LiftAllocToScopeBegin()),
+        # Replace index expressions with stream-based access
+        (1, C7xSEPass()),
+
+        # Replace buffer copies that have "pragma_dma" with intrinsic calls. 
+        # implemented via CopyIntrinInjector, which analyzes the copy loop and 
+        # invokes fintrin to create the dma call. See vta/transform.py
+        (2, tvm.tir.transform.InjectCopyIntrin(pragma_key="dma", 
+                                               fintrin=c7x_dma_injector)),
+        # Insert C7x DMA intrinsics 
+        (2, C7xDMAPass()),
+
+        # Replace allocate statements with c7x-specific L2 allocation
+        # Currently part of the DMA pass
+        #(3, ir_lower_vtcm()),
+
+        # Annotate functions with the "device_scope" attribute, which causes 
+        # tvm.build to split each function into a host wrapper and device 
+        # kernel. The host function is compiled with 'target_host' and the 
+        # device function with 'target'
+        (3, tvm.tir.transform.DecorateDeviceScope())
+   ]
+   # config options for individual passes
+   config["tir.InjectDoubleBuffer"] = { "split_loop": 0 }
+   pass_context = tvm.transform.PassContext(opt_level=opt, 
+                                            disabled_pass=disable, 
+                                            config=config)
+   return pass_context
+
+#----------------------------------------------------------------
+# Register c7x-specific local memory tag
+# Not used - currently just using "local"
+'''
+from tvm._ffi.registry import register_func
+
+@register_func("tvm.info.mem.local.c7x")
+def mem_info_c7x():
+    # pylint: disable=bad-whitespace
+    return tvm.ir.make_node(
+        "MemoryInfo",
+        unit_bits=8,
+        max_num_bits=10000000,
+        max_simd_bits=32,
+        head_address=tvm.runtime.const(100, "uint32"),
+    )
+'''
+
+#----------------------------------------------------------------
+def merge_block(slist, body):
+    '''
+    Helper function to edit scoping constructs.
+    Given one or more scoping constructs (attribute/allocate/let) and a body, 
+    attach each construct to the body. For example:
+       slist = [attr, alloc, let];    body = { ... }
+    this becomes:
+       attr { alloc { let { ... } } } 
+    
+    see tir::MergeNest, also vta/transform.py
+    '''
+    slist.reverse()
+    for op in slist:
+        if op.body == body:
+            body = op
+        elif isinstance(op, tvm.tir.Allocate):
+            body = tvm.tir.Allocate(op.buffer_var, op.dtype, op.extents, 
+                                    op.condition, body)
+        elif isinstance(op, tvm.tir.AttrStmt):
+            body = tvm.tir.AttrStmt(op.node, op.attr_key, op.value, body)
+        elif isinstance(op, tvm.tir.LetStmt):
+            body = tvm.tir.LetStmt(op.var, op.value, body)
+        elif isinstance(op, tvm.tir.For):
+            body = tvm.tir.For(
+                op.loop_var,
+                op.min,
+                op.extent,
+                op.kind,
+                body,
+                op.thread_binding,
+                op.annotations,
+            )
+        else:
+            raise RuntimeError("unexpected op")
+    del slist[:]
+    return body
+
+#----------------------------------------------------------------
+# C7x Streaming Pass
+
+"""
+This pass detects loads and stores within loop nests marked with the 
+"stream" annotation and replaces the index expressions with 
+c7x_stream_access intrinsics. It also inserts intrinsics to configure,
+open, and close the stream.
+
+before:
+       attr [i] "pragma_stream" = 1;
+       for (i, 0, Ni) {
+         for (j, 0, Nj) {
+           for (k, 0, Nk) "vectorized" {
+             if (j*K0+k < N)
+               A[i*Ki + j*Kj + k*Kk] = B[i*Ki + j*Kj + k*Kk]
+           }
+         }
+      }
+after:
+       let SE.Config0: @tir.call_extern("c7x_stream_config", ...)
+       let SA.Config1: @tir.call_extern("c7x_stream_config", ...)
+       attr [i] "pragma_stream" = 1;
+       @tir.call_extern("c7x_stream_open", SE.Config0, "SE0", B)
+       @tir.call_extern("c7x_stream_open", SA.Config1, "SA0", A)
+       for (i, 0, Ni) {
+         for (j, 0, Nj) {
+           for (k, 0, Nk) "vectorized" {
+             // if guard removed
+               A[@tir.c7x.stream_access(SA.Config1, "SA0", ...)] = 
+               B[@tir.c7x.stream_access(SE.Config0, "SE0", ...)]
+           }
+         }
+       }
+       @tir.call_extern("c7x_stream_close", SE.Config0, "SE0")
+       @tir.call_extern("c7x_stream_close", SA.Config1, "SA0")
+
+  Note that the 'if' that guards access past the vector length is
+  removed, relying on the store stream to apply predication.
+"""
+from functools import partial
+
+def SETransform(f, mod, ctx):
+    ''' 
+    Implementation of C7xSEPass. The general outline is as follows.
+    1. Find candidates pass
+       a. find all loads and stores and create an SECandidate for each.
+       b. Build an interference graph for loops
+    2. Qualify 
+       a. Sort candidiates by profitability
+       b. Qualify each candidate to see if streaming is legal for that access
+       c. Allocate a SE/SA, using the loop interference graph to avoid
+          conflicts.
+    3. Deploy pass
+       a. For each qualified candidate:
+          i. Insert open/close calls around the its outermost loop
+          ii. Convert index expression of access to stream_access call
+       b. Remove if guards that are no longer needed
+    4. Wrap-up
+       a. Insert stream_config calls at top of function
+    '''
+    # map of var definitions to loop nesting level; delimits outer scope
+    def_levels = {}
+    # stack of ForStmts at current point
+    loop_nest = []         
+    # currently in-effect guard condition
+    veclen_guard = None 
+    # flat list of all SECandidates
+    candidates = []
+    # map each loop to candidates whose outer span is that loop
+    loop_candidates = {}
+    # map each load and store to the corresponding candidate
+    op_candidates = {}
+    # map each loop to all loops that overlap it (including itself)
+    loop_overlaps = {}
+    # numerical id for each loop, for debug
+    loop_ids = {}
+
+    class SECandidate():
+        '''
+        This class represents an instance of a load or store, that can possibly
+        be converted to use streaming access.
+        '''
+        def __init__(self, op, nest, trip, guard):
+            # the load or store operator, and var operand
+            self.op = op
+            self.var = op.buffer_var
+            # loops between var's def and access
+            self.nest = nest
+            self.outer_loop = self.nest[0]
+            self.guard_condition = guard
+            self.config = None
+            self.config_var = None
+            self.engine = None
+            self.qualified = False
+            # Sort criteria for priorization. 
+            #  1. Prefer guarded accesses (enables guard to be subsumed)
+            #  2. Prefer higher total trip counts
+            self.sort_key = (int(self.guard_condition is not None), trip)
+
+        def qualify(self):
+            '''
+            See if a load or store to qualifies to use stream-based access
+            '''
+            # TODO: if var is a candidate at any overlapping loop, reject both
+            # TODO: if var is a candidate at this loop, and not same, reject both
+            logging.debug(f"qualify: {self}")
+            op = self.op
+            index = op.index
+            buf = op.buffer_var
+            # Analyze the index expression to get the coefficients of the
+            # loop index variables. Given: 
+            #   A[i*Ki + j] and [i, j]
+            # the result is [Ki, 1, 0]
+            loop_vars = [l.loop_var for l in self.nest]
+            extents = [l.extent for l in self.nest]
+            coeffs = tvm.arith.detect_linear_equation(index, loop_vars)
+            # The current model is that streaming only applies to accesses that 
+            # advance on the innermost axis, with a coefficent of 1. This is
+            # because the SE/SA assume dim0 == 1.
+            if not coeffs or len(coeffs) < 2 or coeffs[-2:] != [1,0]:
+                #all_accesses_streamed = False
+                #logging.debug(f"streamify fail, coeffs[-2:] are {coeffs[-2:]}")
+                return False
+            # Reverse the lists: inner-->outer
+            coeffs = list(coeffs)[-2::-1]  # drop trailing 0
+            extents = extents[::-1]
+
+            # Get element type of buffer var. Initialize a config object
+            # to represent the setup.
+            buffer_type = buf.type_annotation
+            assert isinstance(buffer_type, tvm.ir.PointerType)
+            elem_type = buffer_type.element_type
+            assert isinstance(elem_type, tvm.ir.PrimType)
+            elem_type = elem_type.dtype
+            kind = "SE" if isinstance(op, tvm.tir.Load) else "SA"
+            config = SEConfig(kind, elem_type, extents, coeffs)
+            #logging.debug(config)
+
+            # If this access is guarded with a vector length condition, 
+            # replace the inner icnt of the setup with the guarded length; the
+            # guard will be implicitly applied by the stream.
+            # TODO: currently assumes 2D guard (could be 1D)
+            if self.guard_condition is not None:
+                if not config.flatten01:
+                    return False
+                config.icnts[0] = self.guard_condition.b
+
+            # Make sure the HW can support this stream setup
+            if not config.validate():
+                return False
+            self.config = config
+            logging.debug(f"qualified: {self}")
+            return True
+
+        def allocate(self):
+            '''
+            Allocate a SE/SA resource to a candidate, considering other
+            conflicting candidates.
+            '''
+            logging.debug(f"allocate: {self}")
+            se_resources = ["SE" + str(i) for i in range(0,2)]
+            sa_resources = ["SA" + str(i) for i in range(0,4)]
+            resources = se_resources if isinstance(self.op, tvm.tir.Load) \
+                        else sa_resources
+            # Build a set of resources in use for all overlapping loops
+            loop = self.outer_loop
+            inuse = set([c.engine for l in loop_overlaps[loop] \
+                                  for c in loop_candidates[l]])
+            logging.debug(f"  inuse: {inuse}")
+            self.engine = next((r for r in resources if r not in inuse), None)
+            logging.debug(f"  result: {self}")
+            return self.engine is not None
+
+        def assign_config_var(self, idnum):
+            ''' Define a config variable and associate it with the stream '''
+            name = self.engine[0:2] + ".Config" + str(idnum)
+            self.config_var = tvm.tir.Var(name, "handle");
+
+        def open_call(self):
+            call = tvm.tir.call_extern("handle", "c7x_stream_open", 
+                                       self.config_var, self.engine, self.var)
+            return tvm.tir.Evaluate(call)
+
+        def close_call(self):
+            call = tvm.tir.call_extern("handle", "c7x_stream_close", 
+                                       self.config_var, self.engine);
+            return tvm.tir.Evaluate(call)
+
+        def access_call(self):
+            '''
+            Replace the index expression with a @tir.stream.access call.
+            We use a builtin instead of a call_extern to enable vectorization.
+            '''
+            pred = "nopred" if self.guard_condition is None else "pred"
+            adv = "adv"
+            index = tvm.tir.Call("int", "tir.c7x.stream_access",
+                                 [self.config_var, self.engine,
+                                  pred, adv, self.op.index])
+            return index
+                
+        def __lt__(self, other):
+            return self.sort_key < other.sort_key
+        def __str__(self):
+            nest_ids = [loop_ids[l] for l in self.nest]
+            return (f"candidate {self.var}, nest={nest_ids}, guard={self.guard_condition} trip={self.sort_key[1]} engine={self.engine} config_var={self.config_var} config=[{self.config}]")
+
+    class SEConfig:
+        ''' Helper class to build and manage a single SE/SA configuration '''
+        max_dim = 0x10000
+        max_dims = 4
+        def __init__(self, kind, dtype, extents, coeffs):
+            self.kind = kind
+            self.icnts = []
+            self.dims = []
+            self.veclen = 1
+            self.dtype = dtype
+            self.flatten01 = False
+            for (cnt,dim) in zip(extents, coeffs):
+                self.add_axis(cnt, dim)
+        def add_axis(self, icnt, dim):
+            ''' 
+            Add a single axis (dimension) to the configuration. If the 
+            current dimension equals the previous dimension's extent 
+            (count * dim), flatten the two axes.
+            '''
+            #logging.debug(f"add_axis: icnt={icnt} dim={dim}")
+            ndims = self.ndims()
+            if ndims > 0 and \
+               dim == self.icnts[ndims-1] * self.dims[ndims-1] and \
+               self.icnts[ndims-1] * icnt < self.max_dim:
+                self.icnts[ndims-1] *= icnt
+                #logging.debug("folded")
+                if ndims == 1:
+                    self.flatten01 = True
+            else:
+                self.icnts.append(icnt)
+                self.dims.append(dim)
+                #logging.debug("not folded")
+        def ndims(self):
+            return len(self.dims)
+        def validate(self):
+            # TODO
+            # first dim must be 1
+            # max 4 dims
+            # no dim >= 0x10000
+            return True
+        def get_config_call(self):
+            ''' Return a config call to produce the curent configuration '''
+            # pad to 4 axes
+            if self.ndims() < 4:
+               self.icnts = self.icnts + ([1] * (4-self.ndims()))
+               self.dims = self.dims + ([0] * (4-self.ndims()))
+            config_call = tvm.tir.call_extern("handle", "c7x_stream_config", 
+                                self.kind, self.dtype,
+                                *self.icnts[0:4], *self.dims[1:4])
+            return config_call
+        def __str__(self):
+            return f"SEConfig: kind={self.kind} dtype={self.dtype} "+\
+                   f"veclen={self.veclen} icnts={self.icnts} dims={self.dims}"
+
+    #---------------------------------------------------------------
+    def _find_candidates(f):
+        ''' Find candidates pass ''' 
+        loop_id_counter = 1
+        trip = 0
+        def _find_candidates_pre(op):
+            nonlocal loop_id_counter, veclen_guard, trip
+            # don't streamify dma loops
+            if isinstance(op, tvm.tir.AttrStmt) and op.attr_key == "pragma_dma":
+                return op
+            elif isinstance(op, tvm.tir.For):
+                loop_nest.append(op)
+                loop_ids[op] = loop_id_counter
+                loop_id_counter += 1
+                loop_overlaps[op] = set()
+                loop_candidates[op] = []
+                # Keep track of which loops overlap which 
+                # Estimate trip count of entire nest
+                trip = 1
+                for l in loop_nest:
+                    loop_overlaps[op].add(l)
+                    loop_overlaps[l].add(op)
+                    if isinstance(l.extent, tvm.tir.IntImm):
+                        trip *= l.extent.value 
+                    else:
+                        trip *= 10
+            elif isinstance(op, tvm.tir.Allocate):
+                def_levels.update({op.buffer_var: len(loop_nest)})
+            elif isinstance(op, tvm.tir.Let):
+                def_levels.update({op.var: len(loop_nest)})
+            # look for vector length guard
+            elif isinstance(op, tvm.tir.IfThenElse):
+                veclen_guard = _detect_veclen_guard(op)
+            elif isinstance(op, tvm.tir.Store) or isinstance(op, tvm.tir.Load):
+                level = def_levels[op.buffer_var]
+                cand = SECandidate(op, loop_nest[level:], trip, veclen_guard)
+                candidates.append(cand)
+                loop = cand.outer_loop
+                loop_candidates[loop].append(cand)
+                op_candidates[op] = cand
+
+        def _find_candidates_post(op):
+            nonlocal veclen_guard
+            if isinstance(op, tvm.tir.For):
+                loop_nest.pop()
+            elif isinstance(op, tvm.tir.IfThenElse):
+                veclen_guard = None
+
+        # body of find candidates pass
+        for var in f.params:
+            def_levels.update({var : 0})
+        for (var,buf) in f.buffer_map.items():
+            def_levels.update({buf.data : 0})
+        tvm.tir.stmt_functor.ir_transform(
+           f.body, _find_candidates_pre, _find_candidates_post)
+
+    #--------------
+    # Helpers for find_candidates pass
+    def _get_if_condition(op):
+        ''' Get condition from if, bypassing @tir.likely if present '''
+        if not isinstance(op, tvm.tir.IfThenElse):
+            return None
+        condition = op.condition
+        if isinstance(condition, tvm.tir.Call) and \
+           condition.op.same_as(tvm.ir.Op.get("tir.likely")):
+            condition = condition.args[0]
+        return condition
+
+    #--------------
+    def _detect_veclen_guard(op):
+        '''
+        Detect the 'if' statement that guards the loads and stores in
+        an inner loop with a dimension. The canonical form is:
+
+        initial loop:
+              for (i, 0, N)
+                a[... + i]
+        after splitting for vectorization:
+              for (outer, 0, ceil(N/K))
+                for (inner, 0, K)
+                  if (outer*K + inner < N)   <--- "veclen guard"
+                    a[... + outer*K + inner]  <--- inner coeffs must match
+        '''
+        condition = _get_if_condition(op)
+        loop_vars = [op.loop_var for op in loop_nest]
+        guard_coeffs = tvm.arith.detect_linear_equation(condition.a, loop_vars)
+        if op.else_case or \
+           len(loop_nest) < 2 or \
+           not isinstance(condition, tvm.tir.LT) or \
+           not isinstance(condition.b, tvm.tir.IntImm) or \
+           not guard_coeffs:
+               #logging.debug("detect guard false")
+               return None
+        # we expect the last 3 coefficients to be K, 1, 0
+        guard_coeffs = list(guard_coeffs)[-3:]
+        expected = [ loop_nest[-1].extent, 1, 0 ]
+        if guard_coeffs == expected:
+            return condition
+        return None
+
+    #---------------------------------------------------------------
+    # deploy pass
+    def _deploy_pre(op):
+        '''
+        Rewrite accesses and insert open/close calls.
+        All mutation must happen on the pre-order walk. Mutation changes the
+        object references, invalidating links beween IR objects and our
+        local data structures, so make any changes on the way down.
+        TODO: rewrite the whole SEPass in C++
+        '''
+        if isinstance(op, tvm.tir.Store):
+            cand = op_candidates.get(op)
+            if cand and cand.qualified:
+                logging.debug(f"streamify store, cand={cand}")
+                # ir_transform requires a statement, not an expression, so 
+                # we wrap the rhs in an 'Evaluate' statement
+                rhs = tvm.tir.Evaluate(op.value)
+                rhs = tvm.tir.stmt_functor.ir_transform(
+                      rhs, _deploy_pre, None, ["tir.Load"])
+                index = cand.access_call()
+                return tvm.tir.Store(op.buffer_var, rhs.value, index)
+        elif isinstance(op, tvm.tir.Load):
+            cand = op_candidates.get(op)
+            if cand and cand.qualified:
+                logging.debug(f"streamify load, cand={cand}")
+                index = cand.access_call()
+                return tvm.tir.Load(op.dtype, op.buffer_var, index)
+        elif isinstance(op, tvm.tir.IfThenElse):
+            # if we streamified all the accesses, remove the vector 
+            # length guard
+            if _guard_nullified(op):
+               then_case = tvm.tir.stmt_functor.ir_transform(
+                      op.then_case, _deploy_pre, None)
+               return then_case
+        elif isinstance(op, tvm.tir.For):
+            if not loop_ids.get(op):
+                return op
+            logging.debug(f"pre visit For id={loop_ids[op]}")
+            body = tvm.tir.stmt_functor.ir_transform(op.body, _deploy_pre, None)
+            candidates = [c for c in loop_candidates[op] if c.qualified]
+            opens = [c.open_call() for c in candidates]
+            closes = [c.close_call() for c in candidates]
+            op = tvm.tir.For(op.loop_var, op.min, op.extent, op.kind,
+                             body, op.thread_binding, op.annotations)
+            return tvm.tir.SeqStmt(opens + [op] + closes)
+
+    #--------------
+    def _guard_nullified(op):
+        ''' 
+        If this if statement function solely as a vector length guard, and
+        all accesses within it are streamified, the guard is no longer
+        needed (the streaming HW automatically predicates out-of-bounds
+        accesses). 
+        '''
+        guard_condition = _get_if_condition(op)
+        # A mini-pass to find all variables within a statement or expression.
+        # We ignore variables used in the index of a streamified access,
+        # since the indexing is performed directly by the HW.
+        def _find_vars(vars_list, op):
+            if isinstance(op, tvm.tir.Var):
+                vars_list.add(op)
+            elif isinstance(op, tvm.tir.Load):
+                cand = op_candidates.get(op)
+                if cand and cand.qualified and \
+                   cand.guard_condition == guard_condition:
+                    logging.debug("skip load index")
+                    return op
+            elif isinstance(op, tvm.tir.Store):
+                cand = op_candidates.get(op)
+                if cand and cand.qualified and \
+                   cand.guard_condition == guard_condition:
+                    # turn RHS into statement, for recusive ir_transform
+                    rhs = tvm.tir.Evaluate(op.value) 
+                    tvm.tir.stmt_functor.ir_transform(
+                        rhs, partial(_find_vars, vars_list), None)
+                    logging.debug("skip store index")
+                    return op
+        # Find variables used in the condition
+        guard_vars = set()
+        stmt = tvm.tir.Evaluate(guard_condition)
+        tvm.tir.stmt_functor.ir_transform(
+                          stmt, partial(_find_vars, guard_vars), None)
+        # Find variables used in the then clause
+        then_vars = set()
+        tvm.tir.stmt_functor.ir_transform(
+                          op.then_case, partial(_find_vars, then_vars), None)
+        # If none of the variables in the condition are referenced in the 
+        # then clause (exluding streamified accesses), we assume the guard
+        # is defunct.
+        isect = guard_vars.intersection(then_vars)
+        logging.debug(f"condition: {guard_condition} guard_vars={guard_vars} then_vars={then_vars} isect={isect}")
+        return len(isect) == 0
+
+    #---------------------------------------------------------------
+    # main body of SETransform
+
+    # Find candidates
+    _find_candidates(f)
+
+    # Prioritize and qualify
+    candidates.sort(reverse=True)
+    idnum = 0
+    for cand in candidates:
+        if cand.qualify() and cand.allocate():
+            cand.assign_config_var(idnum)
+            cand.qualified = True
+            idnum += 1
+
+    # For qualified candidates, rewrite accesses 
+    stmt = tvm.tir.stmt_functor.ir_transform(f.body, _deploy_pre, None)
+
+    # Collect stream config calls and emit at top of function
+    stmts = []   # hoisted statements
+    valid_candidates = [c for c in candidates if c.config_var is not None]
+    for cand in valid_candidates:
+        let_stmt = tvm.tir.LetStmt(cand.config_var, 
+                                   cand.config.get_config_call(),
+                                   tvm.tir.Evaluate(1))   # dummy body
+        stmts.append(let_stmt)
+    stmt = merge_block(stmts, stmt)
+    return f.with_body(stmt)
+
+#-----------
+def C7xSEPass():
+    ''' create the C7x Streaming pass '''
+    return tvm.tir.transform.prim_func_pass(
+        SETransform, opt_level=0, name="tir.c7x.C7xSEPass"
+    )
+
+#----------------------------------------------------------------
+# Naive "Injector" for dma intrinsic
+#
+# Adapted from vta/transform.py
+def c7x_dma_injector(src : tvm.tir.Buffer, 
+                     dst : tvm.tir.Buffer, pad_before, pad_after, pad_value):
+    '''
+    This function is called by the InjectCopyIntrin pass to insert code 
+    to replace the copy-in/copy-out code for a local buffer
+    '''
+    expr = tvm.tir.call_extern("int32", "c7x_dma_copy", src.data, dst.data);
+    stmt = tvm.tir.Evaluate(expr)
+    return stmt
+
+#----------------------------------------------------------------
+def C7xDMAPass():
+    """
+    This is a C7x-specific pass that detects c7x_dma_copy calls and inserts 
+    additional intrinsics to configure the DMA.
+    """
+    return tvm.tir.transform.prim_func_pass(
+        C7xDMATransform, opt_level=0, name="tir.c7x.C7xDMAPass"
+    )
+
+def C7xDMATransform(f, mod, ctx):
+    """
+    Implementation of C7xDMAPass
+    """
+    # map from vars to storage scope attrs, and allocation statements
+    local_var_info = {}
+    # list of vars involved in c7x_dma_calls
+    dma_buffers = []
+    # list of c7x_dma_calls
+    dma_copy_calls = []
+
+    # pre-order walk: keep track of variables and operations involved 
+    # in dma copies
+    def _dma_pre(op):
+        builtin_call_extern = tvm.ir.Op.get("tir.call_extern")
+        if isinstance(op, tvm.tir.AttrStmt):
+            if op.attr_key == "storage_scope" and \
+               isinstance(op.node, tvm.tir.Var):
+                local_var_info[op.node] = { 'attr' : op }
+        elif isinstance(op, tvm.tir.Allocate) and \
+             op.buffer_var in local_var_info:
+                local_var_info[op.buffer_var]['alloc'] = op
+        elif op.op.same_as(builtin_call_extern) and \
+             op.args[0].value == "c7x_dma_copy":
+            dma_copy_calls.append(op)
+            dma_buffers.extend([op.args[1], op.args[2]])
+
+    # post-order walk: remove attr and allocation statements from inner loop; 
+    # they will re-generated at outer loop level
+    def _dma_post(op):
+        if isinstance(op, tvm.tir.AttrStmt):
+            if op.node in dma_buffers:
+                return op.body
+        elif isinstance(op, tvm.tir.Allocate):
+            if op.buffer_var in dma_buffers:
+                return op.body
+
+    # helper function to determine dimensions of dma var
+    def _get_dims(var):
+        dims = None
+        # if local buffer, use allocation statement
+        if var in local_var_info:
+            if 'alloc' in local_var_info[var]:
+                alloc = local_var_info[var]['alloc']
+                dims = [dim for dim in alloc.extents]
+        # if function parameter, use buffer object from buffer map
+        else:
+            for (_,buf) in f.buffer_map.items():
+                if buf.data == var:
+                    dims = [dim for dim in buf.shape]
+        assert dims
+        # extend to 4 dims
+        if len(dims) < 4:
+            dims = ([1] * (4-len(dims))) + dims
+        return dims
+
+    # Run the pre/post passes above
+    stmt = tvm.tir.stmt_functor.ir_transform(
+        f.body, _dma_pre, _dma_post,
+        ["tir.Allocate", "tir.AttrStmt", "tir.Call"])
+
+    stmts = []   # hoisted statements
+    for dma_call in dma_copy_calls:
+        # get dims for src and dst variables
+        src = dma_call.args[1]
+        dst = dma_call.args[2]
+        src_dims = _get_dims(src)
+        dst_dims = _get_dims(dst)
+        # create a variable for the dma object
+        for var in (src,dst):
+            if var in local_var_info:
+                dma_name = var.name.split('.')[0] + ".dma"
+        dma = tvm.tir.Var(dma_name, "handle")
+        # hoist the attr and alloc statements for local buffers
+        for var in (src,dst):
+            if var in local_var_info:
+                attr = local_var_info[var]['attr']
+                stmts.append(attr)
+                alloc = local_var_info[var]['alloc']
+                stmts.append(alloc)
+        # let dma_object = c7x_dma_setup(src, dim3, dim2, dim1, dim0,
+        #                                dst, dim3, dim2, dim1, dim0)
+        setup = tvm.tir.call_extern("handle", 
+                      "c7x_dma_setup", src, *src_dims, dst, *dst_dims)
+        setup = tvm.tir.LetStmt(dma, setup, tvm.tir.Evaluate(1))   # dummy body
+        stmts.append(setup)
+
+    # hoist attr, alloc, and dma setup to top of function body
+    stmt = merge_block(stmts, stmt)
+    return f.with_body(stmt)
+
