@@ -289,7 +289,6 @@ class HostDeviceSplitter : public StmtMutator {
 
 PrimFunc SplitHostDevice(PrimFunc&& func, IRModule* device_mod) {
   auto target = func->GetAttr<Target>(tvm::attr::kTarget);
-  printf("SplitHostDevice, target=%s\n", target.value()->str().c_str());
   ICHECK(target.defined()) << "SplitHostDevice: Require the target attribute";
   auto global_symbol = func->GetAttr<String>(tvm::attr::kGlobalSymbol);
   ICHECK(global_symbol.defined())

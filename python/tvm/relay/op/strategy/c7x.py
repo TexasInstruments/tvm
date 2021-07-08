@@ -34,6 +34,5 @@ def schedule_pool_c7x(attrs, outs, target):
 @schedule_injective.register(["c7x"])
 def schedule_injective_c7x(_, outs, target):
     """schedule injective ops for c7x"""
-    print("schedule_injective_c7x(_, outs, target):")
     with target:
         return topi.c7x.schedule_injective(outs)

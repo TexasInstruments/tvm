@@ -40,7 +40,6 @@
 namespace tvm {
 namespace codegen {
 
-#include <stdio.h>
 runtime::Module Build(IRModule mod, Target target) {
   if (transform::PassContext::Current()
           ->GetConfig<Bool>("tir.disable_assert", Bool(false))

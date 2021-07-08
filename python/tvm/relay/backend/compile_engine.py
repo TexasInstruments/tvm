@@ -124,7 +124,6 @@ def get_valid_implementations(op, attrs, inputs, out_type, target):
         The list of all valid op implementations.
     """
     fstrategy = op.get_attr("FTVMStrategy")
-    print(f"fstrategy={fstrategy}")
     assert fstrategy is not None, (
         "%s doesn't have an FTVMStrategy registered. You can register "
         "one in python with `tvm.relay.op.register_strategy`." % op.name
@@ -189,7 +188,6 @@ def select_implementation(op, attrs, inputs, out_type, target, use_autotvm=True)
     ret : tuple(relay.op.OpImplementation, List[tvm.te.Tensor])
         The best op implementation and the corresponding output tensors.
     """
-    print("select_implementation")
     all_impls = get_valid_implementations(op, attrs, inputs, out_type, target)
     best_plevel_impl = max(all_impls, key=lambda x: x.plevel)
 
@@ -278,7 +276,6 @@ def select_implementation(op, attrs, inputs, out_type, target, use_autotvm=True)
 
 @tvm._ffi.register_func("relay.backend.lower_call")
 def lower_call(call, inputs, target):
-    print("relay.backend.lower_call");
     """Lower the call expression to op implementation and tensor outputs."""
     assert isinstance(call.op, tvm.ir.Op)
     op = call.op

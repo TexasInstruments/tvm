@@ -470,8 +470,7 @@ Pass GetPass(const String& pass_name) {
 // a Sequential without the consideration of their orders. The phase
 // ordering problem needs to be handled in the future.
 IRModule SequentialNode::operator()(IRModule mod, const PassContext& pass_ctx) const {
-  printf("Sequential Pass:\n");
-  //std::cout << "Context:\n"; std::cout << pass_ctx; std::cout << "\n";
+  DLOG(INFO) << "Sequential Pass:";
   for (const Pass& pass : passes) {
     ICHECK(pass.defined()) << "Found undefined pass for optimization.";
     const PassInfo& pass_info = pass->Info();
@@ -480,10 +479,13 @@ IRModule SequentialNode::operator()(IRModule mod, const PassContext& pass_ctx) c
     for (const auto& it : pass_info->required) {
       mod = GetPass(it)(std::move(mod), pass_ctx);
     }
-    printf("--> %s\n", pass_info->name.c_str());
+    DLOG(INFO) << "--> " << pass_info->name.c_str();
     mod = pass(std::move(mod), pass_ctx);
-    auto printIRpass = PrintIR("after "+pass_info->name, false);
-    printIRpass(mod, pass_ctx);
+
+    if (::dmlc::DebugLoggingEnabled()) {
+      auto printIRpass = PrintIR("after "+pass_info->name, false);
+      printIRpass(mod, pass_ctx);
+    }
   }
   return mod;
 }

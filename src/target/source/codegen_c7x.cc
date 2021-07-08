@@ -36,6 +36,7 @@
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/ir/op.h>
 #include <tvm/tir/op_attr_types.h>
+#include <tvm/support/logging.h>
 
 #include <sstream>
 #include <string>
@@ -1470,10 +1471,10 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   cg.Init(output_ssa, emit_asserts, target->str());
 
   // debug
-  printf("BuildC7x\n");
-  printf("mod:\n");
-  std::string s = PrettyPrint(mod);
-  std::cout << s;
+  if (::dmlc::DebugLoggingEnabled()) {
+    DLOG(INFO) << "BuildC7x";
+    DLOG(INFO) << PrettyPrint(mod);
+  }
 
   Map<String, LinkedParam> linked_params;
   // bool found_linked_params = false;
@@ -1508,7 +1509,7 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   }
 
   std::string code = cg.Finish();
-  printf("Code: %s\n", code.c_str());
+  DLOG(INFO) << "Code:\n" << code;
   return CSourceModuleCreate(code, "c", cg.GetFunctionNames());
 }
 

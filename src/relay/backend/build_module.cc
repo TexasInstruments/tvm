@@ -28,6 +28,7 @@
 #include <tvm/relay/qnn/transform.h>
 #include <tvm/relay/transform.h>
 #include <tvm/runtime/device_api.h>
+#include <tvm/support/logging.h>
 
 #include <memory>
 
@@ -35,7 +36,6 @@
 #include "../../target/source/codegen_source_base.h"
 #include "compile_engine.h"
 #include "utils.h"
-#include <stdio.h>
 
 namespace tvm {
 namespace relay {
@@ -568,7 +568,7 @@ class RelayBuildModule : public runtime::ModuleNode {
         ret_.mod = tvm::codegen::CSourceModuleCreate(";", "", Array<String>{});
       }
     } else {
-      printf("calling tvm::build, target=%s\n", target_host->kind->name.c_str());
+      DLOG(INFO) << "calling tvm::build, target=" << target_host->kind->name;
       ret_.mod = tvm::build(lowered_funcs, target_host_);
     }
 
@@ -628,7 +628,6 @@ runtime::Module RelayBuildCreate() {
 }
 
 TVM_REGISTER_GLOBAL("relay.build_module._BuildModule").set_body([](TVMArgs args, TVMRetValue* rv) {
-  printf("API relay.build_module._BuildModule\n");
   *rv = RelayBuildCreate();
 });
 
