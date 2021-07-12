@@ -56,10 +56,6 @@ def schedule_injective(outs):
         inner = s[cc].op.axis[-1]
         #print_schedule(s)
 
-    # use streaming for local buffer access on compute loop
-    if 0:
-        s[cc].pragma(s[cc].op.axis[0], "stream")
-
     # block on channel axis
     if 1:
         (io, ii) = s[C].split(axes[0], factor=8)

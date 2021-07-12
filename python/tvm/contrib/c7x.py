@@ -156,25 +156,23 @@ def merge_block(slist, body):
 # C7x Streaming Pass
 
 """
-This pass detects loads and stores within loop nests marked with the 
-"stream" annotation and replaces the index expressions with 
-c7x_stream_access intrinsics. It also inserts intrinsics to configure,
-open, and close the stream.
+This pass detects loads and stores within loop nests and replaces the index
+expressions with c7x_stream_access intrinsics. It also inserts intrinsics 
+to configure, open, and close the stream.
 
 before:
-       attr [i] "pragma_stream" = 1;
        for (i, 0, Ni) {
          for (j, 0, Nj) {
            for (k, 0, Nk) "vectorized" {
-             if (j*K0+k < N)
-               A[i*Ki + j*Kj + k*Kk] = B[i*Ki + j*Kj + k*Kk]
+             if (j*Nk + k < N)
+               A[i*Nj*Nk + j*Nk + k] = B[i*Nj*Nk + j*Nk + k]
            }
          }
       }
 after:
        let SE.Config0: @tir.call_extern("c7x_stream_config", ...)
        let SA.Config1: @tir.call_extern("c7x_stream_config", ...)
-       attr [i] "pragma_stream" = 1;
+       ...
        @tir.call_extern("c7x_stream_open", SE.Config0, "SE0", B)
        @tir.call_extern("c7x_stream_open", SA.Config1, "SA0", A)
        for (i, 0, Ni) {
