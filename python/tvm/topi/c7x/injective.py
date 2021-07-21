@@ -18,6 +18,9 @@
 """Schedule for injective operators"""
 import tvm
 from tvm import te
+import tvm.auto_scheduler.utils
+from tvm.runtime import DataType
+from functools import reduce
 import logging
 
 #----------------------------------------------------------------
@@ -38,6 +41,9 @@ def schedule_injective(outs):
     """
     target = tvm.target.Target.current(allow_none=False)
     logging.debug(f"schedule_injective for c7x, target={target}")
+    # TODO: allow these to vary by target configuration
+    max_block = 0x4000   #16k
+    vector_length = 64   #16k
 
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([E.op for E in outs])
@@ -46,49 +52,89 @@ def schedule_injective(outs):
     op = s[C].op
     a = op.input_tensors[0]
     b = op.input_tensors[1]
+
+    # schedule transformations only apply to dimensioned operations
+    if not s[C].op.axis:
+        return s
+
+    outer = s[C].op.axis[0]
     inner = s[C].op.axis[-1]
+    block = outer       # block-level loop, if split
+    baxis = 0           # axis index of block-level loop
+    elem_bytes = int(DataType(C.dtype).bits / 8)
 
-    axes = list(op.axis)  # type ir.container.Array[tir.expr.IterVar]
     # local buffers
+    aa = a
+    bb = b
+    cc = C
     if 1: 
-        aa = s.cache_read(a, "local", op)
-        cc : te.tensor.Tensor = s.cache_write(C, "local")
-        inner = s[cc].op.axis[-1]
+        if len(a.shape) > 1:
+            aa = s.cache_read(a, "local", op)
+        if len(b.shape) > 1:
+            bb = s.cache_read(b, "local", op)
+        if len(C.shape) > 1:
+            cc = s.cache_write(C, "local")
+            inner = s[cc].op.axis[-1]
+        #print("after local buffers")
         #print_schedule(s)
 
-    # block on channel axis
+    # split outer loop into bite-size chunks
     if 1:
-        (io, ii) = s[C].split(axes[0], factor=8)
-        #print("after split")
-        #print_schedule(s)
+        dims = list(tvm.auto_scheduler.utils.get_const_tuple(C.shape))
+        # TODO: make sure dims are const
+        # Find split point, including axis to split if needed
+        baxis, nblocks, blocksize = find_split(dims, elem_bytes, max_block)
+        if baxis != 0:
+            if nblocks != dims[baxis-1]:
+                #print(f"split at {baxis} by {nblocks}")
+                old = dims[baxis-1]
+                sdim = [nblocks, int(old / nblocks)]
+                #print(f"split dim: {old} -> {sdim}")
+                dims = dims[:baxis-1] + sdim + dims[baxis:]
+                (outer, block) = s[C].split(s[C].op.axis[baxis-1], nparts=nblocks)
+            else:
+                #print(f"split at {baxis}")
+                (outer, block) = (s[C].op.axis[baxis-1], s[C].op.axis[baxis])
 
-    # sink copies into loop nest
-    if 1:
-        s[aa].compute_at(s[C], io)
-        s[cc].compute_at(s[C], io)
-        #print("after sink")
-        #print_schedule(s)
+            outers = dims[:baxis]
+            inners = dims[baxis:]
+            #print(f"after split: {outers} {inners}, blocksize={blocksize}")
+            #print("after split")
+            #print_schedule(s)
 
-    # double buffer
-    # currently integrated as part of custom DMA pass
-    if 0:
-        s[aa].double_buffer()
-        s[cc].double_buffer()
+            # sink local-buffer copies into outer loop
+            if 1:
+                if aa != a:
+                    s[aa].compute_at(s[C], outer)
+                if bb != b:
+                    s[bb].compute_at(s[C], outer)
+                if cc != C:
+                    s[cc].compute_at(s[C], outer)
+                #print("after sink")
+                #print_schedule(s)
 
     # mark local<->ext copies as using dma.
     if 1:
-        s[aa].pragma(s[aa].op.axis[0], "dma")
-        s[C].pragma(ii, "dma")
+        if aa != a:
+            s[aa].pragma(s[aa].op.axis[0], "dma")
+        if bb != b:
+            s[bb].pragma(s[bb].op.axis[0], "dma")
+        if cc != C:
+            # if no split above, block is outer loop
+            s[C].pragma(block, "dma")
 
     # fuse inner loops
     if 1:
-        inner : tir.expr.IterVar = s[cc].fuse(s[cc].op.axis[-2], s[cc].op.axis[-1])
+        innerloops = s[cc].op.axis[baxis:]
+        if len(innerloops) > 1:
+            inner = s[cc].fuse(*innerloops)
         #print("after fuse")
         #print_schedule(s)
 
     # split by 16 for vectorization
     if 1:
-        (xyo, inner) = s[cc].split(inner, 16)
+        #(xyo, inner) = s[cc].split(s[cc].op.axis[-1], int(vector_length/elem_bytes))
+        (xyo, inner) = s[cc].split(inner, int(vector_length/elem_bytes))
         #print("after split")
         #print_schedule(s)
 
@@ -100,6 +146,31 @@ def schedule_injective(outs):
 
     show(s)
     return s
+
+
+def find_split(dims, elem_bytes, limit):
+    ''' Given dimensions and max block size, find even split such 
+        that inner dimensions fit in block.  Returned axis is outer axis 
+        of element-level loop. Returned nblocks is number of blocks for 
+        axis-1, which may or may not equal the original. Examples:
+           split([672, 14, 14], 4, 8192) --> 
+               axis=1, nblocks=84 -> [84] [8 14 14]
+           split([10, 100, 200], 1, 200) --> 
+               axis=2, nblocks=100 --> [10 100] [200]
+    '''
+    # Work from inner to outer until block gets too big
+    blocksize = elem_bytes;
+    for axis,dim in list(enumerate(dims))[::-1]:
+        blocksize *= dim
+        split = 1
+        #print(f"dim {axis}=[{dim}];  blocksize={blocksize}")
+        # If block too big, split. Find a split that evenly divides axis.
+        if blocksize > limit:
+             nblocks = int(blocksize/limit)
+             while int(dim/nblocks) * nblocks != dim:
+                 nblocks += 1
+             return (axis+1, nblocks, int(blocksize/nblocks))
+    return (0, 1, blocksize)   # no split needed
 
 #----------------------------------------------------------------
 # Debug code to print and visualize the schedules
