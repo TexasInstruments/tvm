@@ -239,7 +239,7 @@ def SETransform(f, mod, ctx):
             self.var = op.buffer_var
             # loops between var's def and access
             self.nest = nest
-            self.outer_loop = self.nest[0]
+            self.outer_loop = nest[0] if nest else None
             self.guard_condition = guard
             self.config = None
             self.config_var = None
@@ -260,6 +260,8 @@ def SETransform(f, mod, ctx):
             op = self.op
             index = op.index
             buf = op.buffer_var
+            if not self.nest:
+                return False
             # Analyze the index expression to get the coefficients of the
             # loop index variables. Given: 
             #   A[i*Ki + j] and [i, j]
@@ -271,7 +273,6 @@ def SETransform(f, mod, ctx):
             # advance on the innermost axis, with a coefficent of 1. This is
             # because the SE/SA assume dim0 == 1.
             if not coeffs or len(coeffs) < 2 or coeffs[-2:] != [1,0]:
-                #all_accesses_streamed = False
                 #logging.debug(f"streamify fail, coeffs[-2:] are {coeffs[-2:]}")
                 return False
             # Reverse the lists: inner-->outer
@@ -449,7 +450,8 @@ def SETransform(f, mod, ctx):
                 cand = SECandidate(op, loop_nest[level:], trip, veclen_guard)
                 candidates.append(cand)
                 loop = cand.outer_loop
-                loop_candidates[loop].append(cand)
+                if loop:
+                    loop_candidates[loop].append(cand)
                 op_candidates[op] = cand
 
         def _find_candidates_post(op):
