@@ -48,10 +48,7 @@ def schedule_injective(outs):
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([E.op for E in outs])
     C = outs[0]
-
     op = s[C].op
-    a = op.input_tensors[0]
-    b = op.input_tensors[1]
 
     # schedule transformations only apply to dimensioned operations
     if not s[C].op.axis:
@@ -64,14 +61,12 @@ def schedule_injective(outs):
     elem_bytes = int(DataType(C.dtype).bits / 8)
 
     # local buffers
-    aa = a
-    bb = b
+    local_inputs = []
     cc = C
     if 1: 
-        if len(a.shape) > 1:
-            aa = s.cache_read(a, "local", op)
-        if len(b.shape) > 1:
-            bb = s.cache_read(b, "local", op)
+        for t in op.input_tensors:
+            if len(t.shape) > 1:
+                local_inputs.append(s.cache_read(t, "local", op))
         if len(C.shape) > 1:
             cc = s.cache_write(C, "local")
             inner = s[cc].op.axis[-1]
@@ -104,10 +99,8 @@ def schedule_injective(outs):
 
             # sink local-buffer copies into outer loop
             if 1:
-                if aa != a:
-                    s[aa].compute_at(s[C], outer)
-                if bb != b:
-                    s[bb].compute_at(s[C], outer)
+                for t in local_inputs:
+                    s[t].compute_at(s[C], outer)
                 if cc != C:
                     s[cc].compute_at(s[C], outer)
                 #print("after sink")
@@ -115,10 +108,8 @@ def schedule_injective(outs):
 
     # mark local<->ext copies as using dma.
     if 1:
-        if aa != a:
-            s[aa].pragma(s[aa].op.axis[0], "dma")
-        if bb != b:
-            s[bb].pragma(s[bb].op.axis[0], "dma")
+        for t in local_inputs:
+            s[t].pragma(s[t].op.axis[0], "dma")
         if cc != C:
             # if no split above, block is outer loop
             s[C].pragma(block, "dma")
