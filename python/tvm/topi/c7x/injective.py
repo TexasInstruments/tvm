@@ -47,6 +47,8 @@ def schedule_injective(outs):
 
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([E.op for E in outs])
+    #print("initial schedule")
+    #print_schedule(s)
     C = outs[0]
     op = s[C].op
 
@@ -66,7 +68,8 @@ def schedule_injective(outs):
     if 1: 
         for t in op.input_tensors:
             if len(t.shape) > 1:
-                local_inputs.append(s.cache_read(t, "local", op))
+                l = s.cache_read(t, "local", op)
+                local_inputs.append(l)
         if len(C.shape) > 1:
             cc = s.cache_write(C, "local")
             inner = s[cc].op.axis[-1]
@@ -87,6 +90,8 @@ def schedule_injective(outs):
                 #print(f"split dim: {old} -> {sdim}")
                 dims = dims[:baxis-1] + sdim + dims[baxis:]
                 (outer, block) = s[C].split(s[C].op.axis[baxis-1], nparts=nblocks)
+                if baxis == len(s[C].op.axis):
+                    inner = block
             else:
                 #print(f"split at {baxis}")
                 (outer, block) = (s[C].op.axis[baxis-1], s[C].op.axis[baxis])
@@ -124,7 +129,6 @@ def schedule_injective(outs):
 
     # split by 16 for vectorization
     if 1:
-        #(xyo, inner) = s[cc].split(s[cc].op.axis[-1], int(vector_length/elem_bytes))
         (xyo, inner) = s[cc].split(inner, int(vector_length/elem_bytes))
         #print("after split")
         #print_schedule(s)
@@ -136,6 +140,8 @@ def schedule_injective(outs):
         #print_schedule(s)
 
     show(s)
+    #print("final schedule")
+    #print_schedule(s)
     return s
 
 
