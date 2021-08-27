@@ -15,159 +15,240 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint: disable=invalid-name, unused-variable
-"""Schedule for injective operators"""
+"""Schedule for C7x injective operators"""
+from typing import Tuple, List, Union
+import logging
+
 import tvm
 from tvm import te
-import tvm.auto_scheduler.utils
+from tvm import tir
 from tvm.runtime import DataType
-from functools import reduce
-import logging
+from .. import utils
+
 
 #----------------------------------------------------------------
 # Experimental C7x-specific schedule for injective (elementwise) ops.
-def schedule_injective(outs):
+def schedule_injective(outs: Union[te.tensor.Tensor, List[te.tensor.Tensor]]) -> te.Schedule:
+    """C7x schedule for injective op.
+
+    Parameters:
+    outs: Output tensor or list of output tensors
+
+    Returns:
+    sch: The computation schedule for the op.
+    """
+    outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
+    s = te.create_schedule([x.op for x in outs])
+
+    tvm.te.schedule.AutoInlineInjective(s)
+    for out in outs:
+        if not utils.is_empty_shape(out.shape):
+            schedule_injective_from_existing(s, out)
+    return s
+
+
+def schedule_injective_from_existing(s: te.Schedule,
+                                     C: te.Tensor) -> te.Schedule:
     """C7X CPU schedule for injective op: C = A op B
 
     Parameters
     ----------
-    outs: Array of Tensor
-          The computation graph description of injective in the format
-          of an array of tensors.
+    sch: The schedule to update.
+    C:   Tensor
+         The tensor representing the injective op.
 
     Returns
     -------
     sch: Schedule
-        The computation schedule for the op.
+         The updated schedule.
     """
+
     target = tvm.target.Target.current(allow_none=False)
     logging.debug(f"schedule_injective for c7x, target={target}")
-    # TODO: allow these to vary by target configuration
-    max_block = 0x4000   #16k
-    vector_length = 64   #16k
 
-    outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
-    s = te.create_schedule([E.op for E in outs])
     #print("initial schedule")
     #print_schedule(s)
-    C = outs[0]
-    op = s[C].op
 
     # schedule transformations only apply to dimensioned operations
     if not s[C].op.axis:
         return s
 
-    outer = s[C].op.axis[0]
-    inner = s[C].op.axis[-1]
-    block = outer       # block-level loop, if split
-    baxis = 0           # axis index of block-level loop
-    elem_bytes = int(DataType(C.dtype).bits / 8)
-
-    # local buffers
-    local_inputs = []
-    cc = C
-    if 1: 
-        for t in op.input_tensors:
-            if len(t.shape) > 1:
-                l = s.cache_read(t, "local", op)
-                local_inputs.append(l)
-        if len(C.shape) > 1:
-            cc = s.cache_write(C, "local")
-            inner = s[cc].op.axis[-1]
-        #print("after local buffers")
-        #print_schedule(s)
-
-    # split outer loop into bite-size chunks
-    if 1:
-        dims = list(tvm.auto_scheduler.utils.get_const_tuple(C.shape))
-        # TODO: make sure dims are const
-        # Find split point, including axis to split if needed
-        baxis, nblocks, blocksize = find_split(dims, elem_bytes, max_block)
-        if baxis != 0:
-            if nblocks != dims[baxis-1]:
-                #print(f"split at {baxis} by {nblocks}")
-                old = dims[baxis-1]
-                sdim = [nblocks, int(old / nblocks)]
-                #print(f"split dim: {old} -> {sdim}")
-                dims = dims[:baxis-1] + sdim + dims[baxis:]
-                (outer, block) = s[C].split(s[C].op.axis[baxis-1], nparts=nblocks)
-                if baxis == len(s[C].op.axis):
-                    inner = block
-            else:
-                #print(f"split at {baxis}")
-                (outer, block) = (s[C].op.axis[baxis-1], s[C].op.axis[baxis])
-
-            outers = dims[:baxis]
-            inners = dims[baxis:]
-            #print(f"after split: {outers} {inners}, blocksize={blocksize}")
-            #print("after split")
-            #print_schedule(s)
-
-            # sink local-buffer copies into outer loop
-            if 1:
-                for t in local_inputs:
-                    s[t].compute_at(s[C], outer)
-                if cc != C:
-                    s[cc].compute_at(s[C], outer)
-                #print("after sink")
-                #print_schedule(s)
-
-    # mark local<->ext copies as using dma.
-    if 1:
-        for t in local_inputs:
-            s[t].pragma(s[t].op.axis[0], "dma")
-        if cc != C:
-            # if no split above, block is outer loop
-            s[C].pragma(block, "dma")
+    # Transform to use double buffering, local buffers and DMA
+    s, cc, baxis, inner = double_buffer_with_dma(s, C)
 
     # fuse inner loops
-    if 1:
-        innerloops = s[cc].op.axis[baxis:]
-        if len(innerloops) > 1:
-            inner = s[cc].fuse(*innerloops)
-        #print("after fuse")
-        #print_schedule(s)
+    innerloops = s[cc].op.axis[baxis:]
+    if len(innerloops) > 1:
+        inner = s[cc].fuse(*innerloops)
+    #print("after fuse")
+    #print_schedule(s)
 
     # split by 16 for vectorization
-    if 1:
-        (xyo, inner) = s[cc].split(inner, int(vector_length/elem_bytes))
-        #print("after split")
-        #print_schedule(s)
+    vector_length = 64
+    elem_bytes = int(DataType(C.dtype).bits / 8)
+    (xyo, inner) = s[cc].split(inner, int(vector_length/elem_bytes))
+    #print("after split")
+    #print_schedule(s)
 
     # vectorize on inner axis
-    if 1:
-        s[cc].vectorize(inner)
-        #print("after vectorize")
-        #print_schedule(s)
+    s[cc].vectorize(inner)
+    #print("after vectorize")
+    #print_schedule(s)
 
-    show(s)
+    #show(s)
     #print("final schedule")
     #print_schedule(s)
     return s
 
 
+def double_buffer_with_dma(s: te.Schedule,
+                           C: te.tensor.Tensor) -> Tuple[te.Schedule,
+                                                         te.Tensor,
+                                                         int,
+                                                         tir.IterVar]:
+
+    """Update schedule with DMA and double buffering
+
+    Three steps to enable double buffering + DMA
+    1. Annotate input and output tensors as local
+    2. Split the outer loop to ensure the local tensors can fit in L2
+    3. Annotate loops performing the copies with the dma pragma
+
+    Parameters:
+    s: The schedule to update.
+    C: The tensor representing the injective op.
+
+    Returns:
+    s:  The updated schedule (if feasible)
+    cc: Updated output tensor (local buffer)
+    baxis: Axis that was split for blocking
+    inner: Innermost axis of the stage
+    """
+
+    cc = C
+
+    # TODO: allow these to vary by target configuration
+    max_block = 0x4000   #16k
+
+    op = s[C].op
+
+    outer = op.axis[0]
+    inner = op.axis[-1]
+    block = outer       # block-level loop, if split
+    baxis = 0           # axis index of block-level loop
+
+
+    elem_bytes = int(DataType(C.dtype).bits / 8)
+    dims       = list(tvm.auto_scheduler.utils.get_const_tuple(C.shape))
+
+    # Cannot analyze if the dimensions are not constant. Return.
+    constant_dim = True
+    try:
+        out_len = utils.prod(C.shape)
+        const_size = utils.get_const_int(out_len)
+    except ValueError:
+        constant_dim = False
+
+    if constant_dim is False:
+        return (s, cc, baxis, inner)
+
+
+    # Find split point, including axis to split if needed
+    baxis, nblocks, blocksize = find_split(dims, elem_bytes, max_block)
+
+    # If there is no split point (e.g. split results in odd iterations), return
+    if blocksize == 0:
+        return (s, cc, baxis, inner)
+
+    # local buffers
+    # Creates local copies of specified buffers
+    # Inserts loops to copy-in to local inputs and copy-out from local outputs
+
+    local_inputs = []
+
+    for t in op.input_tensors:
+        # Why are we checking for #dim? Don't we want to do the same for large 1D tensors?
+        if len(t.shape) > 1:
+            l = s.cache_read(t, "local", op)
+            local_inputs.append(l)
+    if len(dims) > 1:
+        cc = s.cache_write(C, "local")
+        inner = s[cc].op.axis[-1]
+    #print("after local buffers")
+    #print_schedule(s)
+
+    # Split on the axis indicated by find_split to reduce local buffer size
+    if baxis != 0:
+        if nblocks != dims[baxis-1]:
+            print(f"split at {baxis} by {nblocks}")
+            old = dims[baxis-1]
+            sdim = [nblocks, int(old / nblocks)]
+            print(f"split dim: {old} -> {sdim}")
+            dims = dims[:baxis-1] + sdim + dims[baxis:]
+            (outer, block) = s[C].split(s[C].op.axis[baxis-1], nparts=nblocks)
+            if baxis == len(s[C].op.axis):
+                inner = block
+        else:
+            #print(f"split at {baxis}")
+            (outer, block) = (s[C].op.axis[baxis-1], s[C].op.axis[baxis])
+
+        outers = dims[:baxis]
+        inners = dims[baxis:]
+        #print(f"after split: {outers} {inners}, blocksize={blocksize}")
+        #print("after split")
+        #print_schedule(s)
+
+        # sink local-buffer copies into outer loop
+        for t in local_inputs:
+            s[t].compute_at(s[C], outer)
+        if cc != C:
+            s[cc].compute_at(s[C], outer)
+        #print("after sink")
+        #print_schedule(s)
+
+    # mark local<->ext copies as using dma.
+    for t in local_inputs:
+        s[t].pragma(s[t].op.axis[0], "dma")
+    if cc != C:
+        # if no split above, block is outer loop
+        s[C].pragma(block, "dma")
+
+    return (s, cc, baxis, inner)
+
+
 def find_split(dims, elem_bytes, limit):
-    ''' Given dimensions and max block size, find even split such 
-        that inner dimensions fit in block.  Returned axis is outer axis 
-        of element-level loop. Returned nblocks is number of blocks for 
+    ''' Given dimensions and max block size, find even split such
+        that inner dimensions fit in block.  Returned axis is outer axis
+        of element-level loop. Returned nblocks is number of blocks for
         axis-1, which may or may not equal the original. Examples:
-           split([672, 14, 14], 4, 8192) --> 
+           split([672, 14, 14], 4, 8192) -->
                axis=1, nblocks=84 -> [84] [8 14 14]
-           split([10, 100, 200], 1, 200) --> 
+           split([10, 100, 200], 1, 200) -->
                axis=2, nblocks=100 --> [10 100] [200]
     '''
     # Work from inner to outer until block gets too big
-    blocksize = elem_bytes;
+    blocksize = elem_bytes
     for axis,dim in list(enumerate(dims))[::-1]:
         blocksize *= dim
-        split = 1
         #print(f"dim {axis}=[{dim}];  blocksize={blocksize}")
         # If block too big, split. Find a split that evenly divides axis.
         if blocksize > limit:
-             nblocks = int(blocksize/limit)
-             while int(dim/nblocks) * nblocks != dim:
-                 nblocks += 1
-             return (axis+1, nblocks, int(blocksize/nblocks))
+            nblocks = int(blocksize/limit)
+            while int(dim/nblocks) * nblocks != dim:
+                nblocks += 1
+            iter_range = int(blocksize/nblocks/elem_bytes)
+
+            # If block split results in odd number of iterations, do not split
+            # Downstream passes cannot handle loops with odd iteration counts
+            if iter_range % 2 != 0:
+                print(f"Invalid blocksize resulting in odd range: {iter_range}")
+                return (0, 1, 0)
+
+            return (axis+1, nblocks, int(blocksize/nblocks))
+
     return (0, 1, blocksize)   # no split needed
+
+
 
 #----------------------------------------------------------------
 # Debug code to print and visualize the schedules
@@ -186,9 +267,8 @@ def show(s):
 
 
 def print_schedule(s):
-   print("schedule------")
-   for st in s.stages:
-       print(f"stage: {st}")
-       for iv in st.all_iter_vars:
-           print(f"   iter: {iv}")
-
+    print("schedule------")
+    for st in s.stages:
+        print(f"stage: {st}")
+        for iv in st.all_iter_vars:
+            print(f"   iter: {iv}")

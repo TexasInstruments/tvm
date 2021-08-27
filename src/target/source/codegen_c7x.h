@@ -20,8 +20,8 @@
 /*!
  * \file codegen_c7x.h
  * \brief Generate C code for C7x.
- * 
- * This is an adaptation derived from CodeGenC (the generic C backend) and 
+ *
+ * This is an adaptation derived from CodeGenC (the generic C backend) and
  * CodeGenCHost (the C backend for a host CPU).
  */
 #ifndef TVM_TARGET_SOURCE_CODEGEN_C7X_H_
@@ -46,7 +46,7 @@ using namespace tir;
 class StreamDesc {
 public:
   // Parse a c7x_stream_config call and capture the parameters
-  // @tir.call_extern("c7x_stream_config", "SE", "float32", 
+  // @tir.call_extern("c7x_stream_config", "SE", "float32",
   //                  196, 8, 1, 1, 196, 0, 0)
   StreamDesc(const VarNode* CV, const CallNode* CC) :
     config_var(CV),
@@ -76,25 +76,25 @@ public:
   }
 };
 
-// Parse stream access call 
+// Parse stream access call
 class StreamAccess {
 public:
-  // Helper function to bypass broadcast node. (The vectorizer turns all 
+  // Helper function to bypass broadcast node. (The vectorizer turns all
   // the arguments into broadcast expressions)
   static PrimExpr scalar(PrimExpr e) {
     const BroadcastNode *bcst = e.as<BroadcastNode>();
     if (bcst)
       return bcst->value;
     else
-      return e; 
+      return e;
   }
   // Parse a c7x_stream_config call and capture the parameters
   // @tir.c7x_stream_access(config_var, "SE0", "pred", "adv", index_expr)
-  StreamAccess(const CallNode* CC) : 
+  StreamAccess(const CallNode* CC) :
     config_var(Downcast<Var>(scalar(CC->args[0])).get()),
     engine(Downcast<StringImm>(scalar(CC->args[1])).get()->value),
-    pred(Downcast<StringImm>(scalar(CC->args[1])).get()->value == "pred"),
-    adv(Downcast<StringImm>(scalar(CC->args[2])).get()->value == "adv"),
+    pred(Downcast<StringImm>(scalar(CC->args[2])).get()->value == "pred"),
+    adv(Downcast<StringImm>(scalar(CC->args[3])).get()->value == "adv"),
     index(CC->args[3].get()) {
   }
 
@@ -113,7 +113,7 @@ class StreamInfo {
   std::map<const VarNode*, StreamDesc> config_map_;
 public:
   // Called during pre-scan for Let config_var = c7x_stream_config(...)
-  void AddConfig(const VarNode* CV, const CallNode* CC) { 
+  void AddConfig(const VarNode* CV, const CallNode* CC) {
     config_map_.emplace(CV, StreamDesc(CV, CC));
     // GetDesc(CV).dump();
   }
@@ -121,10 +121,10 @@ public:
   StreamDesc& GetDesc(const VarNode* CV) {
     auto it = config_map_.find(CV);
     ICHECK(it != config_map_.end());
-    return it->second; 
+    return it->second;
   }
   // Update the vector length for a given config. The vector length is not
-  // passed in the TIR config call, to avoid having to update it during 
+  // passed in the TIR config call, to avoid having to update it during
   // vectorization. Instead we run a pre-pass in the codegen to detect it.
   void UpdateVecLen(const CallNode* call) {
 //    const VarNode* config_var = Downcast<Var>(access->args[1]).get();
@@ -139,7 +139,7 @@ public:
 
 //---------------------------------------------------------------------------
 // Customized Code Generator for C7x
-// This codegen is adapted from CodeGenC. 
+// This codegen is adapted from CodeGenC.
 // Partial list of customizations:
 //   - generates C++ instead of C
 //   - handles C7x DMA instrinsics
@@ -250,13 +250,18 @@ class CodeGenC7x final : public CodeGenC {
   /* \brief SE/SA config information */
   StreamInfo stream_info_;
 
+  /* \brief Save variables created during codegen - this prevents them from being deallocated.
+   *        This is required because these variables are not part of the IR itself.
+   */
+  Array<Var> new_variables_;
+
   // Is variable used in DMA copy-in/copy-out
   bool IsDMA(const VarNode* var) {
     return dma_buffers_.find(var) != dma_buffers_.end();
   }
 
   // Is variable a locally allocated buffer
-  bool IsLocal(const VarNode* var) { 
+  bool IsLocal(const VarNode* var) {
     auto it = alloc_storage_scope_.find(var);
     return it != alloc_storage_scope_.end() && it->second == "local";
   }

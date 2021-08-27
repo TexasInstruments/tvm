@@ -835,7 +835,7 @@ void CodeGenC7x::PrintVecBinaryOp(const std::string& op, DataType t, PrimExpr lh
 void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*)
   if (is_call_builtin(op->index, "tir.c7x.stream_access")) {
     StreamAccess access(op->index.as<CallNode>());
-    // example: __SE0_ADV(float16)
+    // example: __SE0ADV(float16)
     os << "__" << access.engine;
     if (access.adv) os << "ADV";
     os << "(";
@@ -909,6 +909,9 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
     if (access.pred) {
       auto rhs_var = Var("value", t);
       auto pred_var = Var("pred", DataType::Handle());
+
+      new_variables_.push_back(rhs_var);
+      new_variables_.push_back(pred_var);
 
       this->PrintIndent();
       PrintType(t, stream);
@@ -1066,6 +1069,7 @@ void CodeGenC7x::PrintDMASetup(const VarNode* dma_var, const CallNode* call) {
       dma_map_[buffer_ptr] = dma_var;
       std::string buffer_type = is_local ? "DoubleBuffer" : "Buffer";
       auto buffer_var = Var(buffer_ptr->name_hint + "_buffer", DataType::Handle());
+      new_variables_.push_back(buffer_var);
       std::string buffer_name = AllocVarID(buffer_var.get());
       const PointerTypeNode *ptr_type;
       const PrimTypeNode *prim_type = nullptr;
