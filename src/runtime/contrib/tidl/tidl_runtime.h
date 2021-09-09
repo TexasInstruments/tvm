@@ -65,7 +65,24 @@ class TIDLSubgraphInfo {
   void Load(dmlc::JSONReader* reader);
 };
 
+// Class to pass information between the TIDL compiler and runtime module
+// classes for offloading whole graph to C7x TVM runtime.
+class C7xTVMGraphInfo {
+ public:
+  std::string c7x_deploy_mod;
+  std::vector<std::string> input_names;
+  std::vector<int32_t> tensor_sizes;
+
+  std::size_t NumInputs() const { return input_names.size(); }
+  std::size_t NumOutputs() const { return tensor_sizes.size() - input_names.size(); }
+
+  void Save(dmlc::JSONWriter* writer) const;
+  void Load(dmlc::JSONReader* reader);
+};
+
 Module TIDLJ7ModuleCreate(std::unordered_map<std::string, TIDLSubgraphInfo> infos);
+
+Module TIDLJ7C7xModuleCreate(std::unordered_map<std::string, C7xTVMGraphInfo> infos);
 
 }  // namespace runtime
 }  // namespace tvm

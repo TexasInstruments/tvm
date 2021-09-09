@@ -1,0 +1,72 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+LIB_NAME = tvm_crt.lib
+
+TVM_ROOT    ?= ../../../../..
+CRT_ROOT    ?= $(TVM_ROOT)/src/runtime/crt
+CRT_CONFIG  ?= $(TVM_ROOT)/apps/bundle_deploy/crt_config/
+DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
+BUILD_DIR   ?= build
+
+ifeq (, $(shell which cl7x))
+    CC=$(CGT7X_ROOT)/bin/cl7x
+    CXX=$(CGT7X_ROOT)/bin/cl7x
+    AR=$(CGT7X_ROOT)/bin/ar7x
+    export C7X_C_DIR=$(CGT7X_ROOT)/include;$(CGT7X_ROOT)/lib
+else
+    CC=cl7x
+    CXX=cl7x
+    AR=ar7x
+endif
+
+MKDIR_P = mkdir -p
+RMDIR = rm -fr
+QUIET  ?= @
+
+PKG_CFLAGS  = -o3 -mv7100 --abi=eabi --gcc --c11 -DSOC_J721E
+
+CFLAGS += $(PKG_CFLAGS) -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
+CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG)
+
+COMMON_O_FILES=$(patsubst $(CRT_ROOT)/common/%.c,$(BUILD_DIR)/common/%.o,$(wildcard $(CRT_ROOT)/common/*.c))
+GRAPHRT_O_FILES=$(patsubst $(CRT_ROOT)/graph_runtime/%.c,$(BUILD_DIR)/graph_runtime/%.o,$(wildcard $(CRT_ROOT)/graph_runtime/*.c))
+MEMORY_O_FILES=$(patsubst $(CRT_ROOT)/memory/%.c,$(BUILD_DIR)/memory/%.o,$(wildcard $(CRT_ROOT)/memory/*.c))
+
+all: $(LIB_NAME)
+
+$(BUILD_DIR)/common/%.o: $(CRT_ROOT)/common/%.c
+	$(QUIET)$(MKDIR_P) $(dir $@)
+	$(QUIET)$(CC) $(CFLAGS) -c --output_file "$@" "$<"
+
+$(BUILD_DIR)/graph_runtime/%.o: $(CRT_ROOT)/graph_runtime/%.c
+	$(QUIET)$(MKDIR_P) $(dir $@)
+	$(QUIET)$(CC) $(CFLAGS) -c --output_file "$@" "$<"
+
+$(BUILD_DIR)/memory/%.o: $(CRT_ROOT)/memory/%.c
+	$(QUIET)$(MKDIR_P) $(dir $@)
+	$(QUIET)$(CC) $(CFLAGS) -c --output_file "$@" "$<"
+
+$(LIB_NAME): $(COMMON_O_FILES) $(GRAPHRT_O_FILES) $(MEMORY_O_FILES)
+	$(QUIET)$(AR) -r "$@" $^
+
+
+clean:
+	$(QUIET)$(RMDIR) "$(BUILD_DIR)" $(LIB_NAME)
+
+.PHONY: all
+.DEFAULT_GOAL: all

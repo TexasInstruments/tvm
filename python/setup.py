@@ -157,6 +157,17 @@ if wheel_include_libs:
             shutil.copy(path, os.path.join(CURRENT_DIR, "tvm"))
             _, libname = os.path.split(path)
             fo.write("include tvm/%s\n" % libname)
+        shutil.copytree(os.path.join(CURRENT_DIR, "../src/runtime/contrib/tidl/c7x"),
+                        os.path.join(CURRENT_DIR, "tvm/src/runtime/contrib/tidl/c7x"))
+        shutil.copytree(os.path.join(CURRENT_DIR, "../include/tvm/runtime"),
+                        os.path.join(CURRENT_DIR, "tvm/include/tvm/runtime"))
+        shutil.copytree(os.path.join(CURRENT_DIR, "../3rdparty/dlpack/include/dlpack"),
+                        os.path.join(CURRENT_DIR, "tvm/3rdparty/dlpack/include/dlpack"))
+        with open("tvm/src/runtime/contrib/tidl/c7x/py_dist_files.txt") as fi:
+            for line in fi:
+                fo.write(f"include tvm/src/runtime/contrib/tidl/c7x/{line}")
+        fo.write("recursive-include tvm/include/tvm/runtime *\n")
+        fo.write("recursive-include tvm/3rdparty/dlpack/include/dlpack *\n")
     setup_kwargs = {"include_package_data": True}
 
 if include_libs:
@@ -207,3 +218,6 @@ if wheel_include_libs:
     for path in LIB_LIST:
         _, libname = os.path.split(path)
         os.remove("tvm/%s" % libname)
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/src"))
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/include"))
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/3rdparty"))

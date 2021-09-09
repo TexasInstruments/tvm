@@ -38,6 +38,7 @@ from tvm.contrib import graph_executor
 #import tvm.relay.op.contrib.tidl as tidl_annotation
 from .tidl_reduce_subgraph_size import reduce_subgraph_size
 from .tidl_visualize import visualize_relay_graph
+from .tidl_build_c7x_mod import enable_c7x_mod
 
 tidl_annotations_registered = False
 
@@ -1193,7 +1194,9 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_thres
         num_macs = relay.analysis.get_total_mac_number(mod[name])
         subgraph_with_macs.append([name, num_macs])
     subgraph_with_macs = sorted(subgraph_with_macs, key=lambda x: int(x[1]))
-    subgraphs_to_prune = subgraph_with_macs[:-num_subgraphs_to_keep]
+    # also support pruning all subgraphs
+    num_subgraphs_to_keep = min(len(subgraph_with_macs), num_subgraphs_to_keep)
+    subgraphs_to_prune = subgraph_with_macs[0 : len(subgraph_with_macs) - num_subgraphs_to_keep]
     if min_mac_threshold:
         # Also remove all subgraphs under the minimum threshold.
         subgraphs_to_prune += [[x[0], x[1]] for x in subgraph_with_macs if x[1] < min_mac_threshold]
@@ -2041,7 +2044,7 @@ class TIDLImport:
 
         Returns
         -------
-        1: if TIDL import succeeds
+        >=1: number of imported TIDL subgraphs, if TIDL import succeeds
         -1: if TIDL import fails
         0: if there are no subgraphs for TIDL offload
         """
@@ -2050,7 +2053,7 @@ class TIDLImport:
         visualize_relay_graph(module=mod, filename=self.temp_folder+'/relay.gv')
 
         # Define return values
-        import_succeed, import_fail, no_import = 1, -1, 0
+        import_fail, no_import = -1, 0
 
         # Put some information about the graph in the info file passed to the TIDL codegen
         self.info_dict['tvm'] = { 
@@ -2213,7 +2216,7 @@ class TIDLImport:
         with open(os.path.join(self.temp_folder, "relay.nfo"), "w") as of:
             json.dump(self.info_dict, of, indent=4)
 
-        return import_succeed if len(tidl_subgraphs) > 0 else no_import
+        return len(tidl_subgraphs) if len(tidl_subgraphs) > 0 else no_import
 
     def _tally_op(self, op_name, node_dict):
         """ helper function to tally instance count of each operator in info dictionary """
@@ -3218,7 +3221,7 @@ class TIDLCompiler:
                 import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list,
                                                             relay_quantization, has_qnn_ops)
                 _ctypes.dlclose(import_lib._handle)
-                if import_status == 1:
+                if import_status >= 1:
                     print("TIDL import of Relay IR graph succeeded.")
                     if self.tidl_relay_import_debug == "4":
                         generate_tidl_layer_tensors(self.tidl_target, mod, params,
@@ -3226,6 +3229,8 @@ class TIDLCompiler:
                                                     data_layout, has_qnn_ops)
                     print("TIDL artifacts are stored at " + self.artifacts_folder)
                     mod_final, status = mod, 1        # TIDL Compilation success
+                    if (self.c7x_codegen > 0):
+                        mod_final = enable_c7x_mod(self, mod, mod_orig, params, import_status)
                 elif import_status == -1:
                     print("TIDL import of Relay IR graph failed.")
                     mod_final, status = mod_orig, -1  # TIDL Compilation failure
@@ -3261,7 +3266,26 @@ class TIDLContext(tvm.runtime.Object):
         return _ffi_tidl_api.GetCurrentTIDLContext()
 
 class build_config():
-    def __init__(self, tidl_compiler=None, artifacts_folder=None, platform="AM57"):
+    """ Configs TVM relay module build
+
+    Parameters
+    ----------
+    tidl_compiler : TIDLCompiler
+      artifacts_folder : string : where compilation artifacts are stored
+      platform : string : TI SoC platform
+      c7x_codegen : int: whether to generate C7x code for TIDL-unsupported layers
+    gen_c7x_mod : int
+      Internal option, currently building a C7x depolyable module or an Arm deployable module
+
+      c7x_codegen == 0: building an Arm deployable module, without C7x code generation,
+                        all TIDL-unsupported layers run on Arm
+      c7x_codegne >  0: with C7x code generation, all TIDL-unsupported layers run on C7x
+        - gen_c7x_mod = 1: building a C7x deployable module (to be embedded in Arm wrapper module)
+        - gen_c7x_mod = 0: building an Arm wrapper deployable module
+    """
+    def __init__(self, tidl_compiler=None, gen_c7x_mod=0):
+        artifacts_folder = None
+        platform = "J7"
         c7x_codegen = 0
         if tidl_compiler != None:
             artifacts_folder = tidl_compiler.artifacts_folder
@@ -3269,7 +3293,7 @@ class build_config():
             c7x_codegen      = tidl_compiler.c7x_codegen
         assert artifacts_folder, "artifacts_folder must be specified for TVM+TIDL compilation"
         CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
-        self.tidl_context = CreateTIDLContext(artifacts_folder, platform, c7x_codegen)
+        self.tidl_context = CreateTIDLContext(artifacts_folder, platform, c7x_codegen, gen_c7x_mod)
         self.tvm_context  = tvm.transform.PassContext(opt_level=3)
 
     def __enter__(self):

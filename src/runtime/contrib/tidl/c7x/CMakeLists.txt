@@ -1,0 +1,33 @@
+# Build TIDL C7x libs: TVM CRT lib, TIDL API lib, and C7x firmware symbols
+
+if (USE_TIDL_PSDKR_PATH STREQUAL "none")
+  message(FATAL_ERROR "Please set USE_TIDL_PSKDR_PATH to PSDK RTOS installation")
+endif()
+
+file(GLOB cgt7x_root ${USE_TIDL_PSDKR_PATH}/ti-cgt-c7000_*)
+file(GLOB ivision_path ${USE_TIDL_PSDKR_PATH}/ivision)
+file(GLOB pdk_path ${USE_TIDL_PSDKR_PATH}/pdk_jacinto_*)
+
+list(APPEND build_env_paths "USE_TIDL_RT_PATH=${USE_TIDL_RT_PATH}")
+list(APPEND build_env_paths "CGT7X_ROOT=${cgt7x_root}")
+list(APPEND build_env_paths "IVISION_PATH=${ivision_path}")
+list(APPEND build_env_paths "PDK_PATH=${pdk_path}")
+
+message("-- Build with contrib.tidl.c7x libs, path= ${build_env_paths}")
+
+add_custom_target(tidl_c7x_libs
+                  COMMAND make ${build_env_paths} -f Makefile.tvm_crt -j$(nproc)
+                  COMMAND make ${build_env_paths} -f Makefile.dsp_syms -j$(nproc)
+                  COMMAND make ${build_env_paths} -f Makefile.tidl_api -j$(nproc)
+                  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+                 )
+
+# works with tvm top-level "make clean"
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/build)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/dsp_syms.out)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/dsp_syms.out.obj)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/tvm_crt.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/tidl_api.lib)
+
+set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${clean_files})
+

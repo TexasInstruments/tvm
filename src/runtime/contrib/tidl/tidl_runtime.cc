@@ -46,6 +46,7 @@
 #include "../../file_utils.h"
 #include "tidl_runtime.h"
 #include "itidl_rt.h"
+#include "itvm_rt.h"
 
 static int tidlrt_debuglevel = 0;
 static int tidlrt_perfstats = 0;
@@ -242,6 +243,10 @@ int32_t TIDLVprintf(const char * format, va_list arg)
   return 0;
 }
 
+/**
+ * A TVM ModuleNode that executes a TIDL subgraph by offloading it via TIDL RT.
+ * When there are multiple TIDL subgraphs in a TVM graph, multiple ModuleNodes are created.
+ */
 class TIDLJ7Module : public runtime::ModuleNode {
  public:
 
@@ -323,7 +328,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
    */
   PackedFunc GetFunction(const std::string& name,
                          const ObjectPtr<Object>& sptr_to_self) final {
-    if (name.find("tidl_") == std::string::npos) {
+    if (name.find("tidl_") == std::string::npos ||
+        name.find("tidl_tvm_") != std::string::npos) {
       return PackedFunc(nullptr);
     }
 
@@ -659,6 +665,193 @@ private:
   decltype(&TIDLRT_getDdrStats) TIDLRT_getDdrStats_ = nullptr;
 };
 
+/**
+ * An Arm TVM ModuleNode that executes an outlined C7x TVM graph by offloading it via TVM RT.
+ * Currently, the whole original TVM graph are outlined to C7x TVM graph.
+ */
+class TIDLJ7C7xModule : public runtime::ModuleNode {
+ public:
+
+  explicit TIDLJ7C7xModule(std::unordered_map<std::string, C7xTVMGraphInfo> infos)
+           : infos(infos), c7xgraph_id(-1) {}
+
+  ~TIDLJ7C7xModule() {
+    for (auto rt_arg : tvmrt_args)  delete rt_arg;
+
+    if (tvmrt_handle != nullptr) {
+      TIDL_LOG << "#TVM# TVMRT_delete " << tvmrt_handle << "...";
+      if (TVMRT_delete_(tvmrt_handle) != 0)
+        LOG(FATAL) << "TVMRT_delete failed\n";
+    }
+    if (tidl_handle != nullptr)  dlclose(tidl_handle);
+  }
+
+  /*!
+   * \brief Initialize TIDL runtime by loading subgraph execution function from
+   * TIDL library.
+   */
+  void LoadTIDLRT() {
+    if(!tidl_handle) {
+      // Load TIDL shared library
+      dlerror();
+      /*
+       * The current TIOVX stack is designed in a way that everytime this
+       * library is loaded, a new set of files are opened for IPC among
+       * cores, without closing the existing ones. Soon the process runs
+       * out of file descriptors and the most recently opened models fail
+       * in TIDL_create.
+       *
+       * As a temporary workaround, opening the library two times and throwing
+       * one handle away, so as to bump up the reference count on dlOpen()
+       * and to prevent a future dlClose() from actually unloading the library.
+       *
+       * Very ugly hack, but need to maintain this as of now.
+       */
+      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
+      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
+      const char *dlsym_error1 = dlerror();
+      if (dlsym_error1) {
+        LOG(FATAL) << "Cannot open libvx_tidl_rt.so! " << dlsym_error1 << '\n';
+      }
+
+      TVMRT_create_   = LoadSymbol<decltype(TVMRT_create_)>  ("TVMRT_create");
+      TVMRT_delete_   = LoadSymbol<decltype(TVMRT_delete_)>  ("TVMRT_delete");
+      TVMRT_invoke_   = LoadSymbol<decltype(TVMRT_invoke_)>  ("TVMRT_invoke");
+      TVMRT_deactive_ = LoadSymbol<decltype(TVMRT_deactive_)>("TVMRT_deactivate");
+    }
+  }
+
+  // Loads a symbol from the tidl shared library
+  template <typename T>
+  T LoadSymbol(const char* symbol) {
+    T sym = reinterpret_cast<T>(dlsym(tidl_handle, symbol));
+    const char* error = dlerror();
+    if (error) LOG(FATAL) << "Cannot load symbol " << symbol << ": " << error << '\n';
+    return sym;
+  }
+
+  /*!
+   * \brief Provides a packed function for TVM runtime to execute,
+   *  when TVM runtime wants to execute a node with "tidl_tvm_" tag.
+   * \param name C7x TVM graph name which contains "tidl_tvm_" prefix
+   */
+  PackedFunc GetFunction(const std::string& name,
+                         const ObjectPtr<Object>& sptr_to_self) final {
+    if (name.find("tidl_tvm_") == std::string::npos) {
+      return PackedFunc(nullptr);
+    }
+
+    auto info_it = infos.find(name);
+    if (info_it == infos.end()) {
+      // try to find it in next TIDLJ7Module
+      return PackedFunc(nullptr);
+    }
+    auto& info = info_it->second;
+
+    // Get graph id which is after "tidl_tvm_" (9 characters).
+    c7xgraph_id = std::stoi(name.substr(9));
+
+    // Load TIDLRT library.  Each subgraph/TIDLJ7Module, C7xTVMGraph/TIDLJ7C7xModule will call
+    //     this once, it is okay to dlopen() same library multiple times
+    LoadTIDLRT();
+
+    // Call TVMRT_create() to initialize the C7x TVM graph
+    sTVMRT_Params_t params;
+    params.deploy_mod = (void*) info.c7x_deploy_mod.data();
+    params.deploy_mod_size = info.c7x_deploy_mod.size();
+    params.num_input_tensors = info.NumInputs();
+    params.num_output_tensors = info.NumOutputs();
+    for (int i = 0, count = 0; i < params.num_input_tensors; i++)
+    {
+      if (count + info.input_names[i].size() + 1 > TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE)
+      {
+        LOG(FATAL) << "TVMRT: total length of input names exceeded maximum allowed: "
+                   << TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE << '\n';
+        return PackedFunc(nullptr);
+      }
+      params.input_names_offset[i] = count;
+      strcpy((char*) &params.input_names[count], info.input_names[i].c_str());
+      count += (info.input_names[i].size() + 1);
+    }
+    for (size_t i = 0; i < info.tensor_sizes.size(); i++)
+      params.tensors_params[i].size_in_bytes = info.tensor_sizes[i];
+
+    std::string trace_base_name = "./tidl_trace_c7xgraph_" + std::to_string(c7xgraph_id) + "_";
+    params.traceBaseName = const_cast<char *>(trace_base_name.c_str());
+    params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
+    params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
+    params.TVMVprintf = TIDLVprintf;
+    TIDL_LOG << "#TVM# c7x_deploy_mod size: " << params.deploy_mod_size;
+
+    if (TVMRT_create_(&params, &tvmrt_handle) != 0) {
+      LOG(FATAL) << "Failed to initialize TVMRT for c7xgraph " << c7xgraph_id << '\n';
+      return PackedFunc(nullptr);
+    }
+    TIDL_LOG << "#TVM# TVMRT_create tidl_tvm_" << c7xgraph_id << ": " << tvmrt_handle;
+
+    // release c7x_deploy_mod by swapping with an empty string and let empty string go out of scope
+    std::string().swap(info.c7x_deploy_mod);
+
+    // Initialize sTVMRT_Tensor_t* vector for inputs/outputs
+    tvmrt_args.resize(info.NumInputs() + info.NumOutputs(), nullptr);
+    for (size_t i = 0; i < tvmrt_args.size(); i++)
+      tvmrt_args[i] = new sTVMRT_Tensor_t;
+
+    return PackedFunc([this, info](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+      for (int i = 0; i < args.size(); i++)
+        tvmrt_args[i]->data = (reinterpret_cast<DLTensor*>((void *) args[i]))->data;
+
+      // TVMRT_invoke() sequence
+      if (TVMRT_invoke_(tvmrt_handle, &tvmrt_args[0], &tvmrt_args[info.NumInputs()]) != 0)
+        LOG(FATAL) << "TVMRT_invoke failed\n";
+    });
+  }
+
+  const char* type_key() const { return "tidl"; }
+
+  void SaveToFile(const std::string& file_name,
+                  const std::string& format) final {
+    std::string fmt = runtime::GetFileFormat(file_name, format);
+    CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
+    std::string bin;
+    dmlc::MemoryStringStream mstrm(&bin);
+    SaveToBinary(&mstrm);
+    SaveBinaryToFile(file_name, bin);
+  }
+
+  void SaveToBinary(dmlc::Stream* stream) final {
+    std::ostringstream os;
+    os << "C7";
+    dmlc::JSONWriter writer(&os);
+    writer.Write(infos);
+    stream->Write(os.str());
+  }
+
+  static Module FromJSON(std::istringstream& graph_stream) {
+    dmlc::JSONReader reader(&graph_stream);
+    std::unordered_map<std::string, C7xTVMGraphInfo> infos;
+    reader.Read(&infos);
+    return TIDLJ7C7xModuleCreate(infos);
+  }
+
+private:
+
+  // I used an unordered map with strings as the index because there is built in
+  // support to serialize/deserialize this to/from JSON.
+  std::unordered_map<std::string, C7xTVMGraphInfo> infos;
+
+  int c7xgraph_id;
+  void* tvmrt_handle;
+  std::vector<sTVMRT_Tensor_t*> tvmrt_args;
+
+  // TVMRT API from TIDLRT/TVMRT shared library
+  void* tidl_handle = nullptr;
+  decltype(&TVMRT_create)     TVMRT_create_ = nullptr;
+  decltype(&TVMRT_delete)     TVMRT_delete_ = nullptr;
+  decltype(&TVMRT_invoke)     TVMRT_invoke_ = nullptr;
+  decltype(&TVMRT_deactivate) TVMRT_deactive_ = nullptr;
+};
+
 
 // Loads a TIDL (J6 or J7) module from a file. As far as I know this function is
 // never called because the module is always embedded as a binary in the DSO
@@ -678,6 +871,8 @@ static Module LoadFromFile(const std::string& path) {
     return TIDLJ6Module::FromJSON(graph_stream);
   else if (!strcmp(keyword, "J7"))
     return TIDLJ7Module::FromJSON(graph_stream);
+  else if (!strcmp(keyword, "C7"))
+    return TIDLJ7C7xModule::FromJSON(graph_stream);
   else {
     LOG(FATAL) << "Unsupported platform found when loading TIDL binary (" << keyword << ")\n";
     return Module();
@@ -699,6 +894,8 @@ static Module LoadFromBinary(void* strm) {
     return TIDLJ6Module::FromJSON(graph_stream);
   else if (!strcmp(keyword, "J7"))
     return TIDLJ7Module::FromJSON(graph_stream);
+  else if (!strcmp(keyword, "C7"))
+    return TIDLJ7C7xModule::FromJSON(graph_stream);
   else {
     LOG(FATAL) << "Unsupported platform found when loading TIDL binary (" << keyword << ")\n";
     return Module();
@@ -760,6 +957,28 @@ void TIDLSubgraphInfo::Load(dmlc::JSONReader* reader) {
   params_data = Base64Decode(params_base64);
 }
 
+// Save a C7xTVMGraphInfo to JSON
+void C7xTVMGraphInfo::Save(dmlc::JSONWriter* writer) const {
+  writer->BeginObject();
+  writer->WriteObjectKeyValue("input_names", input_names);
+  writer->WriteObjectKeyValue("tensor_sizes", tensor_sizes);
+  writer->WriteObjectKeyValue("c7x_deploy_mod", Base64Encode(c7x_deploy_mod));
+  writer->EndObject();
+}
+
+// Load a C7xTVMGraphInfo from JSON
+void C7xTVMGraphInfo::Load(dmlc::JSONReader* reader) {
+  dmlc::JSONObjectReadHelper helper;
+  helper.DeclareField("input_names", &input_names);
+  helper.DeclareField("tensor_sizes", &tensor_sizes);
+
+  std::string c7x_deploy_mod_base64;
+  helper.DeclareField("c7x_deploy_mod", &c7x_deploy_mod_base64);
+  helper.ReadAllFields(reader);
+
+  c7x_deploy_mod = Base64Decode(c7x_deploy_mod_base64);
+}
+
 // Factory method to create a J6 TIDL Module
 Module TIDLJ6ModuleCreate(int total_subgraphs,
                           const std::unordered_map<std::string, int>& num_inputs,
@@ -771,6 +990,12 @@ Module TIDLJ6ModuleCreate(int total_subgraphs,
 // Factory method to create a J7 TIDL Module
 Module TIDLJ7ModuleCreate(std::unordered_map<std::string, TIDLSubgraphInfo> infos) {
   auto n = make_object<TIDLJ7Module>(infos);
+  return Module(n);
+}
+
+// Factory method to create a J7 C7x Module
+Module TIDLJ7C7xModuleCreate(std::unordered_map<std::string, C7xTVMGraphInfo> infos) {
+  auto n = make_object<TIDLJ7C7xModule>(infos);
   return Module(n);
 }
 

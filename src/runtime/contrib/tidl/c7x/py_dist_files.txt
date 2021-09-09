@@ -1,0 +1,11 @@
+bundle.h
+bundle_static.c
+c7x_tvm.cmd
+c7x_tvm_runtime.h
+dsp_syms.out
+dsp_syms.out.obj
+Makefile.c7x_mod
+tidl_api.h
+tidl_api.lib
+tvm_crt.lib
+tvm_tidl_dmautils.h

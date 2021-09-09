@@ -1,0 +1,51 @@
+EXE_NAME = c7x_deploy_tvm.out
+
+# CGT7X_ROOT expected to be set by user
+# TVM_ROOT, TVM_C7X_ROOT expected from outside script
+DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
+
+ifeq (, $(shell which cl7x))
+    CC=$(CGT7X_ROOT)/bin/cl7x
+    CXX=$(CGT7X_ROOT)/bin/cl7x
+    AR=$(CGT7X_ROOT)/bin/ar7x
+    export C7X_C_DIR=$(CGT7X_ROOT)/include;$(CGT7X_ROOT)/lib
+    STRIP=$(CGT7X_ROOT)/bin/strip7x
+else
+    CC=cl7x
+    CXX=cl7x
+    AR=ar7x
+    STRIP=strip7x
+endif
+
+MKDIR_P = mkdir -p
+RMDIR   = rm -fr
+QUIET  ?= @
+
+PKG_CFLAGS  = -o3 -mv7100 --abi=eabi --gcc --c11 -DSOC_J721E
+
+CFLAGS += $(PKG_CFLAGS) -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
+CFLAGS += -I $(TVM_C7X_ROOT)
+
+SOURCES  = func_registry.c tvm_main.c
+SOURCES += $(wildcard model_*.c)
+OBJS     =$(patsubst %.c,%.obj,$(SOURCES))
+
+all: $(EXE_NAME)
+
+%.obj: %.c
+	$(QUIET)$(CC) $(CFLAGS) -c --output_file $@ $<
+
+$(EXE_NAME): $(OBJS)
+	$(QUIET)$(CC) $(CFLAGS) $(OBJS) \
+                  $(TVM_C7X_ROOT)/dsp_syms.out.obj \
+            -z -l $(TVM_C7X_ROOT)/tidl_api.lib \
+               -l $(TVM_C7X_ROOT)/tvm_crt.lib \
+               -l $(TVM_C7X_ROOT)/c7x_tvm.cmd \
+            -o $@ -m $@.map
+	$(QUIET)$(STRIP) $@
+
+clean:
+	$(QUIET)$(RMDIR) $(OBJS) $(EXE_NAME)
+
+.PHONY: all
+.DEFAULT_GOAL: all

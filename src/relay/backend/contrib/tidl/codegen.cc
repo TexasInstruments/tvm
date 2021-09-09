@@ -65,14 +65,16 @@ class TIDLContextNode : public Object {
 
   std::string platform;
   int         c7x_codegen;
+  int         gen_c7x_mod;
 
   TIDLContextNode() : artifacts_directory(""), platform("AM57"),
-                      c7x_codegen(0) {}
+                      c7x_codegen(0), gen_c7x_mod(0) {}
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("artifacts_directory", &artifacts_directory);
     v->Visit("platform", &platform);
     v->Visit("c7x_codegen", &c7x_codegen);
+    v->Visit("gen_c7x_mod", &gen_c7x_mod);
   }
 
   static constexpr const char* _type_key = "tidl.TIDLContext";
@@ -223,9 +225,11 @@ TVM_REGISTER_GLOBAL("tidl.CreateTIDLContext")
   runtime::String artifacts_directory = args[0];
   runtime::String platform = args[1];
   int             c7x_codegen = args[2];
+  int             gen_c7x_mod = args[3];
   ctx->artifacts_directory = artifacts_directory;
   ctx->platform = platform;
   ctx->c7x_codegen = c7x_codegen;
+  ctx->gen_c7x_mod = gen_c7x_mod;
   *ret = ctx;
 });
 
@@ -481,15 +485,14 @@ void J7CSourceCodegen::EmitHeaders(const std::string subgraph_name, uint32_t sub
 #include "tvm/runtime/c_runtime_api.h"
 #include "tvm/runtime/c_backend_api.h"
 
-#include "itidl_rt.h"
 #include "tidl_api.h"
 )headers";
 
     // Create headers
     code_stream_ << header_files;
 
-    code_stream_ << "#include \"" <<  tempdir << "/subgraph" << subgraph_id << "_net.c\"\n";
-    code_stream_ << "#include \"" <<  tempdir << "/subgraph" << subgraph_id << "_params.c\"\n";
+    code_stream_ << "#include \"subgraph" << subgraph_id << "_net.c\"\n";
+    code_stream_ << "#include \"subgraph" << subgraph_id << "_params.c\"\n";
     code_stream_ << "void* " << subgraph_name << "_instance;\n\n";
     code_stream_ << "extern void* getUDMADrvObjPtr();\n\n";
 }
@@ -547,11 +550,109 @@ void J7CSourceCodegen::EmitDestroyFunction(const std::string& prefix)
                  << "}\n\n";
 }
 
+/*!
+ * \brief Generates a TIDLJ7C7xModule from a Relay expression (call "tidl_tvm_0").
+ * The generated TIDLJ7C7xModule dispatches outlined C7x TVM graph via TVM RT.
+ * The dispatch passes TVM tensors as is from Arm TVM runtime to C7x TVM runtime.
+ * Only the data pointer and the size of TVM tensors are needed by TVM RT.
+ */
+class TIDLJ7C7xModuleCodeGen : public CSourceModuleCodegenBase {
+ public:
+  /*!
+   * \brief Gets a TIDL SubgraphInfo object from a Relay function.
+   * \param func A relay function that will be executed by TIDL as a subgraph.
+   * \return A TIDLSubgraphInfo object.
+   */
+  std::pair<std::string, runtime::C7xTVMGraphInfo> GetC7xTVMGraphInfo(const Function& func) {
+    TIDLContext ctx = TIDLContext::Current();
+    runtime::C7xTVMGraphInfo c7xgraph_info;
+
+    // Get the subgraph name and tempdir name.
+    auto subgraph_name = GetExtSymbol(func);
+    const std::string tempdir_name = ctx->artifacts_directory + "/tempDir";
+
+    // Read in the deploy_mod binary file
+    std::string c7xmod_filename = tempdir_name + "/c7x_deploy_tvm.out";
+    std::ifstream c7xmod_file_stream(c7xmod_filename, std::ios::binary | std::ios::in);
+    if (!c7xmod_file_stream.is_open())
+      LOG(FATAL) << "Failed to open C7x TVM deployable mod file " << c7xmod_filename << '\n';
+    c7xgraph_info.c7x_deploy_mod.assign(std::istreambuf_iterator<char>(c7xmod_file_stream),
+                                        std::istreambuf_iterator<char>());
+
+    // Add all the input tensor names, and tensor sizes
+    for (auto& var : func->params)
+    {
+      std::string input_name = var->name_hint();  // "data_c7x"
+      input_name.resize(input_name.size() - 4);   // "data"
+      c7xgraph_info.input_names.push_back(input_name);
+      c7xgraph_info.tensor_sizes.push_back(
+                                 ComputeTensorTypeSize(var->checked_type().as<TensorTypeNode>()));
+    }
+
+    // Count outputs, and tensor sizes
+    if (const TensorTypeNode *ttype = func->ret_type.as<TensorTypeNode>())
+    {
+      c7xgraph_info.tensor_sizes.push_back(ComputeTensorTypeSize(ttype));
+    }
+    else
+    {
+      const TupleTypeNode* ttypes = func->ret_type.as<TupleTypeNode>();
+      for (auto& field : ttypes->fields)
+        c7xgraph_info.tensor_sizes.push_back(ComputeTensorTypeSize(field.as<TensorTypeNode>()));
+    }
+
+    return std::make_pair(subgraph_name, c7xgraph_info);
+  }
+
+  /*!
+   * \brief Create TIDL module from Relay funtion or IRModule.
+   * \param ref An object ref that could be either a Relay function or IRModule.
+   * \return The TIDL runtime module.
+   */
+  virtual runtime::Module CreateCSourceModule(const ObjectRef& ref) override {
+    std::unordered_map<std::string, runtime::C7xTVMGraphInfo> subgraph_infos;
+    if (ref->IsInstance<FunctionNode>()) {
+      Function func = Downcast<Function>(ref);
+      subgraph_infos.insert(GetC7xTVMGraphInfo(func));
+    } else if (ref->IsInstance<IRModuleNode>()) {
+      IRModule mod = Downcast<IRModule>(ref);
+      for (const auto& it : mod->functions) {
+        auto func = Downcast<Function>(it.second);
+        subgraph_infos.insert(GetC7xTVMGraphInfo(func));
+      }
+    } else {
+      LOG(FATAL)
+          << "The input ref is expected to be a Relay function or module.";
+    }
+    return runtime::TIDLJ7C7xModuleCreate(subgraph_infos);
+  }
+
+ private:
+  // Didn't find a readily available function in TVM, closest one is GetMemorySize()
+  int32_t ComputeTensorTypeSize(const TensorTypeNode* ttype)
+  {
+    int32_t size = 1;
+    for (IndexExpr dim : ttype->shape) {
+      const int64_t* pval = tir::as_const_int(dim);
+      ICHECK(pval != nullptr) << "TIDLJ7C7x: Cannot support symbolic tensor shape " << ttype->shape;
+      ICHECK_GE(*pval, 0) << "TIDLJ7C7x: Cannot support tensor with negative shape" << *pval;
+      size *= pval[0];
+    }
+
+    return (size * ((ttype->dtype.bits() * ttype->dtype.lanes() + 7) / 8));
+  }
+};
+
 
 /*!
  * \brief The external compiler/codegen tool. It takes a Relay expression/module
  * and compile it into a TIDL runtime module.
  *
+ *    c7x_codegen == 0: building an Arm deployable module, without C7x code generation,
+ *                      all TIDL-unsupported layers run on Arm
+ *    c7x_codegne >  0: with C7x code generation, all TIDL-unsupported layers run on C7x
+ *      - gen_c7x_mod = 1: building a C7x deployable module (to be embedded in Arm wrapper module)
+ *      - gen_c7x_mod = 0: building an Arm wrapper deployable module
  */
 runtime::Module TIDLCompiler(const ObjectRef& ref) {
   TIDLContext ctx = TIDLContext::Current();
@@ -559,15 +660,23 @@ runtime::Module TIDLCompiler(const ObjectRef& ref) {
     TIDLJ6ModuleCodeGen tidl;
     return tidl.CreateCSourceModule(ref);
   } else if (ctx->platform == "J7") {
-    if (ctx->c7x_codegen == 0)
+    if (ctx->c7x_codegen > 0)
     {
-      TIDLJ7ModuleCodeGen tidl;
-      return tidl.CreateCSourceModule(ref);
+      if (ctx->gen_c7x_mod == 1)
+      {
+        J7CSourceCodegen csource;
+        return csource.CreateCSourceModule(ref);
+      }
+      else
+      {
+        TIDLJ7C7xModuleCodeGen tidl;
+        return tidl.CreateCSourceModule(ref);
+      }
     }
     else
     {
-      J7CSourceCodegen csource;
-      return csource.CreateCSourceModule(ref);
+      TIDLJ7ModuleCodeGen tidl;
+      return tidl.CreateCSourceModule(ref);
     }
   } else {
     LOG(FATAL) << "Illegal TIDL platform " << ctx->platform;

@@ -14,21 +14,21 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+"""Embed an input file as a section in C7x assembly"""
 
-if(USE_TIDL STREQUAL "ON")
-  message(STATUS "Build with contrib.tidl, path=" ${USE_TIDL_RT_PATH})
-  if (USE_TIDL_RT_PATH STREQUAL "none")
-    message(FATAL_ERROR "TIDL RT path not set, J7 runtime support will not be available")
-  else()
-    include_directories(${USE_TIDL_RT_PATH}/inc)
-  endif()
+import sys
 
-  file(GLOB TIDL_RELAY_CONTRIB_SRC src/relay/backend/contrib/tidl/*.cc)
-  list(APPEND COMPILER_SRCS ${TIDL_RELAY_CONTRIB_SRC})
-
-  file(GLOB TIDL_CONTRIB_SRC src/runtime/contrib/tidl/*.cc)
-  list(APPEND RUNTIME_SRCS ${TIDL_CONTRIB_SRC})
-
-  add_subdirectory("src/runtime/contrib/tidl/c7x")
-endif()
-
+with open(sys.argv[1], "rb") as fi:
+  with open(sys.argv[2], "wt") as fo:
+    fo.write("\t.sect \".dsp_syms_out\"\n\t.retain")
+    nbytes = 0
+    byte = fi.read(1)
+    while byte:
+      val = int.from_bytes(byte, byteorder='little', signed=True)
+      if ((nbytes % 10) == 0):
+        fo.write(f"\n\t.byte {val}")
+      else:
+        fo.write(f", {int(val)}")
+      nbytes += 1
+      byte = fi.read(1)
+    fo.write("\n")
