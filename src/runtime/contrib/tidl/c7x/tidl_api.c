@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /*------------------------------------------------------------------------------*/
 // TIDL_API.C
 //   Implement the TIDL API interface
@@ -556,39 +575,7 @@ static int32_t tidl_element_size(int32_t elementType)
 // Manage memory used by TIDL
 #include "ti_mem_manager.h"
 
-#if (HOST_EMULATION)
-   #include <malloc.h>
-   #define EXTRA_MEM_FOR_ALIGN (1024)
-#else
-   #define EXTRA_MEM_FOR_ALIGN (0)
-#endif
-
-#define L1_TOTAL_MEMORY_SIZE  (16 * 1024)
-#define L2_TOTAL_MEMORY_SIZE  (512 * 1024)
-#define L3_TOTAL_MEMORY_SIZE  (8 * 1024 * 1024)
-
-#define L1_MEM_SIZE  (16*1024 +  EXTRA_MEM_FOR_ALIGN)
-#define L2_MEM_SIZE  (448*1024+  EXTRA_MEM_FOR_ALIGN)
-#define L3_MEM_SIZE  (7968 * 1024)
-
-#if HOST_EMULATION
-#define L4_MEM_SIZE  (1.5*1024 * 1024 * 1024)
-#else
-#define L4_MEM_SIZE  (668 * 1024 * 1024)
-#endif
-
-#if HOST_EMULATION
-/* For host build allocation is done via aligned_malloc */
-#else
-  #if 0
-__attribute__((section(".l1ScratchBuf")))
-uint8_t L1_SCRATCH[L1_MEM_SIZE];
-__attribute__((section(".l2ScratchBuf")))
-uint8_t L2_SCRATCH[L2_MEM_SIZE];
-__attribute__((section(".l3ScratchBuf")))
-uint8_t L3_SCRATCH[L3_MEM_SIZE];
-  #endif
-#endif
+#include "tidl_api_mem.h"
 
 TIMemObject memObj_DMEM0;
 TIMemObject memObj_DMEM1;
@@ -601,33 +588,25 @@ static void init_mem_regions()
   uint8_t * L1Scratch = NULL;
   uint8_t * L2Scratch = NULL;
   uint8_t * L3Scratch = NULL;
+  uint32_t  L1Size;
+  uint32_t  L2Size;
+  uint32_t  L3Size;
 #if HOST_EMULATION
   // Copied from test app, but seems suspicious. Align to total size
   // of internal memory block?
   L1Scratch = (uint8_t*)tidl_memalign(L1_TOTAL_MEMORY_SIZE, L1_MEM_SIZE);
   L2Scratch = (uint8_t*)tidl_memalign(L2_TOTAL_MEMORY_SIZE, L2_MEM_SIZE);
   L3Scratch = (uint8_t*)tidl_memalign(L3_TOTAL_MEMORY_SIZE, L3_MEM_SIZE);
+  L1Size = L1_MEM_SIZE;
+  L2Size = L2_MEM_SIZE;
+  L3Size = L3_MEM_SIZE;
 #else
-  /*
-  extern uint8_t g_l1_mem[];
-  extern uint8_t g_l2_mem[];
-  extern uint8_t g_l3_mem[];
-  L1Scratch = g_l1_mem;
-  L2Scratch = g_l2_mem;
-  L3Scratch = g_l3_mem;
-  */
-  #if 1
-  extern void*   g_l1_mem_addr;
-  extern void*   g_l2_mem_addr;
-  extern void*   g_l3_mem_addr;
   L1Scratch = (uint8_t *) g_l1_mem_addr;
   L2Scratch = (uint8_t *) g_l2_mem_addr;
   L3Scratch = (uint8_t *) g_l3_mem_addr;
-  #else
-  L1Scratch = (uint8_t *) 0x64e00000;
-  L2Scratch = (uint8_t *) 0x64800000;
-  L3Scratch = (uint8_t *) 0x70020000;
-  #endif
+  L1Size = g_l1_mem_size;
+  L2Size = g_l2_mem_size;
+  L3Size = g_l3_mem_size;
 #endif
 
   // We malloc L4 requests directly, to keep track of usage
@@ -636,9 +615,9 @@ static void init_mem_regions()
 
   //TIDLTB_ASSERT_EXIT(((L1Scratch != NULL) && (L2Scratch != NULL) && (L3Scratch != NULL) && (L4Scratch != NULL)));
 
-  TI_CreateMemoryHandle(&memObj_DMEM0,  L1Scratch, L1_MEM_SIZE);
-  TI_CreateMemoryHandle(&memObj_DMEM1,  L2Scratch, L2_MEM_SIZE);
-  TI_CreateMemoryHandle(&memObj_SARAM0, L3Scratch, L3_MEM_SIZE);
+  TI_CreateMemoryHandle(&memObj_DMEM0,  L1Scratch, L1Size);
+  TI_CreateMemoryHandle(&memObj_DMEM1,  L2Scratch, L2Size);
+  TI_CreateMemoryHandle(&memObj_SARAM0, L3Scratch, L3Size);
   //TI_CreateMemoryHandle(&memObj_EXTMEM, L4Scratch, L4_MEM_SIZE);
 }
 

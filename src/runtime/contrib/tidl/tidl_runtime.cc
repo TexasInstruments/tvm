@@ -322,9 +322,10 @@ class TIDLJ7Module : public runtime::ModuleNode {
 
   /*!
    * \brief Provides a packed function for TVM runtime to execute,
-   *  when TVM runtime wants to execute a subgraph with "tidl_" tag.
+   *    when TVM runtime wants to execute a subgraph with "tidl_" tag.
    * \param name Subgraph name which contains "tidl_" prefix if the subgraph is
-   *  to run on TIDL.
+   *    to run on TIDL.  Note that node with "tidl_tvm_" prefix should be handled by
+   *    TIDLJ7C7xModule, not this one (TIDLJ7Module).
    */
   PackedFunc GetFunction(const std::string& name,
                          const ObjectPtr<Object>& sptr_to_self) final {

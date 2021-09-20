@@ -5,7 +5,9 @@ c7x_tvm_runtime.h
 dsp_syms.out
 dsp_syms.out.obj
 Makefile.c7x_mod
+make.inc
 tidl_api.h
 tidl_api.lib
 tvm_crt.lib
+tidl_api_mem.h
 tvm_tidl_dmautils.h

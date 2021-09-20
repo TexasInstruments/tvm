@@ -1,72 +1,34 @@
-/******************************************************************************
- * Copyright (c) 2021, Texas Instruments Incorporated - http://www.ti.com/
- *   All rights reserved.
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions are met:
- *       * Redistributions of source code must retain the above copyright
- *         notice, this list of conditions and the following disclaimer.
- *       * Redistributions in binary form must reproduce the above copyright
- *         notice, this list of conditions and the following disclaimer in the
- *         documentation and/or other materials provided with the distribution.
- *       * Neither the name of Texas Instruments Incorporated nor the
- *         names of its contributors may be used to endorse or promote products
- *         derived from this software without specific prior written permission.
+ *   http://www.apache.org/licenses/LICENSE-2.0
  *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- *   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- *   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- *   ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- *   LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- *   CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- *   SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- *   INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- *   CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- *   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
- *   THE POSSIBILITY OF SUCH DAMAGE.
- *****************************************************************************/
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 
 /* This file provides simplified API for using DmaUtils
    in TVM+TIDL generated code */
 
 #include <stdio.h>
 #include "tvm_tidl_dmautils.h"
+#include <ti/drv/udma/dmautils/dmautils.h>
+#include <ti/drv/udma/udma.h>
+
 
 //#define DEBUG_PRINT(...) printf(__VA_ARGS__)
 #define DEBUG_PRINT(...)
-
-#define L2_ALIGN_SIZE (128U)
-#define L2_ALIGN_CEIL(VAL, ALIGN) ((((VAL)+(ALIGN)-1)/(ALIGN)) * (ALIGN))
-
-static uint8_t *p_l2_scratch;
-static int32_t l2_scratch_avail_size;
-
-void tvm_tidl_l2_scratch_reset()
-{
-  #if 1
-  extern void* g_l2_mem_addr;
-  p_l2_scratch = (uint8_t *) g_l2_mem_addr;
-  #else
-  p_l2_scratch = (uint8_t *) 0x64800000;
-  #endif
-  l2_scratch_avail_size = 448*1024;  // 448 KB
-}
-
-uint8_t *tvm_tidl_l2_scratch_alloc(int32_t size)
-{
-  if (size <= 0 || l2_scratch_avail_size < size)  return NULL;
-
-  uint8_t *alloc_ptr = p_l2_scratch;
-  int32_t aligned_alloc_size = L2_ALIGN_CEIL(size, L2_ALIGN_SIZE);
-  p_l2_scratch          += aligned_alloc_size;
-  l2_scratch_avail_size -= aligned_alloc_size;
-  return alloc_ptr;
-}
-
-int32_t tvm_tidl_l2_scratch_avail_size()
-{
-  return l2_scratch_avail_size;
-}
 
 #ifndef HOST_EMULATION
 void *getUDMADrvObjPtr()
@@ -134,7 +96,7 @@ uint8_t *tvm_tidl_dmautils_init(int32_t num_channels, uint8_t *pTrMem_chs[])
 */
 int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
     int32_t ch, uint8_t *pTrMem_chs[],
-    uint8_t *srcPtr, uint8_t *dstPtr, DmaUtilsAutoInc3d_SyncType syncType,
+    uint8_t *srcPtr, uint8_t *dstPtr, tvmtidlDmaUtilsAutoInc3d_SyncType syncType,
     uint16_t sicnt0, uint16_t sicnt1, uint16_t sicnt2, uint16_t sicnt3,
                       int32_t sdim1,   int32_t sdim2,   int32_t sdim3,
     uint16_t dicnt0, uint16_t dicnt1, uint16_t dicnt2, uint16_t dicnt3,
@@ -225,3 +187,27 @@ int32_t tvm_tidl_dmautils_deinit(uint8_t *dmaUtilsContext,
 
   return retVal;
 }
+
+/**
+ * @brief Trigger DMA transfer
+ *
+ * @param dmaUtilsContext
+ * @param channelId DMA channel
+ * @return retVal
+*/
+int32_t tvm_tidl_dmautils_trigger(uint8_t *dmaUtilsContext, int32_t channelId)
+{
+  return DmaUtilsAutoInc3d_trigger(dmaUtilsContext, channelId);
+}
+
+/**
+ * @brief Wait for DMA transfer to finish
+ *
+ * @param dmaUtilsContext
+ * @param channelId DMA channel
+*/
+void tvm_tidl_dmautils_wait(uint8_t *dmaUtilsContext, int32_t channelId)
+{
+  DmaUtilsAutoInc3d_wait(dmaUtilsContext, channelId);
+}
+

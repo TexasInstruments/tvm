@@ -1,6 +1,0 @@
-a.out: dma_test.cpp c7x_tvm_runtime.h 
-	g++ -DMODEL_DMA=1 -g $< -o a.out
-
-clean:
-	rm -rf a.out *.o 
-.PHONY: clean

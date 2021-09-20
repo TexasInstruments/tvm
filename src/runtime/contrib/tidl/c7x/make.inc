@@ -15,28 +15,24 @@
 # specific language governing permissions and limitations
 # under the License.
 
-include make.inc
+TVM_ROOT    ?= ../../../../..
 
-EXE_NAME = dsp_syms.out
+ifeq (, $(shell which cl7x))
+    CC=$(CGT7X_ROOT)/bin/cl7x
+    CXX=$(CGT7X_ROOT)/bin/cl7x
+    AR=$(CGT7X_ROOT)/bin/ar7x
+    export C7X_C_DIR=$(CGT7X_ROOT)/include;$(CGT7X_ROOT)/lib
+    STRIP=$(CGT7X_ROOT)/bin/strip7x
+else
+    CC=cl7x
+    CXX=cl7x
+    AR=ar7x
+    STRIP=strip7x
+endif
 
-BUILD_DIR   ?= build
+MKDIR_P = mkdir -p
+RMDIR   = rm -fr
+QUIET  ?= @
 
-all: $(EXE_NAME) $(EXE_NAME).obj
-
-$(BUILD_DIR)/dsp_syms.obj: dsp_syms.c
-	$(QUIET)$(MKDIR_P) $(dir $@)
-	$(QUIET)$(CC) $(CFLAGS) -c $< --output_file $@
-
-dsp_syms.out: $(BUILD_DIR)/dsp_syms.obj
-	$(QUIET)$(CC) $^ -z --dynamic=exe --no_entry_point --soname=$@ -o $@
-	$(QUIET)$(STRIP) $@
-
-$(BUILD_DIR)/dsp_syms.out.asm: dsp_syms.out
-	python3 ./gen_c7x_sect.py $< $@
-
-dsp_syms.out.obj: $(BUILD_DIR)/dsp_syms.out.asm
-	$(QUIET)$(CC) $(CFLAGS) $< --output_file $@
-
-clean:
-	$(QUIET)$(RMDIR) $(EXE_NAME) $(EXE_NAME).obj $(BUILD_DIR)
-
+PKG_CFLAGS  = -o3 -mv7100 --abi=eabi --gcc --c11 -DSOC_J721E
+CFLAGS += $(PKG_CFLAGS)

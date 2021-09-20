@@ -64,17 +64,17 @@ class TIDLContextNode : public Object {
   std::string artifacts_directory;
 
   std::string platform;
-  int         c7x_codegen;
-  int         gen_c7x_mod;
+  int         c7x_codegen_enabled;
+  int         gen_c7x_mod_enabled;
 
   TIDLContextNode() : artifacts_directory(""), platform("AM57"),
-                      c7x_codegen(0), gen_c7x_mod(0) {}
+                      c7x_codegen_enabled(0), gen_c7x_mod_enabled(0) {}
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("artifacts_directory", &artifacts_directory);
     v->Visit("platform", &platform);
-    v->Visit("c7x_codegen", &c7x_codegen);
-    v->Visit("gen_c7x_mod", &gen_c7x_mod);
+    v->Visit("c7x_codegen_enabled", &c7x_codegen_enabled);
+    v->Visit("gen_c7x_mod_enabled", &gen_c7x_mod_enabled);
   }
 
   static constexpr const char* _type_key = "tidl.TIDLContext";
@@ -224,12 +224,12 @@ TVM_REGISTER_GLOBAL("tidl.CreateTIDLContext")
   auto ctx = TIDLContext::Create();
   runtime::String artifacts_directory = args[0];
   runtime::String platform = args[1];
-  int             c7x_codegen = args[2];
-  int             gen_c7x_mod = args[3];
+  int             c7x_codegen_enabled = args[2];
+  int             gen_c7x_mod_enabled = args[3];
   ctx->artifacts_directory = artifacts_directory;
   ctx->platform = platform;
-  ctx->c7x_codegen = c7x_codegen;
-  ctx->gen_c7x_mod = gen_c7x_mod;
+  ctx->c7x_codegen_enabled = c7x_codegen_enabled;
+  ctx->gen_c7x_mod_enabled = gen_c7x_mod_enabled;
   *ret = ctx;
 });
 
@@ -489,12 +489,14 @@ void J7CSourceCodegen::EmitHeaders(const std::string subgraph_name, uint32_t sub
 )headers";
 
     // Create headers
+    code_stream_ << "extern \"C\" {\n";
     code_stream_ << header_files;
 
     code_stream_ << "#include \"subgraph" << subgraph_id << "_net.c\"\n";
     code_stream_ << "#include \"subgraph" << subgraph_id << "_params.c\"\n";
     code_stream_ << "void* " << subgraph_name << "_instance;\n\n";
     code_stream_ << "extern void* getUDMADrvObjPtr();\n\n";
+    code_stream_ << "} /* extern \"C\" */\n\n";
 }
 
 
@@ -502,7 +504,7 @@ void J7CSourceCodegen::EmitInitFunction(const std::string& prefix, uint32_t subg
                                         const runtime::TIDLSubgraphInfo& subgraph_info)
 {
     const char* TS = "    ";
-    code_stream_ << "void " << prefix << "_init(void) {\n"
+    code_stream_ << "extern \"C\" void " << prefix << "_init(void) {\n"
                  << TS  << prefix << "_instance = init_tidl_subgraph((void *) subgraph" << subgraph_id << "_net_bin,\n"
                  << TS << TS << TS << "subgraph" << subgraph_id << "_net_bin_len,\n"
                  << TS << TS << TS << "(void* ) subgraph" << subgraph_id << "_params_1_bin,\n"
@@ -518,7 +520,7 @@ void J7CSourceCodegen::EmitWrapperFunction(const std::string& prefix, const runt
 {
     const char* TS = "    ";
 
-    code_stream_ << "int " << prefix << "(TVMValue* args, int* type_codes, int num_args, TVMValue* out_ret_value, int* out_ret_tcode, void* resource_handle) {\n";
+    code_stream_ << "extern \"C\" int " << prefix << "(TVMValue* args, int* type_codes, int num_args, TVMValue* out_ret_value, int* out_ret_tcode, void* resource_handle) {\n";
 
     uint32_t num_args = subgraph_info.NumInputs() + subgraph_info.NumOutputs();
     for (uint32_t i = 0; i < num_args; i++)
@@ -545,7 +547,7 @@ void J7CSourceCodegen::EmitWrapperFunction(const std::string& prefix, const runt
 
 void J7CSourceCodegen::EmitDestroyFunction(const std::string& prefix)
 {
-    code_stream_ << "void " << prefix << "_destroy(void) {\n"
+    code_stream_ << "extern \"C\" void " << prefix << "_destroy(void) {\n"
                  << "    free_tidl_subgraph(" << prefix << "_instance);\n"
                  << "}\n\n";
 }
@@ -582,6 +584,7 @@ class TIDLJ7C7xModuleCodeGen : public CSourceModuleCodegenBase {
     // Add all the input tensor names, and tensor sizes
     for (auto& var : func->params)
     {
+      // Drop off "_c7x" suffix that was added as a workaround (see tidl_build_c7x_mod.py)
       std::string input_name = var->name_hint();  // "data_c7x"
       input_name.resize(input_name.size() - 4);   // "data"
       c7xgraph_info.input_names.push_back(input_name);
@@ -648,11 +651,14 @@ class TIDLJ7C7xModuleCodeGen : public CSourceModuleCodegenBase {
  * \brief The external compiler/codegen tool. It takes a Relay expression/module
  * and compile it into a TIDL runtime module.
  *
- *    c7x_codegen == 0: building an Arm deployable module, without C7x code generation,
- *                      all TIDL-unsupported layers run on Arm
- *    c7x_codegne >  0: with C7x code generation, all TIDL-unsupported layers run on C7x
- *      - gen_c7x_mod = 1: building a C7x deployable module (to be embedded in Arm wrapper module)
- *      - gen_c7x_mod = 0: building an Arm wrapper deployable module
+ *    c7x_codegen_enabled == 0: Disable C7x code generation, all TIDL-unsupported layers run on Arm
+ *                         building an Arm deployable module
+ *    c7x_codegen_enabled >  0: Enable  C7x code generation, all TIDL-unsupported layers run on C7x
+ *      In the compilation flow, first we build a C7x deployable module (c7x_deploy_mod.out),
+ *      then we embed C7x deployable module as a single node ("tidl_tvm_0") into Arm wrapper
+ *      deployable module (deploy_graph.json, deploy_lib.so)
+ *      - gen_c7x_mod_enabled = 1: building a C7x deployable module
+ *      - gen_c7x_mod_enabled = 0: building an Arm wrapper deployable module
  */
 runtime::Module TIDLCompiler(const ObjectRef& ref) {
   TIDLContext ctx = TIDLContext::Current();
@@ -660,9 +666,9 @@ runtime::Module TIDLCompiler(const ObjectRef& ref) {
     TIDLJ6ModuleCodeGen tidl;
     return tidl.CreateCSourceModule(ref);
   } else if (ctx->platform == "J7") {
-    if (ctx->c7x_codegen > 0)
+    if (ctx->c7x_codegen_enabled > 0)
     {
-      if (ctx->gen_c7x_mod == 1)
+      if (ctx->gen_c7x_mod_enabled == 1)
       {
         J7CSourceCodegen csource;
         return csource.CreateCSourceModule(ref);

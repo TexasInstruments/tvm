@@ -20,10 +20,88 @@ import os
 import sys
 import subprocess
 import tvm
+import tvm.contrib.c7x as c7x
 from tvm import relay
 from tvm import transform
 from tvm.relay.expr_functor import ExprMutator
 from . import tidl
+
+def enable_c7x_mod(tidl_compiler, mod, mod_orig, params, num_tidl_subgraphs):
+    """
+    This function builds a c7x deployable module that c7x TVM C runtime can run,
+    returns an Arm wrapper deployable module that has c7x deployable module embedded in
+
+    Parameters
+    ----------
+    tidl_compiler: TIDLCompiler
+        TIDLCompiler instance
+    mod : tvm.relay.Module
+        Partitioned Relay IR graph between TIDL subgraphs and TIDL-unsupported layers
+        To be compiled with "c7x" codegen into a c7x deployable module
+    mod_orig : tvm.relay.Module
+        Original Relay IR graph
+    params : dict of str to tvm.NDArray
+        The parameter dict to be used by relay
+    num_tidl_subgraphs: int
+        Number of TIDL subgraphs
+
+    Returns
+    -------
+    mod_arm : tvm.relay.Module
+        Wrapper graph that runs on Arm: ["main"](ins) -> outs { tidl_c7x_0(ins) }
+    """
+    status = build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs)
+    if status == -1:
+        print("Building C7x tvm deployable module failed.  Reverting to Arm execution.")
+        return mod
+
+    print("Creating Arm wrapper tvm module...")
+    mod_arm = relay.transform.RemoveUnusedFunctions()(mod_orig)
+    mod_arm["main"] = relay.build_module.bind_params_by_name(mod_arm["main"], params)
+    mod_arm["main"] = tidl.RemoveTrainingOperators().visit(mod_arm["main"])
+    mod_arm = relay.transform.FoldConstant()(mod_arm)
+    mod_arm = relay.transform.EliminateCommonSubexpr()(mod_arm)
+    mod_arm = relay.transform.InferType()(mod_arm)
+
+    # Outline "main" function body to subgraph "tidl_tvm_0" (representing c7x deployable module)
+    # See relay_graph.wrapper.txt in artifacts_folder/tempDir.  E.g.
+    """
+    def @main(%data: Tensor[(1, 3, 224, 224), float32]) -> Tensor[(1, 1000), float32] {
+      @tidl_tvm_0(%data) /* ty=Tensor[(1, 1000), float32] */
+    }
+
+    def @tidl_tvm_0(%data_c7x: Tensor[(1, 3, 224, 224), float32], global_symbol="tidl_tvm_0", Primitive=1, Compiler="tidl", Inline=1) -> Tensor[(1, 1000), float32] {
+      %0 = nn.conv2d(%data_c7x, meta[relay.Constant][0] /* ty=Tensor[(16, 3, 3, 3), float32] */, strides=[2, 2], padding=[1, 1, 1, 1], channels=16, kernel_size=[3, 3]) /* ty=Tensor[(1, 16, 112, 112), float32] */;
+        ... ... ...
+      nn.batch_flatten(%326) /* ty=Tensor[(1, 1000), float32] */
+    }
+    """
+
+    func_arm = mod_arm["main"]
+    gv_c7x = relay.GlobalVar("tidl_tvm_0")
+    # Using same param name in both main() and tidl_tvm_0() will cause internal TVM error
+    # Add "_c7x" suffix as a workaround
+    params_c7x = [relay.Var(old.name_hint + "_c7x", old.checked_type) for old in func_arm.params]
+    old_new_param_map = dict(zip(func_arm.params, params_c7x))
+    body_c7x = ParamRenamer(old_new_param_map).visit(func_arm.body)
+    func_c7x = relay.Function(params_c7x, body_c7x, func_arm.ret_type)
+    func_c7x = func_c7x.with_attr("global_symbol", "tidl_tvm_0")
+    func_c7x = func_c7x.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+    func_c7x = func_c7x.with_attr("Compiler", tidl_compiler.tidl_target)
+    func_c7x = func_c7x.with_attr("Inline", tvm.tir.IntImm("int32", 1))
+    mod_arm[gv_c7x] = func_c7x
+
+    # Modify "main" function body to be simply calling "tidl_tvm_0"
+    mod_arm["main"] = relay.Function(params=func_arm.params,
+                                     body=gv_c7x(*func_arm.params),
+                                     ret_type=func_arm.ret_type, type_params=None,
+                                     attrs=func_arm.attrs)
+    mod_arm = relay.transform.InferType()(mod_arm)
+    with open(os.path.join(tidl_compiler.temp_folder, "relay_graph.wrapper.txt"), "w") as fo:
+        print(mod_arm.astext(show_meta_data=False), file=fo)
+
+    return mod_arm
+
 
 def bin_to_c(infile, outfile, array_name):
     """
@@ -136,7 +214,7 @@ EXPORT int tvm_main_delete()
 
 
 def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
-    """ 
+    """
     This function builds a c7x deployable module that c7x TVM C runtime can run,
     returns an Arm wrapper deployable module that has c7x deployable module embedded in
 
@@ -159,12 +237,16 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
     """
     temp_folder = tidl_compiler.temp_folder
     print("Building C7x tvm deployable module: generating c files...")
-    #c_target = "c7x"
-    c_target = "c"
-    with tidl.build_config(tidl_compiler=tidl_compiler, gen_c7x_mod=1):
-      with transform.PassContext(opt_level=3, config={'tir.disable_vectorize': True}):
-        graph, lib, params_c7x = relay.build_module.build(mod, target=c_target,
-                                                          target_host=c_target, params=params)
+
+    if (tidl_compiler.c7x_codegen == 9):  # debug mode: generating generic c code
+        with tidl.build_config(tidl_compiler=tidl_compiler, gen_c7x_mod_enabled=1):
+            graph, lib, params_c7x = relay.build_module.build(mod, target="c",
+                                                              target_host="c", params=params)
+    else:
+        with tidl.build_config(tidl_compiler=tidl_compiler, gen_c7x_mod_enabled=1):
+            with c7x.c7x_target_config():
+                graph, lib, params_c7x = relay.build_module.build(mod, target="c7x",
+                                                                  target_host="c7x", params=params)
     tidl.remove_tidl_params(params_c7x)
     modules = lib._collect_dso_modules()
     for i in range(len(modules)):
@@ -190,12 +272,12 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
         c_params_fname = os.path.join(temp_folder, f"subgraph{i}_params.c")
         bin_to_c(subgraph_net_fname, c_net_fname, f"subgraph{i}_net_bin")
         bin_to_c(subgraph_params_fname, c_params_fname, f"subgraph{i}_params_1_bin")
-        
+
     gen_model_tvm_funcs(os.path.join(temp_folder, "tvm_main.c"), num_tidl_subgraphs)
 
     print("Building C7x tvm deployable module: building... (log in c7x_deploy_mod.log)")
-    # if script from python package:      tvm/relay/backend/contrib/tidl_build_c7x_mod.py 
-    # if script from dev repo: tvm/python/tvm/relay/backend/contrib/tidl_build_c7x_mod.py 
+    # if script from python package:      tvm/relay/backend/contrib/tidl_build_c7x_mod.py
+    # if script from dev repo: tvm/python/tvm/relay/backend/contrib/tidl_build_c7x_mod.py
     tvm_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
     if not os.path.exists(os.path.join(tvm_root, "src/runtime/contrib/tidl/c7x")):
         tvm_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
@@ -226,65 +308,4 @@ class ParamRenamer(ExprMutator):
             return self.old_new_param_map[var]
         return super().visit_var(var)
 
-
-def enable_c7x_mod(tidl_compiler, mod, mod_orig, params, num_tidl_subgraphs):
-    """ 
-    This function builds a c7x deployable module that c7x TVM C runtime can run,
-    returns an Arm wrapper deployable module that has c7x deployable module embedded in
-
-    Parameters
-    ----------
-    tidl_compiler: TIDLCompiler
-        TIDLCompiler instance
-    mod : tvm.relay.Module
-        Partitioned Relay IR graph between TIDL subgraphs and TIDL-unsupported layers
-        To be compiled with "c7x" codegen into a c7x deployable module
-    mod_orig : tvm.relay.Module
-        Original Relay IR graph
-    params : dict of str to tvm.NDArray
-        The parameter dict to be used by relay
-    num_tidl_subgraphs: int
-        Number of TIDL subgraphs
-
-    Returns
-    -------
-    mod_arm : tvm.relay.Module
-        Wrapper graph that runs on Arm: ["main"](ins) -> outs { tidl_c7x_0(ins) }
-    """
-    status = build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs)
-    if status == -1:
-        print("Building C7x tvm deployable module failed.  Reverting to Arm execution.")
-        return mod
-
-    print("Creating Arm wrapper tvm module...")
-    mod_arm = relay.transform.RemoveUnusedFunctions()(mod_orig)
-    mod_arm["main"] = relay.build_module.bind_params_by_name(mod_arm["main"], params)
-    mod_arm["main"] = tidl.RemoveTrainingOperators().visit(mod_arm["main"])
-    mod_arm = relay.transform.FoldConstant()(mod_arm)
-    mod_arm = relay.transform.EliminateCommonSubexpr()(mod_arm)
-    mod_arm = relay.transform.InferType()(mod_arm)
-
-    # Outline "main" function body to subgraph "tidl_tvm_0" (representing c7x deployable module)
-    func_arm = mod_arm["main"]
-    gv_c7x = relay.GlobalVar("tidl_tvm_0")
-    params_c7x = [relay.Var(old.name_hint + "_c7x", old.checked_type) for old in func_arm.params]
-    old_new_param_map = dict(zip(func_arm.params, params_c7x))
-    body_c7x = ParamRenamer(old_new_param_map).visit(func_arm.body)
-    func_c7x = relay.Function(params_c7x, body_c7x, func_arm.ret_type)
-    func_c7x = func_c7x.with_attr("global_symbol", "tidl_tvm_0")
-    func_c7x = func_c7x.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
-    func_c7x = func_c7x.with_attr("Compiler", tidl_compiler.tidl_target)
-    func_c7x = func_c7x.with_attr("Inline", tvm.tir.IntImm("int32", 1))
-    mod_arm[gv_c7x] = func_c7x
-
-    # Modify "main" function body to be simply calling "tidl_tvm_0"
-    mod_arm["main"] = relay.Function(params=func_arm.params,
-                                     body=gv_c7x(*func_arm.params),
-                                     ret_type=func_arm.ret_type, type_params=None,
-                                     attrs=func_arm.attrs)
-    mod_arm = relay.transform.InferType()(mod_arm)
-    with open(os.path.join(tidl_compiler.temp_folder, "relay_graph.wrapper.txt"), "w") as fo:
-        print(mod_arm.astext(show_meta_data=False), file=fo)
-
-    return mod_arm
 

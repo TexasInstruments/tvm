@@ -1,4 +1,22 @@
-// Proof-of-concept C++ API for C7x TVM-generated kernels
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 //
 // This API provides an abstraction layer that the C7x-specific TVM 
 // code generator can use to target C7x-specific features.
@@ -26,6 +44,7 @@
 
 // If MODEL_DMA is true, the DMA utilities are stubbed out
 #if !MODEL_DMA
+#include "tidl_api_mem.h"
 #include "tvm_tidl_dmautils.h"
 #else
 // Define stubs for the DMA utility wrapper functions
@@ -39,11 +58,11 @@ typedef enum {
 
 // from pdk/packages/ti/drv/udma/dmautils/include/dmautils_autoincrement_3d.h
 typedef enum{
-    DMAUTILSAUTOINC3D_SYNC_1D = 0,
-    DMAUTILSAUTOINC3D_SYNC_2D = 1,
-    DMAUTILSAUTOINC3D_SYNC_3D = 2,
-    DMAUTILSAUTOINC3D_SYNC_4D = 3
-  }DmaUtilsAutoInc3d_SyncType;
+    TVMTIDL_DMAUTILSAUTOINC3D_SYNC_1D = 0,
+    TVMTIDL_DMAUTILSAUTOINC3D_SYNC_2D = 1,
+    TVMTIDL_DMAUTILSAUTOINC3D_SYNC_3D = 2,
+    TVMTIDL_DMAUTILSAUTOINC3D_SYNC_4D = 3
+  }tvmtidlDmaUtilsAutoInc3d_SyncType;
 
 uint8_t* tvm_tidl_l2_scratch_alloc(int32_t size) 
   { return (uint8_t*)malloc(size); } 
@@ -52,7 +71,7 @@ uint8_t* tvm_tidl_dmautils_init(int32_t num_channels, uint8_t *pTrMem_chs[])
   { return nullptr; }
 int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
      int32_t ch, uint8_t *pTrMem_chs[],
-     uint8_t *srcPtr, uint8_t *dstPtr, DmaUtilsAutoInc3d_SyncType syncType,
+     uint8_t *srcPtr, uint8_t *dstPtr, tvmtidlDmaUtilsAutoInc3d_SyncType syncType,
      uint16_t sicnt0, uint16_t sicnt1, uint16_t sicnt2, uint16_t sicnt3,
                        int32_t sdim1,   int32_t sdim2,   int32_t sdim3,
      uint16_t dicnt0, uint16_t dicnt1, uint16_t dicnt2, uint16_t dicnt3,
@@ -61,9 +80,9 @@ int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
 int32_t tvm_tidl_dmautils_deinit(uint8_t *dmaUtilsContext,
      int32_t num_channels, uint8_t *pTrMem_chs[])
   { return 0; }
-void DmaUtilsAutoInc3d_trigger(uint8_t *dmaUtilscontext, int32_t channel)
+void tvm_tidl_dmautils_trigger(uint8_t *dmaUtilscontext, int32_t channel)
   {}
-void DmaUtilsAutoInc3d_wait(uint8_t *dmaUtilscontext, int32_t channel)
+void tvm_tidl_dmautils_wait(uint8_t *dmaUtilscontext, int32_t channel)
   {}
 #endif
 
@@ -531,13 +550,13 @@ public:
      // therefore cannot be invoked until we have actual buffers. However,
      // if there were a separate API to supply the addresses then the rest
      // of the config could happen at init time.
-     DmaUtilsAutoInc3d_SyncType sync = DMAUTILSAUTOINC3D_SYNC_4D;
+     tvmtidlDmaUtilsAutoInc3d_SyncType sync = TVMTIDL_DMAUTILSAUTOINC3D_SYNC_4D;
      switch(srcAP.sync_axis)
      {
-        case 0: sync = DMAUTILSAUTOINC3D_SYNC_1D; break;
-        case 1: sync = DMAUTILSAUTOINC3D_SYNC_2D; break;
-        case 2: sync = DMAUTILSAUTOINC3D_SYNC_3D; break;
-        case 3: sync = DMAUTILSAUTOINC3D_SYNC_4D; break;
+        case 0: sync = TVMTIDL_DMAUTILSAUTOINC3D_SYNC_1D; break;
+        case 1: sync = TVMTIDL_DMAUTILSAUTOINC3D_SYNC_2D; break;
+        case 2: sync = TVMTIDL_DMAUTILSAUTOINC3D_SYNC_3D; break;
+        case 3: sync = TVMTIDL_DMAUTILSAUTOINC3D_SYNC_4D; break;
      }
 
      tvm_tidl_configure_channel(
@@ -567,14 +586,14 @@ public:
      printf("trigger %s[%d]: %d --> %d, channel=%d\n", 
             name, seq, srcAP.sim->currpos(), dstAP.sim->currpos(), channel);
      #endif
-     DmaUtilsAutoInc3d_trigger(context.get_dmaUtilsContext(), channel);
+     tvm_tidl_dmautils_trigger(context.get_dmaUtilsContext(), channel);
      ++seq;
    }
 
    // Wait for transfer of last-triggered block to finish
    void wait()
    {
-     DmaUtilsAutoInc3d_wait(context.get_dmaUtilsContext(), channel);
+     tvm_tidl_dmautils_wait(context.get_dmaUtilsContext(), channel);
      #if DEBUG && MODEL_DMA
      auto src_bytes = srcAP.sim->advance();
      auto dst_bytes = dstAP.sim->advance();

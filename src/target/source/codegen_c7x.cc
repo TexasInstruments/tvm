@@ -81,13 +81,17 @@ static bool is_call_builtin(PrimExpr op, const String& fname) {
 // of DMA calls.
 class ScanDMA : public StmtExprVisitor {
   std::set<const VarNode *>& dma_set_;
+  int& count_;
 public:
-  ScanDMA(std::set<const VarNode *>& vs) : dma_set_(vs) {}
+  ScanDMA(std::set<const VarNode *>& vs, int& count) : dma_set_(vs), count_(count) {}
   void VisitExpr_(const CallNode* op) override {
     if (is_call_extern(op, "c7x_dma_setup"))
     {
       dma_set_.insert(Downcast<Var>(op->args[1]).get());
       dma_set_.insert(Downcast<Var>(op->args[6]).get());
+      count_ += 1;
+      ICHECK(count_ <= TVM_TARGET_C7X_MAX_DMA_CHANNELS)
+          << "Number of c7x_dma_setup()s exceeded TVM_TARGET_C7X_MAX_DMA_CHANNELS";
     }
   }
 };
@@ -205,7 +209,8 @@ void CodeGenC7x::InitFuncState(const PrimFunc& f) {
   // Run the pre-pass to find all the variables used in DMA copy
   // intrinsics
   dma_buffers_.clear();
-  ScanDMA DMAScanner(dma_buffers_);
+  num_dma_intrinsics_ = 0;
+  ScanDMA DMAScanner(dma_buffers_, num_dma_intrinsics_);
   DMAScanner(f->body);
 
   // Run the pre-pass to gather SE/SA info
@@ -247,10 +252,20 @@ void CodeGenC7x::DeclarePackedCalls(const PrimFunc& f) {
 
 // adapted
 void CodeGenC7x::PreFunctionBody(const PrimFunc& f) {
+  // Only print these in device function, not in host function
+  // TODO: Host function's kTarget attr is set to nullptr (undefined) in SplitHostDevice Pass.
+  // However, when the flow reaches here, it becomes defined again.  Use name to check for now.
+  // auto target = f->GetAttr<Target>(tvm::attr::kTarget);
+  // if (! target.defined())  return;  // does not work here for host function
+  auto global_symbol = f->GetAttr<String>(tvm::attr::kGlobalSymbol);
+  if (static_cast<std::string>(global_symbol.value()).find("_kernel") == std::string::npos)
+    return;
+
+  // Initialize L2Context first, DMAContext needs it for L2 memory allocation
   this->PrintIndent();
-  stream << "DMAContext DMAContext(2);\n";
+  stream << "AllocL2Context L2Context;\n";
   this->PrintIndent();
-  stream << "AllocL2Context L2Context;\n\n";
+  stream << "DMAContext DMAContext("<< num_dma_intrinsics_ << ");\n\n";
 }
 
 #if 0

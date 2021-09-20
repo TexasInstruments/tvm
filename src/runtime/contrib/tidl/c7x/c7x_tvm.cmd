@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 --ram_model
 --display_error_number
 --diag_suppress=10290
@@ -22,33 +41,20 @@
 -x
 -heap 0x0
 
-/* L2SRAM range must be in sync with Platform.xdc */
+
 MEMORY
 {
     DDR:    o = 0x80000000 l = 0x19000000
-/*
-    MSMC:   o = 0x0C000000 l = __MSMC_SIZE__
-    L2SRAM: o = __L2SRAM_START__ l = __L2SRAM_SIZE__
-*/
 }
 
 SECTIONS
 {
-    .llvmir:  type = COPY
+    .dsp_syms_out: type = COPY
 
     .gnu.offload_funcs > DDR
     .gnu.offload_vars  > DDR
 
     .mem_ddr  > DDR
-/*
-    .mem_msm  > MSMC
-
-    GROUP
-    {
-        .mem_l2: align(128)
-        .ocl_local_overlay:*   align(128) run_start(_ocl_local_overlay_start)
-    } > L2SRAM
-*/
 
     GROUP
     {
@@ -66,11 +72,6 @@ SECTIONS
     .fardata    > DDR
     .plt        > DDR
     .sysmem     > DDR
-    .dsp_syms_out > DDR
-/*  if NOLOAD, then section data not included in the final .out file
-    need to find NOLOAD, but keep in file option
-    .dsp_syms_out (NOLOAD) : {} > DDR
-*/
 }
 
 /* import these symbols from C7x firmware */
@@ -86,6 +87,9 @@ SECTIONS
 --import=g_l1_mem_addr
 --import=g_l2_mem_addr
 --import=g_l3_mem_addr
+--import=g_l1_mem_size
+--import=g_l2_mem_size
+--import=g_l3_mem_size
 --import=appMemAlloc
 --import=appMemFree
 --import=appUdmaGetObj
@@ -98,6 +102,8 @@ SECTIONS
 --import=DmaUtilsAutoInc3d_getTrMemReq
 --import=DmaUtilsAutoInc3d_init
 --import=DmaUtilsAutoInc3d_prepareTr
+--import=DmaUtilsAutoInc3d_trigger
+--import=DmaUtilsAutoInc3d_wait
 
 /* workaround to prevent linking printf/puts from rts7100_le.lib */
 --symbol_map=printf=__dummy_printf

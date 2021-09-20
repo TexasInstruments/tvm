@@ -36,6 +36,9 @@
 #include "tvm/target/codegen.h"
 #include "tvm/tir/expr.h"
 
+/* TIDL set max number of channels to 8 for generic flow, we do not expect TVM to go beyond */
+#define TVM_TARGET_C7X_MAX_DMA_CHANNELS (8)
+
 namespace tvm {
 namespace codegen {
 
@@ -245,6 +248,8 @@ class CodeGenC7x final : public CodeGenC {
 
   /* \brief names of variables that are used as src or dst in dma intrinsics */
   std::set<const VarNode*> dma_buffers_;
+  /* \brief number of c7x_dma_setup() intrinsics, not necessarily (dma_buffers_.size() / 2) */
+  int num_dma_intrinsics_;
   /* \brief map of dma buffer variables to dma manager objects */
   std::map<const VarNode*, const VarNode*> dma_map_;
   /* \brief SE/SA config information */

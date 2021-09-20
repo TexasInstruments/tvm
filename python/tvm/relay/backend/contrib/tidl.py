@@ -2044,16 +2044,16 @@ class TIDLImport:
 
         Returns
         -------
-        >=1: number of imported TIDL subgraphs, if TIDL import succeeds
-        -1: if TIDL import fails
-        0: if there are no subgraphs for TIDL offload
+        len(tidl_subgraphs) : int
+            >=0: number of imported TIDL subgraphs, if TIDL import succeeds
+            -1: if TIDL import fails
         """
 
         # Generate svg for partitined graph
         visualize_relay_graph(module=mod, filename=self.temp_folder+'/relay.gv')
 
         # Define return values
-        import_fail, no_import = -1, 0
+        import_fail = -1
 
         # Put some information about the graph in the info file passed to the TIDL codegen
         self.info_dict['tvm'] = { 
@@ -2216,7 +2216,7 @@ class TIDLImport:
         with open(os.path.join(self.temp_folder, "relay.nfo"), "w") as of:
             json.dump(self.info_dict, of, indent=4)
 
-        return len(tidl_subgraphs) if len(tidl_subgraphs) > 0 else no_import
+        return len(tidl_subgraphs)
 
     def _tally_op(self, op_name, node_dict):
         """ helper function to tally instance count of each operator in info dictionary """
@@ -3218,25 +3218,22 @@ class TIDLCompiler:
                                  self.tidl_target, mod, params, graph_input_list, self.temp_folder,
                                  data_layout, has_qnn_ops)
                 print("Importing subgraph into TIDL...")
-                import_status = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list,
-                                                            relay_quantization, has_qnn_ops)
+                num_imported_sgs = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list,
+                                                               relay_quantization, has_qnn_ops)
                 _ctypes.dlclose(import_lib._handle)
-                if import_status >= 1:
-                    print("TIDL import of Relay IR graph succeeded.")
-                    if self.tidl_relay_import_debug == "4":
+                if num_imported_sgs >= 0:
+                    print(f"TIDL import of {num_imported_sgs} Relay IR subgraphs succeeded.")
+                    if num_imported_sgs > 0 and self.tidl_relay_import_debug == "4":
                         generate_tidl_layer_tensors(self.tidl_target, mod, params,
                                                     graph_input_list, self.temp_folder, 
                                                     data_layout, has_qnn_ops)
                     print("TIDL artifacts are stored at " + self.artifacts_folder)
                     mod_final, status = mod, 1        # TIDL Compilation success
                     if (self.c7x_codegen > 0):
-                        mod_final = enable_c7x_mod(self, mod, mod_orig, params, import_status)
-                elif import_status == -1:
+                        mod_final = enable_c7x_mod(self, mod, mod_orig, params, num_imported_sgs)
+                else:
                     print("TIDL import of Relay IR graph failed.")
                     mod_final, status = mod_orig, -1  # TIDL Compilation failure
-                else:
-                    print("There are no subgraphs for TIDL offload.")
-                    mod_final, status = mod_orig, 0   # No TIDL compilation
             else:
                 print("TIDL import lib does not exist. TIDL import skipped.")
                 mod_final, status = mod_orig, 0       # No TIDL compilation
@@ -3274,27 +3271,36 @@ class build_config():
       artifacts_folder : string : where compilation artifacts are stored
       platform : string : TI SoC platform
       c7x_codegen : int: whether to generate C7x code for TIDL-unsupported layers
-    gen_c7x_mod : int
-      Internal option, currently building a C7x depolyable module or an Arm deployable module
+    gen_c7x_mod_enabled : int
+      Internal option, building a C7x deployable module or an Arm deployable module
 
-      c7x_codegen == 0: building an Arm deployable module, without C7x code generation,
-                        all TIDL-unsupported layers run on Arm
-      c7x_codegne >  0: with C7x code generation, all TIDL-unsupported layers run on C7x
-        - gen_c7x_mod = 1: building a C7x deployable module (to be embedded in Arm wrapper module)
-        - gen_c7x_mod = 0: building an Arm wrapper deployable module
+      c7x_codegen_enabled == 0: Disable C7x code generation, all TIDL-unsupported layers run on Arm
+                           building an Arm deployable module
+      c7x_codegen_enabled >  0: Enable  C7x code generation, all TIDL-unsupported layers run on C7x
+        In the compilation flow, first we build a C7x deployable module (c7x_deploy_mod.out),
+        then we embed C7x deployable module as a single node ("tidl_tvm_0") into Arm wrapper
+        deployable module (deploy_graph.json, deploy_lib.so)
+        - gen_c7x_mod_enabled = 1: building a C7x deployable module
+        - gen_c7x_mod_enabled = 0: building an Arm wrapper deployable module
+
+      TBD: we leave c7x_codegen_enabled==9 for now as a debug option to generate generic C code
+        instead of optimized C7x code.  Need to disable vectorization when generating generic C
+        code.  Will decide later if this debug option is useful.
     """
-    def __init__(self, tidl_compiler=None, gen_c7x_mod=0):
+    def __init__(self, tidl_compiler=None, gen_c7x_mod_enabled=0):
         artifacts_folder = None
         platform = "J7"
-        c7x_codegen = 0
+        c7x_codegen_enabled = 0
         if tidl_compiler != None:
-            artifacts_folder = tidl_compiler.artifacts_folder
-            platform         = tidl_compiler.tidl_platform
-            c7x_codegen      = tidl_compiler.c7x_codegen
+            artifacts_folder    = tidl_compiler.artifacts_folder
+            platform            = tidl_compiler.tidl_platform
+            c7x_codegen_enabled = tidl_compiler.c7x_codegen
         assert artifacts_folder, "artifacts_folder must be specified for TVM+TIDL compilation"
         CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
-        self.tidl_context = CreateTIDLContext(artifacts_folder, platform, c7x_codegen, gen_c7x_mod)
-        self.tvm_context  = tvm.transform.PassContext(opt_level=3)
+        self.tidl_context = CreateTIDLContext(artifacts_folder, platform, c7x_codegen_enabled,
+                                              gen_c7x_mod_enabled)
+        self.tvm_context  = tvm.transform.PassContext(opt_level=3,
+                                      config={'tir.disable_vectorize': (c7x_codegen_enabled == 9)})
 
     def __enter__(self):
         self.tidl_context.__enter__()

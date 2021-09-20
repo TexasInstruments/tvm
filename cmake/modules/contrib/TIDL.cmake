@@ -18,7 +18,7 @@
 if(USE_TIDL STREQUAL "ON")
   message(STATUS "Build with contrib.tidl, path=" ${USE_TIDL_RT_PATH})
   if (USE_TIDL_RT_PATH STREQUAL "none")
-    message(FATAL_ERROR "TIDL RT path not set, J7 runtime support will not be available")
+    message(FATAL_ERROR "USE_TIDL_RT_PATH not set, J7 runtime support will not be available")
   else()
     include_directories(${USE_TIDL_RT_PATH}/inc)
   endif()

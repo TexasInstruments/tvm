@@ -15,32 +15,16 @@
 # specific language governing permissions and limitations
 # under the License.
 
+include make.inc
+
 LIB_NAME = tvm_crt.lib
 
-TVM_ROOT    ?= ../../../../..
 CRT_ROOT    ?= $(TVM_ROOT)/src/runtime/crt
 CRT_CONFIG  ?= $(TVM_ROOT)/apps/bundle_deploy/crt_config/
 DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
 BUILD_DIR   ?= build
 
-ifeq (, $(shell which cl7x))
-    CC=$(CGT7X_ROOT)/bin/cl7x
-    CXX=$(CGT7X_ROOT)/bin/cl7x
-    AR=$(CGT7X_ROOT)/bin/ar7x
-    export C7X_C_DIR=$(CGT7X_ROOT)/include;$(CGT7X_ROOT)/lib
-else
-    CC=cl7x
-    CXX=cl7x
-    AR=ar7x
-endif
-
-MKDIR_P = mkdir -p
-RMDIR = rm -fr
-QUIET  ?= @
-
-PKG_CFLAGS  = -o3 -mv7100 --abi=eabi --gcc --c11 -DSOC_J721E
-
-CFLAGS += $(PKG_CFLAGS) -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
+CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
 CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG)
 
 COMMON_O_FILES=$(patsubst $(CRT_ROOT)/common/%.c,$(BUILD_DIR)/common/%.o,$(wildcard $(CRT_ROOT)/common/*.c))
