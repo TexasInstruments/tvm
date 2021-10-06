@@ -56,26 +56,32 @@ def restore_outputs(fds):
     os.dup2(fds[1], 1)
     os.close(fds[0])
 
-def get_compiler_path():
+def get_tidl_tools_path():
+    tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
+    if tidl_tools_path is None:
+        raise Exception("Environment variable TIDL_TOOLS_PATH is not set!")
+    relay_import_lib = os.path.join(tidl_tools_path, "tidl_model_import_relay.so")
+    if not os.path.exists(relay_import_lib):
+        raise Exception("${TIDL_TOOLS_PATH}/tidl_model_import_relay.so does not exist!")
+    return tidl_tools_path
+
+def get_arm_compiler():
     arm_gcc_path = os.getenv("ARM64_GCC_PATH")
     if arm_gcc_path is None:
-        print("Environment variable ARM64_GCC_PATH is not set! Model won't be compiled!")
-        return None
-    else:
-        arm_gcc = os.path.join(arm_gcc_path, "bin", "aarch64-none-linux-gnu-g++")
-        if os.path.exists(arm_gcc):
-            return arm_gcc
-        else:
-            print("ARM64 GCC aarch64-none-linux-gnu-g++ does not exist! Model won't be compiled!")
-            return None
+        raise Exception("Environment variable ARM64_GCC_PATH is not set!")
+    arm_gcc = os.path.join(arm_gcc_path, "bin", "aarch64-none-linux-gnu-g++")
+    if not os.path.exists(arm_gcc):
+        raise Exception("${ARM64_GCC_PATH}/aarch64-none-linux-gnu-g++ does not exist!")
+    return arm_gcc
 
-def get_tidl_tools_path():
-    tidl_base_path = os.getenv("TIDL_BASE_PATH")
-    if tidl_base_path is None:
-        print("Environment variable TIDL_BASE_PATH is not set! Model won't be compiled!")
-        return None
-    else:
-        return os.path.join(tidl_base_path, "tidl_tools")
+def get_c7x_compiler_path():
+    cgt7x_root = os.getenv("CGT7X_ROOT")
+    if cgt7x_root is None:
+        raise Exception("Environment variable CGT7X_ROOT is not set!")
+    cl7x_bin = os.path.join(cgt7x_root, "bin", "cl7x")
+    if not os.path.exists(cl7x_bin):
+        raise Exception("${CGT7X_ROOT}/cl7x does not exist!")
+    return cgt7x_root
 
 def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgraphs=16):
     """ Compile a model in Relay IR graph
@@ -100,11 +106,17 @@ def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgra
             -1 - compilation for TIDL offload failed - failure for CI testing
             0  - no compilation due to missing TIDL tools or ARM64 GCC tools
     """
-    if args.target:
-        arm_gcc = get_compiler_path()
-        if arm_gcc is None:
-            print("Skip build because ARM64_GCC_PATH is not set")
-            return 0  # No graph compilation
+    c7x_codegen = 1 if model_name.endswith('_c7x') else 0
+
+    try:
+        tidl_tools_path = get_tidl_tools_path()
+        if args.target:
+            arm_gcc = get_arm_compiler()
+        if c7x_codegen == 1:
+            cgt7x_root = get_c7x_compiler_path()
+    except Exception as ex:
+        print(f"{__file__}: Skip compilation because: {ex}")
+        return 0
 
     tidl_platform = "J7"   # or "AM57"
     tidl_version = "7.3"   # corresponding Processor SDK version
@@ -115,9 +127,8 @@ def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgra
             os.remove(os.path.join(root, f))
         for d in dirs:
             os.rmdir(os.path.join(root, d))
-    c7x_codegen = 1 if model_name.endswith('_c7x') else 0
     tidl_compiler = tidl.TIDLCompiler(platform=tidl_platform, version=tidl_version,
-                                      tidl_tools_path=get_tidl_tools_path(),
+                                      tidl_tools_path=tidl_tools_path,
                                       artifacts_folder=tidl_artifacts_folder,
                                       tensor_bits=16,
                                       max_num_subgraphs=max_num_subgraphs,
