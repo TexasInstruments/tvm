@@ -81,7 +81,7 @@ void *tidl_malloc(size_t size)
 #else
   void *ptr = malloc(size);
 #endif
-  memset(ptr, 0, size);
+  if (ptr != NULL)  memset(ptr, 0, size);
   return ptr;
 }
 
@@ -99,13 +99,14 @@ void *tidl_memalign(size_t align, size_t size)
   void *ptr = memalign(align, size);
 #endif
 #endif
-  memset(ptr, 0, size);
+  if (ptr != NULL)  memset(ptr, 0, size);
   return ptr;
 }
 
 EXTERN_C
 void tidl_free(void *ptr, size_t size)
 {
+  if (ptr == NULL)  return;
 #ifndef HOST_EMULATION
   appMemFree(APP_MEM_HEAP_DDR, ptr, size);
 #else

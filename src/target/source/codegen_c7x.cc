@@ -1230,7 +1230,7 @@ void CodeGenC7x::VisitStmt_(const AllocateNode* op) {
   stream << ' ' << restrict_keyword_;
   stream << ' ' << vid << " = static_cast<";
   PrintType(ptype, stream);
-  stream << ">(L2Context.allocate(" << constant_size << "));\n";
+  stream << ">(L2Context.allocate(" << constant_size * op->dtype.bytes() << "));\n";
 
   RegisterHandleType(op->buffer_var.get(), op->dtype);
   this->PrintStmt(op->body);

@@ -54,7 +54,7 @@
 // updates the network at TIDL_free() call.  Make a copy of the network.
 // Should not have this problem when migrating to dynamically loading
 // TIDL networks.
-#define TIDL_COPY_NETWORK_BUF 1
+// #define TIDL_COPY_NETWORK_BUF 1
 
 // Represents a TIDL instance, including all its state
 typedef struct
@@ -75,8 +75,10 @@ typedef struct
 
 
 // Helper functions
-static void init_inbufs(TIDL_subgraph_instance *instance);
-static void init_outbufs(TIDL_subgraph_instance *instance);
+static int32_t init_inbufs(TIDL_subgraph_instance *instance);
+static void    free_inbufs(TIDL_subgraph_instance *instance);
+static int32_t init_outbufs(TIDL_subgraph_instance *instance);
+static void    free_outbufs(TIDL_subgraph_instance *instance);
 static int32_t tidl_element_size(int32_t elementType);
 
 static int32_t copy_input_tensors_with_conv(TIDL_subgraph_instance *instance,
@@ -111,11 +113,14 @@ EXTERN_C void* init_tidl_subgraph(void *network,
                                   void* udmaDrvObjPtr,
                                   int   is_nchw)
 {
+  int32_t status = IALG_EOK;
+
   // Setup L1/L2/L3/L4 system memory regions, for servicing memory requests.
   init_mem_regions();
 
   TIDL_subgraph_instance* instance =
       (TIDL_subgraph_instance *)tidl_malloc(sizeof(TIDL_subgraph_instance));
+  if (instance == NULL)  return NULL;
 
 #ifdef TIDL_COPY_NETWORK_BUF
   instance->network = (sTIDL_Network_t*) tidl_malloc(network_size);
@@ -169,59 +174,108 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   instance->numMemRec = numMemRec;
   instance->memRec = memRec;
 
+  if (memRec == NULL)
+  {
+    // Cleanup Sequence
+    if (instance->network_size > 0)
+      tidl_free(instance->network, network_size);
+    tidl_free(instance, sizeof(TIDL_subgraph_instance));
+    return NULL;
+  }
+
   // Let TIDL fill in the requests.
   //   TIDL_alloc
-  TIDL_VISION_FXNS.ialg.algAlloc((IALG_Params *)(&createParams), NULL,
-                                 memRec);
+  status = TIDL_VISION_FXNS.ialg.algAlloc((IALG_Params *)(&createParams), NULL,
+                                          memRec);
+  if (status != IALG_EOK)
+  {
+    // Cleanup Sequence
+    tidl_free(instance->memRec, instance->numMemRec * sizeof(IALG_MemRec));
+    if (instance->network_size > 0)
+      tidl_free(instance->network, network_size);
+    tidl_free(instance, sizeof(TIDL_subgraph_instance));
+    return NULL;
+  }
 
   // Allocate the memory pools as requested.
-  // TODO: restore functionality from test app's Testtidl_AllocMemRecords
-  alloc_mem_records(memRec, numMemRec);
-  #if 0
-  for (int i = 0; i < numMemRec; i++)
+  status = alloc_mem_records(memRec, numMemRec);
+  if (status != IALG_EOK)
   {
-    //printf("memrec %d: request %d bytes\n", i, memRec[i].size);
-    memRec[i].base = memalign(memRec[i].alignment, memRec[i].size);
+    // Cleanup Sequence
+    free_mem_records(instance->memRec, instance->numMemRec);
+    tidl_free(instance->memRec, instance->numMemRec * sizeof(IALG_MemRec));
+    if (instance->network_size > 0)
+      tidl_free(instance->network, network_size);
+    tidl_free(instance, sizeof(TIDL_subgraph_instance));
+    return NULL;
   }
-  #endif
 
   // Call IALG algInit API to instantiate TIDL and setup all its internal
   // data structures.
   //   TIDL_init
-  TIDL_VISION_FXNS.ialg.algInit(NULL, memRec, NULL,
+  status = TIDL_VISION_FXNS.ialg.algInit(NULL, memRec, NULL,
 				(IALG_Params *)(&createParams));
+  if (status != IALG_EOK)
+  {
+    // Cleanup Sequence
+    free_mem_records(instance->memRec, instance->numMemRec);
+    tidl_free(instance->memRec, instance->numMemRec * sizeof(IALG_MemRec));
+    if (instance->network_size > 0)
+      tidl_free(instance->network, network_size);
+    tidl_free(instance, sizeof(TIDL_subgraph_instance));
+    return NULL;
+  }
+
   // Set the algorithm handle to the newly created TIDL instance.
   instance->handle = (IVISION_Handle) memRec[0].base;
 
   // Allocate IVISION_InBufs/OutBufs for input and output tensors.
-  init_inbufs(instance);
-  init_outbufs(instance);
+  status  = init_inbufs(instance);
+  status |= init_outbufs(instance);
 
   // Allocate TIDL_InArgs structure for passing arguments to TIDL_process.
   TIDL_InArgs *inArgs = (TIDL_InArgs *)tidl_malloc(sizeof(TIDL_InArgs));
-  inArgs->iVisionInArgs.size = sizeof(TIDL_InArgs);
-  inArgs->iVisionInArgs.subFrameInfo = 0;
-  inArgs->enableLayerPerfTraces = 0;
+  if (inArgs != NULL)
+  {
+    inArgs->iVisionInArgs.size = sizeof(TIDL_InArgs);
+    inArgs->iVisionInArgs.subFrameInfo = 0;
+    inArgs->enableLayerPerfTraces = 0;
+  }
+  else
+    printf("init_tidl_subgraph, InArgs alloc failed\n");
   instance->inArgs = inArgs;
 
   // Allocate TIDL_outArgs structure for returning values from TIDL_process.
   TIDL_outArgs *outArgs = (TIDL_outArgs *)tidl_malloc(sizeof(TIDL_outArgs));
-  outArgs->iVisionOutArgs.size = sizeof(TIDL_outArgs);
+  if (outArgs != NULL)
+  {
+    outArgs->iVisionOutArgs.size = sizeof(TIDL_outArgs);
+  }
+  else
+    printf("init_tidl_subgraph, OutArgs alloc failed\n");
   instance->outArgs = outArgs;
 
   instance->is_nchw = is_nchw;
+
+  if (status != IALG_EOK || inArgs == NULL || outArgs == NULL)
+  {
+    // Cleanup Sequence
+    free_tidl_subgraph(instance);
+    return NULL;
+  }
 
   return instance;
 }
 
 //-------------------------------------------------------------------------
 // Invoke TIDL to perform its computation
-EXTERN_C void process_tidl_subgraph(void *instance_,
+EXTERN_C int32_t process_tidl_subgraph(void *instance_,
                            DLTensor *in_tensors[],
 			   DLTensor *out_tensors[])
 {
   TIDL_subgraph_instance* instance = (TIDL_subgraph_instance*)instance_;
   IVISION_Handle handle = instance->handle;
+  int32_t status = IALG_EOK;
 
   // Call IALG activate API to give TIDL ownership of its memory.
   //   TIDL_activate
@@ -236,6 +290,10 @@ EXTERN_C void process_tidl_subgraph(void *instance_,
                            instance->inBufs, instance->outBufs,
 		           (IVISION_InArgs *)instance->inArgs,
 	                   (IVISION_OutArgs *)instance->outArgs);
+  if (status != IALG_EOK)
+  {
+    printf("process_tidl_subgraph: algProcess failed\n");
+  }
 
   // Copy the output data from TIDL's output buffers.
   copy_output_tensors_with_conv(instance, out_tensors);
@@ -243,27 +301,43 @@ EXTERN_C void process_tidl_subgraph(void *instance_,
   // Call IALG deactivate API to release TIDL's ownership.
   //   TIDL_deactivate
   handle->fxns->ialg.algDeactivate((IALG_Handle)(instance->handle));
+
+  return status;
 }
 
 //-------------------------------------------------------------------------
 // Free resources used by TIDL instance
-EXTERN_C void free_tidl_subgraph(void *instance_)
+EXTERN_C int32_t free_tidl_subgraph(void *instance_)
 {
   TIDL_subgraph_instance *instance = (TIDL_subgraph_instance*)instance_;
   IVISION_Handle handle = instance->handle;
+  int32_t status = IALG_EOK;
+
+  tidl_free(instance->outArgs, sizeof(TIDL_outArgs));
+  tidl_free(instance->inArgs, sizeof(TIDL_InArgs));
+  free_outbufs(instance);
+  free_inbufs(instance);
 
   // tidl_tb_algFree()
-  handle->fxns->ialg.algFree((IALG_Handle)(handle), instance->memRec);
+  status = handle->fxns->ialg.algFree((IALG_Handle)(handle), instance->memRec);
+  if (status != IALG_EOK)
+  {
+    printf("free_tidl_subgraph: algFree failed\n");
+  }
+
   free_mem_records(instance->memRec, instance->numMemRec);
+  tidl_free(instance->memRec, instance->numMemRec * sizeof(IALG_MemRec));
 
   if (instance->network_size > 0)
     tidl_free(instance->network, instance->network_size);
 
   tidl_free(instance_, sizeof(TIDL_subgraph_instance));
+
+  return status;
 }
 
 // Allocate and initialize IVISION buffers used for TIDL input tensors.
-static void init_inbufs(TIDL_subgraph_instance *instance)
+static int32_t init_inbufs(TIDL_subgraph_instance *instance)
 {
   sTIDL_IOBufDesc_t *IOParams = instance->IOParams;
   int nBufs = IOParams->numInputBuf;
@@ -273,6 +347,16 @@ static void init_inbufs(TIDL_subgraph_instance *instance)
      (IVISION_BufDesc **)tidl_malloc(sizeof(IVISION_BufDesc*) * nBufs);
   IVISION_BufDesc *BufDescs =
      (IVISION_BufDesc *)tidl_malloc(sizeof(IVISION_BufDesc) * nBufs);
+
+  if (Bufs == NULL || BufDescList == NULL || BufDescs == NULL)
+  {
+    tidl_free(BufDescs, sizeof(IVISION_BufDesc) * nBufs);
+    tidl_free(BufDescList, sizeof(IVISION_BufDesc*) * nBufs);
+    tidl_free(Bufs, sizeof(IVISION_InBufs));
+    instance->inBufs = NULL;
+    printf("init_inbufs: memory alloc failed\n");
+    return IALG_EFAIL;
+  }
 
   Bufs->numBufs = nBufs;
   Bufs->bufDesc = BufDescList;
@@ -310,15 +394,49 @@ static void init_inbufs(TIDL_subgraph_instance *instance)
     BufSize *= 2;
 #endif
     BufDesc->bufPlanes[0].buf = (int8_t *)tidl_malloc(BufSize);
+    BufDesc->reserved[1] = BufSize;
+    if (BufDesc->bufPlanes[0].buf == NULL)
+    {
+      printf("init_inbufs %d: size %d, alloc failed\n", i, BufSize);
+      return IALG_EFAIL;
+    }
     //printf("inbuf[%d]: %12d bytes\n", i, BufSize);
     //TIDLTB_ASSERT_EXIT(BufDesc->bufPlanes[0].buf != NULL);
     //memset(BufDesc->bufPlanes[0].buf,0,BufSize);
   }
+  return IALG_EOK;
+}
+
+static void free_inbufs(TIDL_subgraph_instance *instance)
+{
+  if (instance->inBufs == NULL)  return;
+
+  sTIDL_IOBufDesc_t *IOParams = instance->IOParams;
+  int nBufs = IOParams->numInputBuf;
+  IVISION_InBufs *Bufs = instance->inBufs;
+  IVISION_BufDesc **BufDescList = Bufs->bufDesc;
+  IVISION_BufDesc *BufDescs = BufDescList[0];
+
+  Bufs->numBufs = nBufs;
+  Bufs->bufDesc = BufDescList;
+  instance->inBufs = Bufs;
+
+  for(int i = 0; i < nBufs; ++i)
+  {
+    IVISION_BufDesc *BufDesc = &BufDescs[i];
+    if (BufDesc->bufPlanes[0].buf != NULL)
+      break;
+    tidl_free(BufDesc->bufPlanes[0].buf, BufDesc->reserved[1]);
+  }
+  tidl_free(BufDescs, sizeof(IVISION_BufDesc) * nBufs);
+  tidl_free(BufDescList, sizeof(IVISION_BufDesc*) * nBufs);
+  tidl_free(Bufs, sizeof(IVISION_InBufs));
+  instance->inBufs = NULL;
 }
 
 //-------------------------------------------------------------------------
 // Allocate and initialize IVISION buffers used for TIDL output tensors.
-static void init_outbufs(TIDL_subgraph_instance *instance)
+static int32_t init_outbufs(TIDL_subgraph_instance *instance)
 {
   sTIDL_IOBufDesc_t *IOParams = instance->IOParams;
   int nBufs = IOParams->numOutputBuf;
@@ -328,6 +446,16 @@ static void init_outbufs(TIDL_subgraph_instance *instance)
      (IVISION_BufDesc **)tidl_malloc(sizeof(IVISION_BufDesc*) * nBufs);
   IVISION_BufDesc *BufDescs =
      (IVISION_BufDesc *)tidl_malloc(sizeof(IVISION_BufDesc) * nBufs);
+
+  if (Bufs == NULL || BufDescList == NULL || BufDescs == NULL)
+  {
+    tidl_free(BufDescs, sizeof(IVISION_BufDesc) * nBufs);
+    tidl_free(BufDescList, sizeof(IVISION_BufDesc*) * nBufs);
+    tidl_free(Bufs, sizeof(IVISION_InBufs));
+    instance->outBufs = NULL;
+    printf("init_outbufs: memory alloc failed\n");
+    return IALG_EFAIL;
+  }
 
   Bufs->numBufs  = nBufs;
   Bufs->bufDesc  = BufDescList;
@@ -362,6 +490,12 @@ static void init_outbufs(TIDL_subgraph_instance *instance)
        IOParams->outChannelPitch[i]*elementSizeBytes;
 
     BufDesc->bufPlanes[0].buf = (int8_t *)tidl_malloc(outputMemRequired);
+    BufDesc->reserved[1] = outputMemRequired;
+    if (BufDesc->bufPlanes[0].buf == NULL)
+    {
+      printf("init_outbufs %d: size %d, alloc failed\n", i, outputMemRequired);
+      return IALG_EFAIL;
+    }
     //TIDLTB_ASSERT_EXIT(BufDesc->bufPlanes[0].buf != NULL)
     // printf("outbuf[%d]: %12d bytes\n", i, outputMemRequired*elementSizeBytes);
 
@@ -375,6 +509,30 @@ static void init_outbufs(TIDL_subgraph_instance *instance)
     }
 #endif
   }
+  return IALG_EOK;
+}
+
+static void free_outbufs(TIDL_subgraph_instance *instance)
+{
+  if (instance->outBufs == NULL)  return;
+
+  sTIDL_IOBufDesc_t *IOParams = instance->IOParams;
+  int nBufs = IOParams->numOutputBuf;
+  IVISION_OutBufs *Bufs = instance->outBufs;
+  IVISION_BufDesc **BufDescList = Bufs->bufDesc;
+  IVISION_BufDesc *BufDescs = BufDescList[0];
+
+  for(int i = 0; i < nBufs; ++i)
+  {
+    IVISION_BufDesc *BufDesc = &BufDescs[i];
+    if (BufDesc->bufPlanes[0].buf == NULL)
+      break;
+    tidl_free(BufDesc->bufPlanes[0].buf, BufDesc->reserved[1]);
+  }
+  tidl_free(BufDescs, sizeof(IVISION_BufDesc) * nBufs);
+  tidl_free(BufDescList, sizeof(IVISION_BufDesc*) * nBufs);
+  tidl_free(Bufs, sizeof(IVISION_OutBufs));
+  instance->outBufs = NULL;
 }
 
 //-------------------------------------------------------------------------
@@ -739,7 +897,7 @@ static int32_t free_mem_records(IALG_MemRec * memRec,int32_t numMemRec)
     }
     #endif
     else {
-    tidl_free(memRec[i].base, memRec[i].size);
+      tidl_free(memRec[i].base, memRec[i].size);
     }
   }
   return IALG_EOK;

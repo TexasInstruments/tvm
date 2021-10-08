@@ -36,15 +36,15 @@ extern void* init_tidl_subgraph(void *Network,
                                 uint32_t network_size,
 				void *IOParams,
 				void *udmaDrvObjPtr,
-                int   is_nchw);
+                                int   is_nchw);
 
 // Invoke a TIDL graph
-extern void process_tidl_subgraph(void *instance,
-				  DLTensor* in_tensors[],
-				  DLTensor* out_tensors[]);
+extern int32_t process_tidl_subgraph(void *instance,
+				     DLTensor* in_tensors[],
+				     DLTensor* out_tensors[]);
 
 // Free TIDL graph
-extern void free_tidl_subgraph(void *instance);
+extern int32_t free_tidl_subgraph(void *instance);
 
 //---------------------------------------------------------------------
 // This is an auxilliary API for handling memory allocation requests

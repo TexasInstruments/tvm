@@ -25,16 +25,16 @@
 void* tvm_runtime_create(const char* json_data, const char* params_data,
                                  const uint64_t params_size);
 
-void tvm_runtime_destroy(void* runtime);
+int tvm_runtime_destroy(void* runtime);
 
-void tvm_runtime_set_input(void* runtime, const char* name, DLTensor* tensor);
+int tvm_runtime_set_input(void* runtime, const char* name, DLTensor* tensor);
 
-void tvm_runtime_set_input_raw(void* runtime, const char* name, void* tensor_raw);
+int tvm_runtime_set_input_raw(void* runtime, const char* name, void* tensor_raw);
 
-void tvm_runtime_run(void* runtime);
+int tvm_runtime_run(void* runtime);
 
-void tvm_runtime_get_output(void* runtime, int32_t index, DLTensor* tensor);
+int tvm_runtime_get_output(void* runtime, int32_t index, DLTensor* tensor);
 
-void tvm_runtime_get_output_raw(void* runtime, int32_t index, void* tensor_raw);
+int tvm_runtime_get_output_raw(void* runtime, int32_t index, void* tensor_raw);
 
 #endif /* TVM_APPS_BUNDLE_DEPLOY_BUNDLE_H_ */

@@ -23,6 +23,7 @@
 
 #include <stdio.h>
 #include "tvm_tidl_dmautils.h"
+#include "tidl_api_mem.h"
 #include <ti/drv/udma/dmautils/dmautils.h>
 #include <ti/drv/udma/udma.h>
 

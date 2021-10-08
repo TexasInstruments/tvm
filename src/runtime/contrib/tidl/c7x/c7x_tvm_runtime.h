@@ -42,6 +42,9 @@
 #include <type_traits>
 #include "c7x.h"
 
+#define max(a, b) (((a) > (b)) ? (a) : (b))
+#define min(a, b) (((a) < (b)) ? (a) : (b))
+
 // If MODEL_DMA is true, the DMA utilities are stubbed out
 #if !MODEL_DMA
 #include "tidl_api_mem.h"
@@ -86,6 +89,10 @@ void tvm_tidl_dmautils_wait(uint8_t *dmaUtilscontext, int32_t channel)
   {}
 #endif
 
+extern "C" {
+  extern void tvmcrt_exit(int ecode);
+}
+
 //---------------------------------------------------------------------------------
 // DMAContext stores state information for the DMA Utils package, used 
 // as a handle bewteen the C++ model and the Utils package
@@ -94,11 +101,13 @@ class DMAContext
 public:
   DMAContext(int n) : nchannels(n)
   {
-    dmaUtilsContext = tvm_tidl_dmautils_init(nchannels, pTrMem_chs);
+    if (nchannels > 0)
+      dmaUtilsContext = tvm_tidl_dmautils_init(nchannels, pTrMem_chs);
   }
   ~DMAContext()
   {
-    tvm_tidl_dmautils_deinit(dmaUtilsContext, nchannels, pTrMem_chs);
+    if (nchannels > 0)
+      tvm_tidl_dmautils_deinit(dmaUtilsContext, nchannels, pTrMem_chs);
   }
   int allocate_channel() 
   {
@@ -123,9 +132,12 @@ class AllocL2Context
   public:
   AllocL2Context() { tvm_tidl_l2_scratch_reset(); } 
   ~AllocL2Context() {} 
+  /* Only called in the generated C7x function for a layer */
   void *allocate(unsigned size)
   {
-    return tvm_tidl_l2_scratch_alloc(size); 
+    void *ptr = tvm_tidl_l2_scratch_alloc(size);
+    if (ptr == NULL)  tvmcrt_exit(-1);
+    return ptr;
   }
 }; 
 

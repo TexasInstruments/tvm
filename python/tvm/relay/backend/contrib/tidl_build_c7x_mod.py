@@ -167,8 +167,8 @@ EXPORT int tvm_main_create()
 
         for i in range(num_tidl_subgraphs):
             fo.write(f'''
-  extern void tidl_{i}_init(void);
-  tidl_{i}_init();''')
+  extern int tidl_{i}_init(void);
+  if (tidl_{i}_init() != 0)  return -1;''')
 
         fo.write(f'''
   char* json_data = (char*)(graph_json);
@@ -185,14 +185,14 @@ EXPORT int tvm_main_process(int32_t num_inputs, int32_t num_outputs,
   for (int i = 0; i < num_inputs; i++)
   {{
     const char *name = (const char *) (input_names + input_names_offset[i]);
-    tvm_runtime_set_input_raw(tvm_handle, name, tensors[i]);
+    if (tvm_runtime_set_input_raw(tvm_handle, name, tensors[i]) != 0)  return -1;
   }}
 
-  tvm_runtime_run(tvm_handle);
+  if (tvm_runtime_run(tvm_handle) != 0)  return -1;
 
   for (int i = 0; i < num_outputs; i++)
   {{
-    tvm_runtime_get_output_raw(tvm_handle, i, tensors[num_inputs + i]);
+    if (tvm_runtime_get_output_raw(tvm_handle, i, tensors[num_inputs + i]) != 0)  return -1;
   }}
   return 0;
 }}
