@@ -42,8 +42,8 @@
 #include <type_traits>
 #include "c7x.h"
 
-#define max(a, b) (((a) > (b)) ? (a) : (b))
-#define min(a, b) (((a) < (b)) ? (a) : (b))
+#define max(a, b) __max((a), (b))
+#define min(a, b) __min((a), (b))
 
 // If MODEL_DMA is true, the DMA utilities are stubbed out
 #if !MODEL_DMA
