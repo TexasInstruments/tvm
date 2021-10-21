@@ -173,91 +173,87 @@ EXTERN_C void* init_tidl_subgraph(void *network,
       (IALG_MemRec *)tidl_malloc(numMemRec*sizeof(IALG_MemRec));
   instance->numMemRec = numMemRec;
   instance->memRec = memRec;
-
-  if (memRec == NULL)
-  {
-    // Cleanup Sequence
-    if (instance->network_size > 0)
-      tidl_free(instance->network, network_size);
-    tidl_free(instance, sizeof(TIDL_subgraph_instance));
-    return NULL;
-  }
+  if (memRec == NULL)  status = IALG_EFAIL;
 
   // Let TIDL fill in the requests.
   //   TIDL_alloc
-  status = TIDL_VISION_FXNS.ialg.algAlloc((IALG_Params *)(&createParams), NULL,
-                                          memRec);
-  if (status != IALG_EOK)
+  if (status == IALG_EOK)
   {
-    // Cleanup Sequence
-    tidl_free(instance->memRec, instance->numMemRec * sizeof(IALG_MemRec));
-    if (instance->network_size > 0)
-      tidl_free(instance->network, network_size);
-    tidl_free(instance, sizeof(TIDL_subgraph_instance));
-    return NULL;
+    status = TIDL_VISION_FXNS.ialg.algAlloc((IALG_Params *)(&createParams),
+                                             NULL, memRec);
+    if (status != IALG_EOK)  printf("init_tidl_subgraph: algAlloc failed\n");
   }
 
   // Allocate the memory pools as requested.
-  status = alloc_mem_records(memRec, numMemRec);
-  if (status != IALG_EOK)
+  if (status == IALG_EOK)
   {
-    // Cleanup Sequence
-    free_mem_records(instance->memRec, instance->numMemRec);
-    tidl_free(instance->memRec, instance->numMemRec * sizeof(IALG_MemRec));
-    if (instance->network_size > 0)
-      tidl_free(instance->network, network_size);
-    tidl_free(instance, sizeof(TIDL_subgraph_instance));
-    return NULL;
+    status = alloc_mem_records(memRec, numMemRec);
+    if (status != IALG_EOK)
+      printf("init_tidl_subgraph: alloc_mem_records failed\n");
   }
 
   // Call IALG algInit API to instantiate TIDL and setup all its internal
   // data structures.
   //   TIDL_init
-  status = TIDL_VISION_FXNS.ialg.algInit(NULL, memRec, NULL,
-				(IALG_Params *)(&createParams));
-  if (status != IALG_EOK)
+  if (status == IALG_EOK)
   {
-    // Cleanup Sequence
-    free_mem_records(instance->memRec, instance->numMemRec);
-    tidl_free(instance->memRec, instance->numMemRec * sizeof(IALG_MemRec));
-    if (instance->network_size > 0)
-      tidl_free(instance->network, network_size);
-    tidl_free(instance, sizeof(TIDL_subgraph_instance));
-    return NULL;
+    status = TIDL_VISION_FXNS.ialg.algInit(NULL, memRec, NULL,
+				(IALG_Params *)(&createParams));
+    if (status != IALG_EOK)  printf("init_tidl_subgraph: algInit failed\n");
   }
 
   // Set the algorithm handle to the newly created TIDL instance.
-  instance->handle = (IVISION_Handle) memRec[0].base;
+  if (status == IALG_EOK)
+  {
+    instance->handle = (IVISION_Handle) memRec[0].base;
+  }
 
   // Allocate IVISION_InBufs/OutBufs for input and output tensors.
-  status  = init_inbufs(instance);
-  status |= init_outbufs(instance);
+  if (status == IALG_EOK)
+  {
+    status  = init_inbufs(instance);
+    status |= init_outbufs(instance);
+  }
 
   // Allocate TIDL_InArgs structure for passing arguments to TIDL_process.
-  TIDL_InArgs *inArgs = (TIDL_InArgs *)tidl_malloc(sizeof(TIDL_InArgs));
-  if (inArgs != NULL)
+  TIDL_InArgs *inArgs = NULL;
+  if (status == IALG_EOK)
   {
-    inArgs->iVisionInArgs.size = sizeof(TIDL_InArgs);
-    inArgs->iVisionInArgs.subFrameInfo = 0;
-    inArgs->enableLayerPerfTraces = 0;
+    inArgs = (TIDL_InArgs *)tidl_malloc(sizeof(TIDL_InArgs));
+    if (inArgs != NULL)
+    {
+      inArgs->iVisionInArgs.size = sizeof(TIDL_InArgs);
+      inArgs->iVisionInArgs.subFrameInfo = 0;
+      inArgs->enableLayerPerfTraces = 0;
+    }
+    else
+    {
+      printf("init_tidl_subgraph, InArgs alloc failed\n");
+      status = IALG_EFAIL;
+    }
   }
-  else
-    printf("init_tidl_subgraph, InArgs alloc failed\n");
   instance->inArgs = inArgs;
 
   // Allocate TIDL_outArgs structure for returning values from TIDL_process.
-  TIDL_outArgs *outArgs = (TIDL_outArgs *)tidl_malloc(sizeof(TIDL_outArgs));
-  if (outArgs != NULL)
+  TIDL_outArgs *outArgs = NULL;
+  if (status == IALG_EOK)
   {
-    outArgs->iVisionOutArgs.size = sizeof(TIDL_outArgs);
+    outArgs = (TIDL_outArgs *)tidl_malloc(sizeof(TIDL_outArgs));
+    if (outArgs != NULL)
+    {
+      outArgs->iVisionOutArgs.size = sizeof(TIDL_outArgs);
+    }
+    else
+    {
+      printf("init_tidl_subgraph, OutArgs alloc failed\n");
+      status = IALG_EFAIL;
+    }
   }
-  else
-    printf("init_tidl_subgraph, OutArgs alloc failed\n");
   instance->outArgs = outArgs;
 
   instance->is_nchw = is_nchw;
 
-  if (status != IALG_EOK || inArgs == NULL || outArgs == NULL)
+  if (status != IALG_EOK)
   {
     // Cleanup Sequence
     free_tidl_subgraph(instance);
@@ -319,7 +315,8 @@ EXTERN_C int32_t free_tidl_subgraph(void *instance_)
   free_inbufs(instance);
 
   // tidl_tb_algFree()
-  status = handle->fxns->ialg.algFree((IALG_Handle)(handle), instance->memRec);
+  if (handle != NULL)
+    status = handle->fxns->ialg.algFree((IALG_Handle)(handle),instance->memRec);
   if (status != IALG_EOK)
   {
     printf("free_tidl_subgraph: algFree failed\n");
@@ -860,6 +857,8 @@ static int32_t alloc_mem_records(IALG_MemRec * memRec,int32_t numMemRec)
 // Free TIDL memory records
 static int32_t free_mem_records(IALG_MemRec * memRec,int32_t numMemRec)
 {
+  if (memRec == NULL)  return IALG_EFAIL;
+
   int32_t i;
   TIMemHandle memHdl_DMEM0 = &memObj_DMEM0;
   TIMemHandle memHdl_DMEM1 = &memObj_DMEM1;

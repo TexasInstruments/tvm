@@ -288,6 +288,8 @@ tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLContext ctx, void*
       else
       {
         printf("tvmcrt_alloc_size_map overflow: %d\n", tvmcrt_alloc_size_map->size);
+        appMemFree(APP_MEM_HEAP_DDR, *out_ptr, num_bytes);
+        *out_ptr = NULL;
       }
     }
   }
