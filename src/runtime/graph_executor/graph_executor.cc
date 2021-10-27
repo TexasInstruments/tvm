@@ -52,13 +52,93 @@ inline size_t GetDataAlignment(const DLTensor& arr) {
 }
 }  // namespace details
 
+// BeginTI
+#include <float.h>
+static std::vector<uint64_t> tvm_nodes_time;
+uint64_t _TSC_read()
+{
+  struct timespec tp;
+  if (clock_gettime(CLOCK_MONOTONIC, &tp) != 0)
+    clock_gettime(CLOCK_REALTIME, &tp);
+  return (tp.tv_nsec / 1e3 + tp.tv_sec * 1e6);  // convert to microseconds
+}
+
+/* copied from tvm crt graph runtime */
+static uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
+  int64_t accum = 1;
+  uint32_t idx;
+  for (idx = 0; idx < ndim; idx++) {
+    if (shape[idx] == 0) {
+      break;
+    }
+    accum *= shape[idx];
+  }
+  return accum;
+}
+
+static void print_stats(const DLTensor *tensor)
+{
+  int32_t elem_bytes = tensor->dtype.bits / 8;
+  int32_t size = (int32_t) Shape_Accumulate(tensor->shape, tensor->ndim);
+  printf("    Out[0]: ndim=%d, elem_bytes=%d, num_elements=%d, data=%p\n",
+         tensor->ndim, elem_bytes, size, tensor->data);
+  if (tensor->dtype.code == kDLFloat)
+  {
+    float minval =  FLT_MAX;
+    float maxval = -FLT_MAX;
+    float sum = 0.0f;
+    for (int i = 0; i < size; i++)
+    {
+      float val = ((float *)tensor->data)[i];
+      if (val < minval)  minval = val;
+      if (val > maxval)  maxval = val;
+      sum += val;
+    }
+    printf("      min=%f, max=%f, sum=%f\n", minval, maxval, sum);
+  }
+}
+// EndTI
+
 /*!
  * \brief Run all the operations one by one.
  */
 void GraphExecutor::Run() {
+  int tvm_rt_debug_level = 0;
+  if (char *tvm_rt_debug = getenv("TVM_RT_DEBUG"))
+    tvm_rt_debug_level = atoi(tvm_rt_debug);
+  int num_execs = 0;
+  if (tvm_rt_debug_level > 0)
+    tvm_nodes_time[0] = _TSC_read();
+
   // setup the array and requirements.
   for (size_t i = 0; i < op_execs_.size(); ++i) {
+    if (op_execs_[i] && tvm_rt_debug_level > 2)
+      printf("TVM RT: running %s (%d)\n", nodes_[i].name.c_str(), (int) i);
+
     if (op_execs_[i]) op_execs_[i]();
+
+    if (op_execs_[i] && tvm_rt_debug_level > 2)
+    {
+      uint32_t eid = this->entry_id(i, 0);
+      const DLTensor *tensor = data_entry_[eid].operator->();
+      print_stats(tensor);
+    }
+    if (op_execs_[i] && tvm_rt_debug_level > 0)  tvm_nodes_time[++num_execs] = _TSC_read();
+  }
+
+  if (tvm_rt_debug_level > 0)
+  {
+    printf("TVM Run total elapsed (us): %ld\n",
+           tvm_nodes_time[num_execs] - tvm_nodes_time[0]);
+    int idx_execs = 0;
+    for (size_t i = 0; i < op_execs_.size(); ++i) {
+      if (op_execs_[i])
+      {
+        printf("  Node %d, %s, elapsed: %ld\n", (int) i, nodes_[i].name.c_str(),
+               tvm_nodes_time[idx_execs+1] - tvm_nodes_time[idx_execs]);
+        idx_execs += 1;
+      }
+    }
   }
 }
 
@@ -431,6 +511,14 @@ void GraphExecutor::SetupOpExecs() {
       }
     }
   }
+
+  // Begin TI
+  uint32_t num_execs = 0;
+  for (uint32_t nid = 0; nid < this->GetNumOfNodes(); ++nid) {
+    if (op_execs_[nid])  num_execs ++;
+  }
+  tvm_nodes_time.resize(num_execs+1);
+  // End TI
 }
 
 std::pair<std::function<void()>, std::shared_ptr<GraphExecutor::OpArgs> >

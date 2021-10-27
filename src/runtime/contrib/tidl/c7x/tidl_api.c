@@ -155,8 +155,10 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   createParams.TIDLVprintf                   = printTIDLLog;
   //createParams.TIDLVprintf                   = vprintf;
 
-  createParams.traceLogLevel                 = 0;
-  createParams.traceWriteLevel               = 0;
+  extern int32_t tidl_get_trace_log_level();
+  extern int32_t tidl_get_trace_write_level();
+  createParams.traceLogLevel                 = tidl_get_trace_log_level();
+  createParams.traceWriteLevel               = tidl_get_trace_write_level();
   createParams.traceBaseName                 = NULL;
 
   createParams.udmaDrvObj  = udmaDrvObjPtr;
@@ -224,7 +226,7 @@ EXTERN_C void* init_tidl_subgraph(void *network,
     {
       inArgs->iVisionInArgs.size = sizeof(TIDL_InArgs);
       inArgs->iVisionInArgs.subFrameInfo = 0;
-      inArgs->enableLayerPerfTraces = 0;
+      inArgs->enableLayerPerfTraces = (createParams.traceLogLevel > 0) ? 1 : 0;
     }
     else
     {

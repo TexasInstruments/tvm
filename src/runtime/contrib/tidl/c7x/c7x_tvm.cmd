@@ -105,6 +105,10 @@ SECTIONS
 --import=DmaUtilsAutoInc3d_trigger
 --import=DmaUtilsAutoInc3d_wait
 
+--import=tvm_rt_get_debug_level
+--import=tidl_get_trace_log_level
+--import=tidl_get_trace_write_level
+
 /* workaround to prevent linking printf/puts from rts7100_le.lib */
 --symbol_map=printf=__dummy_printf
 --symbol_map=puts=__dummy_puts

@@ -49,6 +49,43 @@ uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
   return accum;
 }
 
+// Begin TI
+#include <float.h>
+#ifdef __C7100__
+ #include <c7x.h>
+ #define _TSC_read() (__TSC)
+ #define _TSC_reset() (__TSC = 0)
+#else
+ #include "time.h"
+ #define _TSC_read() (clock())
+ #define _TSC_reset()
+#endif
+static uint64_t *tvm_nodes_time;
+extern int32_t tvm_rt_get_debug_level();
+
+static void print_stats(DLTensor *tensor)
+{
+  int32_t elem_bytes = tensor->dtype.bits / 8;
+  int32_t size = (int32_t) Shape_Accumulate(tensor->shape, tensor->ndim);
+  printf("TVM CRT: Out[0]: ndim=%d, elem_bytes=%d, num_elements=%d, data=%p\n",
+         tensor->ndim, elem_bytes, size, tensor->data);
+  if (tensor->dtype.code == kDLFloat)
+  {
+    float minval =  FLT_MAX;
+    float maxval = -FLT_MAX;
+    float sum = 0.0f;
+    for (int i = 0; i < size; i++)
+    {
+      float val = ((float *)tensor->data)[i];
+      if (val < minval)  minval = val;
+      if (val > maxval)  maxval = val;
+      sum += val;
+    }
+    printf("TVM CRT:         min=%f, max=%f, sum=%f\n", minval, maxval, sum);
+  }
+}
+// End TI
+
 int NodeEntry_Load(TVMGraphExecutorNodeEntry* entry, JSONReader* reader) {
   int status = 0;
   reader->BeginArray(reader);
@@ -879,19 +916,52 @@ int TVMGraphExecutor_LoadParams(TVMGraphExecutor* executor, const char* param_bl
   return status;
 }
 
+
+
 /*!
  * \brief Run all the operations one by one.
  * \param executor The graph executor.
  */
 void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
+  uint32_t tvm_rt_debug_level = tvm_rt_get_debug_level();
+  uint32_t num_execs = 0;
+  if (tvm_rt_debug_level > 1)
+    tvm_nodes_time[0] = _TSC_read();
+
   // setup the array and requirements.
   uint32_t idx;
   for (idx = 0; idx < executor->op_execs_count; ++idx) {
     if (executor->op_execs[idx].fexec) {
+      if (tvm_rt_debug_level > 2)
+        printf("TVM CRT: running %s (%d)\n", executor->op_execs[idx].name, idx);
+
 #if TVM_CRT_DEBUG
       printf("calling: %s (%d)\n", executor->op_execs[idx].name, idx);
 #endif  // TVM_CRT_DEBUG
       executor->op_execs[idx].Call(&(executor->op_execs[idx]));
+
+      if (tvm_rt_debug_level > 2)
+      {
+        uint32_t eid = TVMGraphRuntime_GetEntryId(executor, idx, 0);
+        DLTensor *tensor = &(executor->data_entry[eid].dl_tensor);
+        print_stats(tensor);
+      }
+      if (tvm_rt_debug_level > 1)  tvm_nodes_time[++num_execs] = _TSC_read();
+    }
+  }
+
+  if (tvm_rt_debug_level > 1)
+  {
+    printf("TVM CRT: TVM Run total elapsed (K Cycles): %ld\n",
+           (tvm_nodes_time[num_execs] - tvm_nodes_time[0]) / 1000);
+    uint32_t idx_execs = 0;
+    for (idx = 0; idx < executor->op_execs_count; ++idx) {
+      if (executor->op_execs[idx].fexec)
+      {
+        printf("TVM CRT:    Node %d, %s, elapsed: %ld\n", idx, executor->op_execs[idx].name,
+               (tvm_nodes_time[idx_execs+1] - tvm_nodes_time[idx_execs]) / 1000);
+        idx_execs += 1;
+      }
     }
   }
 }
@@ -1116,6 +1186,29 @@ int TVMGraphExecutor_SetupOpExecs(TVMGraphExecutor* executor) {
       executor->op_execs[nid] = pf;
     }
   }
+
+  // Begin TI
+  tvm_nodes_time = NULL;
+  int32_t tvm_rt_debug_level = tvm_rt_get_debug_level();
+  if (status == kTvmErrorNoError && tvm_rt_debug_level > 1)
+  {
+    int num_execs = 0;
+    for (nid = 0; nid < executor->nodes_count; nid++) {
+      if (executor->op_execs[nid].fexec)  num_execs += 1;
+    }
+    err = TVMPlatformMemoryAllocate((num_execs+1)*sizeof(uint64_t), ctx, (void**)&tvm_nodes_time);
+    if (err != kTvmErrorNoError)
+    {
+      fprintf(stderr, "Fail to alloc mem for profiling time of %d nodes.\n", num_execs);
+      status = -1;
+    }
+    else
+    {
+      memset(tvm_nodes_time, 0, (num_execs+1)*sizeof(uint64_t));
+    }
+  }
+  // End TI
+
   return status;
 }
 
@@ -1285,6 +1378,13 @@ int TVMGraphExecutor_Release(TVMGraphExecutor** pptr) {
   if (status != 0) {
     return status;
   }
+  // Begin TI
+  if (tvm_nodes_time != NULL)
+    status = TVMPlatformMemoryFree(tvm_nodes_time, ctx);
+  if (status != 0) {
+    return status;
+  }
+  // End TI
 
   if (g_fexecs) {
     status = TVMPlatformMemoryFree(g_fexecs, dev);

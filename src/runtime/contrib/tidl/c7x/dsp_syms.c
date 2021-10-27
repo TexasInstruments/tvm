@@ -63,7 +63,6 @@ __declspec(dllexport) void appMemAlloc() {}
 __declspec(dllexport) void appMemFree() {}
 __declspec(dllexport) void appUdmaGetObj() {}
 
-
 __declspec(dllexport) void DmaUtilsAutoInc3d_configure() {}
 __declspec(dllexport) void DmaUtilsAutoInc3d_convertTrVirtToPhyAddr() {}
 __declspec(dllexport) void DmaUtilsAutoInc3d_deconfigure() {}
@@ -74,4 +73,8 @@ __declspec(dllexport) void DmaUtilsAutoInc3d_init() {}
 __declspec(dllexport) void DmaUtilsAutoInc3d_prepareTr() {}
 __declspec(dllexport) void DmaUtilsAutoInc3d_trigger() {}
 __declspec(dllexport) void DmaUtilsAutoInc3d_wait() {}
+
+__declspec(dllexport) void tvm_rt_get_debug_level() {}
+__declspec(dllexport) void tidl_get_trace_log_level() {}
+__declspec(dllexport) void tidl_get_trace_write_level() {}
 

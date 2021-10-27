@@ -48,12 +48,21 @@
 #include "itidl_rt.h"
 #include "itvm_rt.h"
 
+/* 1: TVM RT Arm timing, 2: + TVM CRT C7x timing, 3: + TVM RT/CRT debug info, tensor stats */
+static int tvmrt_debuglevel = 0;
+/* 1-3: TIDL traceLogLevel, 4-5: TIDL traceWriteLevel(1,3) */
 static int tidlrt_debuglevel = 0;
 static int tidlrt_perfstats = 0;
 
 static void __attribute__((constructor)) lib_init()
 {
 	char *debug_str, *perf_str;
+
+	debug_str = getenv("TVM_RT_DEBUG");
+	if(!debug_str)
+		tvmrt_debuglevel = 0;
+	else
+		tvmrt_debuglevel = atoi(debug_str);
 
 	debug_str = getenv("TIDL_RT_DEBUG");
 	if(!debug_str)
@@ -779,6 +788,7 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
 
     std::string trace_base_name = "./tidl_trace_c7xgraph_" + std::to_string(c7xgraph_id) + "_";
     params.traceBaseName = const_cast<char *>(trace_base_name.c_str());
+    params.tvm_rt_debug_level = tvmrt_debuglevel;
     params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
     params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
     params.TVMVprintf = TIDLVprintf;
