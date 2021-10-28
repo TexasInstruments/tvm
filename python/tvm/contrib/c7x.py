@@ -46,8 +46,8 @@ class c7x_target_config():
 # via PassContext.current().
 # See also vta/build_module.py
 def c7x_pass_context():
-   # optimization level; not sure how this applies
-   opt=2
+   # optimization level; this affects set of Relay IR optimizations during BuildRelay()
+   opt=3
    # Passes to disable
    disable = []
    # Disable the pass that shares buffers whose lifetimes don't overlap; 

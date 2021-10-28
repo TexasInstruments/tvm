@@ -3296,6 +3296,9 @@ class build_config():
             platform            = tidl_compiler.tidl_platform
             c7x_codegen_enabled = tidl_compiler.c7x_codegen
         assert artifacts_folder, "artifacts_folder must be specified for TVM+TIDL compilation"
+        self.temp_folder = os.path.join(artifacts_folder, "tempDir")
+        if (c7x_codegen_enabled == 1 and gen_c7x_mod_enabled == 0):
+            self.temp_folder = None
         CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
         self.tidl_context = CreateTIDLContext(artifacts_folder, platform, c7x_codegen_enabled,
                                               gen_c7x_mod_enabled)
@@ -3303,12 +3306,16 @@ class build_config():
                                       config={'tir.disable_vectorize': (c7x_codegen_enabled == 9)})
 
     def __enter__(self):
+        if self.temp_folder:
+            os.environ["TIDL_ARTIFACTS_TEMP_FOLDER"] = self.temp_folder
         self.tidl_context.__enter__()
         self.tvm_context.__enter__()
 
     def __exit__(self, ctx_type, ctx_value, ctx_trace):
         self.tidl_context.__exit__(ctx_type, ctx_value, ctx_trace)
         self.tvm_context.__exit__(ctx_type, ctx_value, ctx_trace)
+        if self.temp_folder:
+            os.environ.pop("TIDL_ARTIFACTS_TEMP_FOLDER")
 
 def remove_tidl_params(params):
     """ Remove params used by TIDL subgraphs from deployable module params

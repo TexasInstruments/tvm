@@ -419,6 +419,14 @@ class RelayBuildModule : public runtime::ModuleNode {
 
     ICHECK(relay_module.defined());
 
+    // BeginTI: save optimized Relay IR in temp dir
+    if (char *tidl_temp_folder = getenv("TIDL_ARTIFACTS_TEMP_FOLDER"))
+    {
+      std::ofstream of(std::string(tidl_temp_folder) + "/relay_graph.optimized.txt");
+      of << AsText(relay_module, false);
+    }
+    // EndTI
+
     return relay_module;
   }
 
