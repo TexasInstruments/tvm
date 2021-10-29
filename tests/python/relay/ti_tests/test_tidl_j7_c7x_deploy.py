@@ -187,6 +187,39 @@ def print_top5(output):
     print(top5)
     print(values)
 
+def write_deeplabv3_results(output, img_file, model_name):
+    import cv2
+    orig_img = cv2.imread(img_file)
+    resized_img = cv2.resize(orig_img, (257, 257), interpolation=cv2.INTER_CUBIC)
+    output3 = np.squeeze(output, axis=0)
+    class_IDs = np.argmax(output3, axis=2).astype(int)
+    mask_img = resized_img.copy()
+    for i in range(257):
+        for j in range(257):
+            if class_IDs[i][j] != 0:
+                mask_img[i][j] = list(colors[class_IDs[i][j]%len(colors)])
+    output_img = cv2.addWeighted(resized_img, 0.7, mask_img, 0.3, 0.0)
+    output_img = cv2.resize(output_img, (orig_img.shape[0], orig_img.shape[1]),
+                            interpolation=cv2.INTER_CUBIC)
+    cv2.imwrite(f"{model_name}.png", output_img)
+    print(f"{model_name} results in {model_name}.png")
+
+def write_yolo_results(outputs, img_file, model_name):
+    import cv2
+    orig_img = cv2.imread(img_file)
+    resized_img = cv2.resize(orig_img, (416, 416), interpolation=cv2.INTER_CUBIC)
+    class_IDs, scores, bounding_boxes = outputs
+    for i, score in enumerate(np.squeeze(scores)):
+        if score > 0.2:
+            cv2.rectangle(resized_img, (int(bounding_boxes[0][i][0]), int(bounding_boxes[0][i][1])),
+                                       (int(bounding_boxes[0][i][2]), int(bounding_boxes[0][i][3])),
+                                       colors[int(class_IDs[0][i][0])%len(colors)], 2)
+    output_img = cv2.resize(resized_img, (orig_img.shape[0], orig_img.shape[1]),
+                            interpolation=cv2.INTER_CUBIC)
+    cv2.imwrite(f"{mode_name}.png", output_img)
+    print(f"{mode_name} results in {mode_name}.png")
+
+
 if __name__ == '__main__':
 
     #img_file = "~/.tvm_test_data/data/airshow.jpg"
@@ -195,18 +228,54 @@ if __name__ == '__main__':
     img_file = args.input
     print(f"Input image file: {img_file}")
 
-    outputs1 = run_module("mobilenetv3_large", "data", [128, 128, 128],
+    # outputs_mv1 = run_module("MobileNetV1", "input", [128, 128, 128],
+    #                       [0.0078125, 0.0078125, 0.0078125], False,
+    #                       img_file, [256,256], [224,224])
+    # outputs_mv1_c7x = run_module("MobileNetV1_c7x", "input", [128, 128, 128],
+    #                       [0.0078125, 0.0078125, 0.0078125], False,
+    #                       img_file, [256,256], [224,224])
+    # print("TensorFlow MobileNetV1 output: (index of 1001)")
+    # print_top5(outputs_mv1[0])
+    # print("(With C7x codegen) TensorFlow MobileNetV1 output: (index of 1001)")
+    # print_top5(outputs_mv1_c7x[0])
+
+    # outputs_mv2 = run_module("ONNX_MobileNetV2", "data", [123.675, 116.28, 103.53],
+    #                       [0.017125, 0.017507, 0.017429], True,
+    #                       img_file, [256,256], [224,224])
+    # outputs_mv2_c7x = run_module("ONNX_MobileNetV2_c7x", "data", [123.675, 116.28, 103.53],
+    #                       [0.017125, 0.017507, 0.017429], True,
+    #                       img_file, [256,256], [224,224])
+    # print("ONNX MobileNetV2 output: (index of 1000)")
+    # print_top5(outputs_mv2[0])
+    # print("(with C7x codegen) ONNX MobileNetV2 output: (index of 1000)")
+    # print_top5(outputs_mv2_c7x[0])
+
+    outputs_mv3 = run_module("mobilenetv3_large", "data", [128, 128, 128],
                           [0.0078125, 0.0078125, 0.0078125], True,
                           img_file, [256,256], [224,224])
-
-    outputs2 = run_module("mobilenetv3_large_c7x", "data", [128, 128, 128],
+    outputs_mv3_c7x = run_module("mobilenetv3_large_c7x", "data", [128, 128, 128],
                           [0.0078125, 0.0078125, 0.0078125], True,
                           img_file, [256,256], [224,224])
-
-
     print("MxNet MobileNetV3 output: (index of 1000)")
-    print_top5(outputs1[0])
-
+    print_top5(outputs_mv3[0])
     print("(With C7x codegen) MxNet MobileNetV3 output: (index of 1000)")
-    print_top5(outputs2[0])
+    print_top5(outputs_mv3_c7x[0])
+
+    # outputs_deeplabv3 = run_module("deeplabv3", "sub_7", [128, 128, 128],
+    #                       [0.0078125, 0.0078125, 0.0078125], False,
+    #                       img_file, [257,257], [257,257])
+    # outputs_deeplabv3_c7x = run_module("deeplabv3", "sub_7", [128, 128, 128],
+    #                       [0.0078125, 0.0078125, 0.0078125], False,
+    #                       img_file, [257,257], [257,257])
+    # write_deeplabv3_results(outputs_deeplabv3[0], img_file, "deeplabv3")
+    # write_deeplabv3_results(outputs_deeplabv3_c7x[0], img_file, "deeplabv3_c7x")
+
+    # outputs_yolo3 = run_module("yolo3_mobilenet1.0_coco", "data", [123.675, 116.28, 103.53],
+    #                       [0.017125, 0.017507, 0.017429], True,
+    #                       img_file, [416,416], [416,416])
+    # outputs_yolo3_c7x = run_module("yolo3_mobilenet1.0_coco_c7x", "data", [123.675, 116.28, 103.53],
+    #                       [0.017125, 0.017507, 0.017429], True,
+    #                       img_file, [416,416], [416,416])
+    # write_yolo_results(outputs_yolo3, img_file, "yolo3_mobilenet1.0_coco")
+    # write_yolo_results(outputs_yolo3_c7x, img_file, "yolo3_mobilenet1.0_coco_c7x")
 

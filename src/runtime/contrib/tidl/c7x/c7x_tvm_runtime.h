@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include <assert.h>
+#include <math.h>
 #include <cstdint>
 #include <string>
 #include <sstream>
@@ -44,6 +45,7 @@
 
 #define max(a, b) __max((a), (b))
 #define min(a, b) __min((a), (b))
+#define int32_t16 int16
 
 // If MODEL_DMA is true, the DMA utilities are stubbed out
 #if !MODEL_DMA
@@ -136,7 +138,11 @@ class AllocL2Context
   void *allocate(unsigned size)
   {
     void *ptr = tvm_tidl_l2_scratch_alloc(size);
-    if (ptr == NULL)  tvmcrt_exit(-1);
+    if (ptr == NULL)
+    {
+      printf("AllocL2Context.allocate failed for size: %d\n", size);
+      tvmcrt_exit(-1);
+    }
     return ptr;
   }
 }; 

@@ -114,6 +114,7 @@ def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgra
             arm_gcc = get_arm_compiler()
         if c7x_codegen == 1:
             cgt7x_root = get_c7x_compiler_path()
+            #c7x_codegen = 9
     except Exception as ex:
         print(f"{__file__}: Skip compilation because: {ex}")
         return 0
@@ -370,13 +371,14 @@ def test_tidl_tf_mobilenets(model_name, img_file_list, format="tf"):
     else:
         create_relay_graph_func = create_tf_relay_graph
     fds = disable_outputs()
-    tf_mod, tf_params = create_relay_graph_func(model = model_name, input_node = input_node,
+    tf_model_name = model_name[:-4] if model_name.endswith('_c7x') else model_name
+    tf_mod, tf_params = create_relay_graph_func(model = tf_model_name, input_node = input_node,
                                                 input_shape = input_shape, layout = data_layout)
     restore_outputs(fds)
 
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
-    status = model_compile(model_name, tf_mod, tf_params, input_dict_list)
+    status = model_compile(model_name, tf_mod, tf_params, input_dict_list, max_num_subgraphs=0)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
 def test_tidl_onnx(model_name, img_file_list):
@@ -392,7 +394,8 @@ def test_tidl_onnx(model_name, img_file_list):
     print("input_data shape: {}".format(input_data_list[0].shape))
 
     #============= Create a Relay graph for MobileNet model ==============
-    if model_name == "ONNX_MobileNetV2":
+    onnx_model_name = model_name[:-4] if model_name.endswith('_c7x') else model_name
+    if onnx_model_name == "ONNX_MobileNetV2":
         #commit = 'master'  # latest version has dynamic shape in network  ('shape', ...)
         commit = 'cbda9ebd037241c6c6a0826971741d5532af8fa4'
         model = download_testdata(
@@ -405,7 +408,7 @@ def test_tidl_onnx(model_name, img_file_list):
 
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
-    status = model_compile(model_name, onnx_mod, onnx_params, input_dict_list)
+    status = model_compile(model_name, onnx_mod, onnx_params, input_dict_list, max_num_subgraphs=0)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
 def test_tidl_pytorch(model_name, img_file_list):
@@ -444,8 +447,7 @@ def test_tidl_pytorch(model_name, img_file_list):
                            max_num_subgraphs=2)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
-def test_tidl_tflite_deeplabv3(img_file_list):
-    model_name = "deeplabv3"
+def test_tidl_tflite_deeplabv3(model_name, img_file_list):
     data_layout = "NHWC"
     input_node = "sub_7"
     input_shape = (1, 257, 257, 3)
@@ -457,13 +459,14 @@ def test_tidl_tflite_deeplabv3(img_file_list):
     print("input_data shape: {}".format(input_data_list[0].shape))
 
     #============= Create a Relay graph for model ==============
-    tf_mod, tf_params = create_tflite_relay_graph(model = model_name, input_node = input_node,
+    tf_model_name = model_name[:-4] if model_name.endswith('_c7x') else model_name
+    tf_mod, tf_params = create_tflite_relay_graph(model = tf_model_name, input_node = input_node,
                                                   input_shape = input_shape, layout = data_layout)
 
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
     status = model_compile(model_name, tf_mod, tf_params, input_dict_list,
-                           max_num_subgraphs=2)
+                           max_num_subgraphs=0)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
 def test_tidl_mxnet(model_name, img_file_list):
@@ -487,6 +490,8 @@ def test_tidl_mxnet(model_name, img_file_list):
     #======================== TIDL code generation ====================
     input_dict_list = [ {input_node:input_data} for input_data in input_data_list ]
     status = model_compile(model_name, mod, params, input_dict_list, max_num_subgraphs=9)
+    #status = model_compile(model_name, mod, params, input_dict_list, max_num_subgraphs=8)
+    #status = model_compile(model_name, mod, params, input_dict_list, max_num_subgraphs=7)
     #status = model_compile(model_name, mod, params, input_dict_list, max_num_subgraphs=0)
     assert status != -1, "TIDL compilation failed"   # For CI test
 
@@ -500,25 +505,26 @@ if __name__ == '__main__':
     img_airshow = download_testdata(
          'https://git.ti.com/cgit/tidl/tidl-utils/plain/test/testvecs/input/airshow.jpg',
          'airshow.jpg', module='data')
-    ### test_tidl_tf_mobilenets("MobileNetV1", [ img_cat, img_cat2, img_airshow ])
-    ### #test_tidl_tf_mobilenets("MobileNetV1", [ img_cat ], "tflite")
-    ### #test_tidl_tf_mobilenets("MobileNetV2", [ img_cat ])
-    ### #test_tidl_tf_mobilenets("MobileNetV2", [ img_cat ], "tflite")
+    ### test_tidl_tf_mobilenets("MobileNetV1",     [ img_cat, img_cat2, img_airshow ])
+    ### test_tidl_tf_mobilenets("MobileNetV1_c7x", [ img_cat, img_cat2, img_airshow ])
+
     ### test_tidl_tf_mobilenets("MobileNetV2_quant", [ img_cat ], "tflite")
-    ### test_tidl_onnx("ONNX_MobileNetV2", [ img_airshow, img_cat2, img_cat ])
+
+    ### test_tidl_onnx("ONNX_MobileNetV2",     [ img_airshow, img_cat2, img_cat ])
+    ### test_tidl_onnx("ONNX_MobileNetV2_c7x", [ img_airshow, img_cat2, img_cat ])
+
     ### test_tidl_pytorch("pytorch_mobilenetv2", [ img_airshow, img_cat, img_cat2 ])
 
-    ### img_street = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
-    ###                              'gluoncv/detection/street_small.jpg?raw=true',
-    ###                              'street_small.jpg', module='data')
-    ### #img_kidbike = "./deeplab_kidbike_input.png"
-    ### test_tidl_tflite_deeplabv3([ img_street ])
-    ### test_tidl_mxnet("yolo3_mobilenet1.0_coco", [ img_street ])
     test_tidl_mxnet("mobilenetv3_large",     [ img_cat, img_cat2, img_airshow ])
     test_tidl_mxnet("mobilenetv3_large_c7x", [ img_cat, img_cat2, img_airshow ])
 
-    ### #test_tidl_classification()
-    ### #test_tidl_object_detection()
-    ### #test_tidl_segmentation()
+    img_street = download_testdata('https://github.com/dmlc/web-data/blob/master/' +
+                                 'gluoncv/detection/street_small.jpg?raw=true',
+                                 'street_small.jpg', module='data')
 
+    ### test_tidl_tflite_deeplabv3("deeplabv3", [ img_street ])
+    ### test_tidl_tflite_deeplabv3("deeplabv3_c7x", [ img_street ])
+
+    ### test_tidl_mxnet("yolo3_mobilenet1.0_coco", [ img_street ])
+    ### test_tidl_mxnet("yolo3_mobilenet1.0_coco_c7x", [ img_street ])
 
