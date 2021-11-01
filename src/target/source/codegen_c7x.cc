@@ -370,19 +370,19 @@ void CodeGenC7x::PrintType(DataType t, std::ostream& os) {  // NOLINT(*)
     }
     switch (t.bits()) {
       case 8:
-        os << "int8_t";
+        os << "char";
         break;
       case 16:
-        os << "int16_t";
+        os << "short";
         break;
       case 32:
-        os << "int32_t";
+        os << "int";
         break;
-      case 64:
-        os << "int64_t";
+      case 64: // On C7x, long is 64 bits
+        os << "long";
         break;
       case 1:
-        os << "int32_t";
+        os << "int";
         break;
       default:
         fail = true;
