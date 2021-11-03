@@ -180,10 +180,10 @@ def double_buffer_with_dma(s: te.Schedule,
     # Split on the axis indicated by find_split to reduce local buffer size
     if baxis != 0:
         if nblocks != dims[baxis-1]:
-            print(f"split at {baxis} by {nblocks}")
+            #print(f"split at {baxis} by {nblocks}")
             old = dims[baxis-1]
             sdim = [nblocks, int(old / nblocks)]
-            print(f"split dim: {old} -> {sdim}")
+            #print(f"split dim: {old} -> {sdim}")
             dims = dims[:baxis-1] + sdim + dims[baxis:]
             (outer, block) = s[C].split(s[C].op.axis[baxis-1], nparts=nblocks)
             if baxis == len(s[C].op.axis):
@@ -241,7 +241,7 @@ def find_split(dims, elem_bytes, limit):
             # If block split results in odd number of iterations, do not split
             # Downstream passes cannot handle loops with odd iteration counts
             if iter_range % 2 != 0:
-                print(f"Invalid blocksize resulting in odd range: {iter_range}")
+                #print(f"Invalid blocksize resulting in odd range: {iter_range}")
                 return (0, 1, 0)
 
             return (axis+1, nblocks, int(blocksize/nblocks))

@@ -231,7 +231,6 @@ def select_implementation(op, attrs, inputs, out_type, target, use_autotvm=True)
         if best_cfg is None or best_cfg.cost > cfg.cost:
             best_autotvm_impl = impl
             best_cfg = cfg
-    autotvm.GLOBAL_SCOPE.silent = old_silent
 
     if best_autotvm_impl:
         # The best autotvm implementation definitely doesn't use fallback config
@@ -264,6 +263,9 @@ def select_implementation(op, attrs, inputs, out_type, target, use_autotvm=True)
                 )
                 autotvm_logger.warning(info_msg)
             autotvm_logger.debug(msg)
+
+    # Restore here to suppress the "Cannot find config ..." messages
+    autotvm.GLOBAL_SCOPE.silent = old_silent
 
     logger.info(
         "Using %s for %s based on highest priority (%s)",

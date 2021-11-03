@@ -16,6 +16,10 @@
 # under the License.
 """Unit tests for TIDL compilation."""
 
+# Suppress future warnings from TensorFlow
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import os
 import numpy as np
 import pytest
