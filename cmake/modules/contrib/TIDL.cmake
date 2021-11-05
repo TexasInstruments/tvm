@@ -29,6 +29,13 @@ if(USE_TIDL STREQUAL "ON")
   file(GLOB TIDL_CONTRIB_SRC src/runtime/contrib/tidl/*.cc)
   list(APPEND RUNTIME_SRCS ${TIDL_CONTRIB_SRC})
 
-  add_subdirectory("src/runtime/contrib/tidl/c7x")
+  # Only build c7x in tvm project (compilation), not in dlr project (runtime)
+  # c7x is used in TVM compilation only.  Do not include it in neo-ai-dlr build.
+  # neo-ai-dlr CMakeLists.txt simply include top-level TVM CMakeLists.txt,
+  # so we do a check here on the project name.  This is to simplify neo-ai-dlr
+  # build, so that it does not require USE_TIDL_PSDKR_PATH.
+  if (CMAKE_PROJECT_NAME STREQUAL "tvm")
+    add_subdirectory("src/runtime/contrib/tidl/c7x")
+  endif()
 endif()
 

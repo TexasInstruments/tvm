@@ -21,9 +21,21 @@ if (USE_TIDL_PSDKR_PATH STREQUAL "none")
   message(FATAL_ERROR "Please set USE_TIDL_PSKDR_PATH to PSDK RTOS installation")
 endif()
 
-file(GLOB cgt7x_root ${USE_TIDL_PSDKR_PATH}/ti-cgt-c7000_*)
-file(GLOB ivision_path ${USE_TIDL_PSDKR_PATH}/ivision)
-file(GLOB pdk_path ${USE_TIDL_PSDKR_PATH}/pdk_jacinto_*)
+file(GLOB cgt7x_root_tmp ${USE_TIDL_PSDKR_PATH}/ti-cgt-c7000_*)
+file(GLOB ivision_path_tmp ${USE_TIDL_PSDKR_PATH}/ivision)
+file(GLOB pdk_path_tmp ${USE_TIDL_PSDKR_PATH}/pdk*)
+
+list(LENGTH cgt7x_root_tmp cgt7x_root_len)
+list(LENGTH ivision_path_tmp ivision_path_len)
+list(LENGTH pdk_path_tmp pdk_path_len)
+
+if ((${cgt7x_root_len} EQUAL 0) OR (${pdk_path_len} EQUAL 0) OR (${pdk_path_len} EQUAL 0))
+  message(FATAL_ERROR "Cannot find ti-cgt-c7000_*, ivision, pdk* in ${USE_TIDL_PSDKR_PATH}")
+endif()
+
+list(GET cgt7x_root_tmp 0 cgt7x_root)
+list(GET ivision_path_tmp 0 ivision_path)
+list(GET pdk_path_tmp 0 pdk_path)
 
 list(APPEND build_env_paths "USE_TIDL_RT_PATH=${USE_TIDL_RT_PATH}")
 list(APPEND build_env_paths "CGT7X_ROOT=${cgt7x_root}")

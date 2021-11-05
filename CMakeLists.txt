@@ -485,7 +485,11 @@ if(USE_MICRO)
 endif()
 
 if(USE_TIDL)
-  add_dependencies(tvm tidl_c7x_libs)
+  # Check if "tidl_c7x_libs" custom target is defined, so that neo-ai-dlr
+  # build does not require tidl_c7x_libs build.  This does not impact TVM build.
+  if(TARGET tidl_c7x_libs)
+    add_dependencies(tvm tidl_c7x_libs)
+  endif()
 endif()
 
 if(USE_CPP_RPC)
