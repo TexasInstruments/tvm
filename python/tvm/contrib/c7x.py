@@ -50,9 +50,6 @@ def c7x_pass_context():
    opt=3
    # Passes to disable
    disable = []
-   # Disable the pass that shares buffers whose lifetimes don't overlap; 
-   # it messes up our DMA transformation
-   disable.append("tir.StorageRewrite")
    # Leave allocations of "local" buffers alone
    disable.append("tir.LowerDeviceStorageAccessInfo")
    # Disable lowering TVM calls; this prevents the host kernel from using 
@@ -74,7 +71,7 @@ def c7x_pass_context():
         # Replace buffer copies that have "pragma_dma" with intrinsic calls. 
         # implemented via CopyIntrinInjector, which analyzes the copy loop and 
         # invokes fintrin to create the dma call. See vta/transform.py
-        (2, tvm.tir.transform.InjectCopyIntrin(pragma_key="dma", 
+        (2, tvm.tir.transform.InjectCopyIntrin(pragma_key="dma",
                                                fintrin=c7x_dma_injector)),
         # Insert C7x DMA intrinsics 
         (2, C7xDMAPass()),
