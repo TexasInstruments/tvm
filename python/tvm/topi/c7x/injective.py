@@ -40,6 +40,8 @@ def schedule_injective(outs: Union[te.tensor.Tensor, List[te.tensor.Tensor]]) ->
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
     s = te.create_schedule([x.op for x in outs])
 
+    # Note: AutoInline can result in compute getting "inlined" into copy loops
+    # Such loops cannot be annotated with the dma pragma. See is_copy.
     tvm.te.schedule.AutoInlineInjective(s)
     for out in outs:
         if not utils.is_empty_shape(out.shape):
@@ -167,7 +169,6 @@ def double_buffer_with_dma(s: te.Schedule,
     local_inputs = []
 
     for t in op.input_tensors:
-        # Why are we checking for #dim? Don't we want to do the same for large 1D tensors?
         if len(t.shape) > 1:
             l = s.cache_read(t, "local", op)
             local_inputs.append(l)
@@ -208,13 +209,30 @@ def double_buffer_with_dma(s: te.Schedule,
 
     # mark local<->ext copies as using dma.
     for t in local_inputs:
-        s[t].pragma(s[t].op.axis[0], "dma")
+        # AutoInlineInjective can push compute into the copy loops - such loops
+        # cannot be annotated with the dma pragma.
+        if is_copy(t):
+            s[t].pragma(s[t].op.axis[0], "dma")
     if cc != C:
         # if no split above, block is outer loop
         s[C].pragma(block, "dma")
 
     return (s, cc, baxis, inner)
 
+def is_copy(tensor):
+    ''' Return True if any of the ops contributing to tensor has more than 2
+        inputs, indicating that it is not just a copy operation.
+    '''
+    if isinstance(tensor.op, tvm.te.ComputeOp):
+        # If there is more than one input, this is not a copy operation
+        if len(tensor.op.input_tensors) > 1:
+            return False
+
+        for t in tensor.op.input_tensors:
+            if is_copy(t) == False:
+                return False
+
+    return True
 
 def find_split(dims, elem_bytes, limit):
     ''' Given dimensions and max block size, find even split such
@@ -251,6 +269,17 @@ def find_split(dims, elem_bytes, limit):
 
 
 #----------------------------------------------------------------
+# Debug code to dump TIR
+def dump(tensor, indent=''):
+    ''' Traverse TIR and print operands, operations '''
+    print(f'{indent}tensor = {tensor.name}')
+    print(f'{indent}op = {tensor.op.name}, tag={tensor.op.tag}, inputs={len(tensor.op.input_tensors)}')
+    if isinstance(tensor.op, tvm.te.ComputeOp):
+      print(f'{indent}body = {tensor.op.body}, expr type={type(tensor.op.body[0])}')
+    for t in tensor.op.input_tensors:
+        dump(t, indent=indent+' ')
+
+
 # Debug code to print and visualize the schedules
 from tvm.contrib import tedd
 import graphviz as gv
