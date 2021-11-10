@@ -45,7 +45,6 @@
 
 #define max(a, b) __max((a), (b))
 #define min(a, b) __min((a), (b))
-#define int32_t16 int16
 
 // If MODEL_DMA is true, the DMA utilities are stubbed out
 #if !MODEL_DMA
@@ -93,6 +92,8 @@ void tvm_tidl_dmautils_wait(uint8_t *dmaUtilscontext, int32_t channel)
 
 extern "C" {
   extern void tvmcrt_exit(int ecode);
+  extern int32_t TVM_lockInterrupts();
+  extern void    TVM_unlockInterrupts(int32_t);
 }
 
 //---------------------------------------------------------------------------------
@@ -146,6 +147,18 @@ class AllocL2Context
     return ptr;
   }
 }; 
+
+//---------------------------------------------------------------------------------
+// Critical section context.  Disable and restore interrupts at entry and exit.
+class CriticalSectionContext
+{
+public:
+  CriticalSectionContext()  { old_state = TVM_lockInterrupts(); }
+  ~CriticalSectionContext() { TVM_unlockInterrupts(old_state); }
+private:
+  int32_t old_state;
+};
+
 
 //---------------------------------------------------------------------------------
 // Layout represents the type of a multi-dimensional tensor in memory. It's a completely

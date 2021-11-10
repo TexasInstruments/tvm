@@ -78,3 +78,6 @@ __declspec(dllexport) void tvm_rt_get_debug_level() {}
 __declspec(dllexport) void tidl_get_trace_log_level() {}
 __declspec(dllexport) void tidl_get_trace_write_level() {}
 
+__declspec(dllexport) void TVM_lockInterrupts() {}
+__declspec(dllexport) void TVM_unlockInterrupts() {}
+

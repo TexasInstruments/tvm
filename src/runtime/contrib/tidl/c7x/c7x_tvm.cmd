@@ -109,6 +109,9 @@ SECTIONS
 --import=tidl_get_trace_log_level
 --import=tidl_get_trace_write_level
 
+--import=TVM_lockInterrupts
+--import=TVM_unlockInterrupts
+
 /* workaround to prevent linking printf/puts from rts7100_le.lib */
 --symbol_map=printf=__dummy_printf
 --symbol_map=puts=__dummy_puts

@@ -66,10 +66,11 @@ python3 ./test_ovx_tvm.py
 
 For EVM testing:
 cp artifacts_ovx_tvm_c7x_target/tempDir/c7x_deploy_mod.out \
-        /opt/vision_apps/test_data/tivx/tvm_models/c7x_deploy_tvm.out
-cp artifacts_ovx_tvm_large_c7x_target/tempDir/ovx_tvm_test_small.out \
+        /opt/vision_apps/test_data/tivx/tvm_models/ovx_tvm_test_small.out
+cp artifacts_ovx_tvm_large_c7x_target/tempDir/c7x_deploy_mod.out \
         /opt/vision_apps/test_data/tivx/tvm_models/ovx_tvm_test_large.out
-Repo for generated TVM models in OpenVX unit test: 
+Repo for generated TVM models in OpenVX unit test:
+        ssh://git@bitbucket.itg.ti.com/processor-sdk-vision/test_data.git
 
 Small model is compiled with all c7x optimization on (SE, DMA, vectorization)
 Large model is compiled with SE, DMA and vectorization off currently, because

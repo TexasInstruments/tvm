@@ -135,6 +135,12 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   // Setup TIDL construction parameters.
   // Mostly defaults from setDefaultParams()
   TIDL_CreateParams  createParams;
+  TIDL_createParamsInit(&createParams);
+
+  extern int32_t tidl_get_trace_log_level();
+  extern int32_t tidl_get_trace_write_level();
+  extern int32_t TVM_lockInterrupts();
+  extern void    TVM_unlockInterrupts(int32_t);
 
   createParams.visionParams.algParams.size   = sizeof(TIDL_CreateParams);
   createParams.visionParams.cacheWriteBack   = NULL;
@@ -143,27 +149,28 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   createParams.optimiseExtMem                = TIDL_OptimiseExtMemL1;
   createParams.quantRangeExpansionFactor     = 1.0;
   createParams.quantRangeUpdateFactor        = 0.0;
+  createParams.traceLogLevel                 = tidl_get_trace_log_level();
+  createParams.traceWriteLevel               = tidl_get_trace_write_level();
   createParams.reservedCtrl                  = 0;
 #if (HOST_EMULATION)
-  createParams.flowCtrl               = TIDL_FLOW_CTRL_REF_ONLY;
+  createParams.flowCtrl                      = TIDL_FLOW_CTRL_REF_ONLY;
 #else
-  createParams.flowCtrl               = TIDL_FLOW_CTRL_DEFAULT ;
+  createParams.flowCtrl                      = TIDL_FLOW_CTRL_DEFAULT ;
 #endif
+  //createParams.maxPreEmptDelay               = FLT_MAX;
+  createParams.traceBaseName                 = NULL;
+  createParams.udmaDrvObj                    = udmaDrvObjPtr;
+
+  createParams.net                           = instance->network;
+
+  createParams.pFxnLock                      = TVM_lockInterrupts;
+  createParams.pFxnUnLock                    = TVM_unlockInterrupts;
+  createParams.TIDLVprintf                   = printTIDLLog;
+  //createParams.TIDLVprintf                   = vprintf;
+  createParams.tracePtr                      = NULL;
   createParams.TIDLWriteBinToFile            = NULL;
   createParams.TIDLReadBinFromFile           = NULL;
   createParams.TIDL_CustomLayerProcess       = NULL;
-  createParams.TIDLVprintf                   = printTIDLLog;
-  //createParams.TIDLVprintf                   = vprintf;
-
-  extern int32_t tidl_get_trace_log_level();
-  extern int32_t tidl_get_trace_write_level();
-  createParams.traceLogLevel                 = tidl_get_trace_log_level();
-  createParams.traceWriteLevel               = tidl_get_trace_write_level();
-  createParams.traceBaseName                 = NULL;
-
-  createParams.udmaDrvObj  = udmaDrvObjPtr;
-
-  createParams.net = instance->network;
 
   // Setup memRecs and solicit memory requests.
   // Each memRec is a pool of memory requested by TIDL.

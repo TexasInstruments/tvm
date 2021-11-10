@@ -260,6 +260,10 @@ void CodeGenC7x::PreFunctionBody(const PrimFunc& f) {
   if (static_cast<std::string>(global_symbol.value()).find("_kernel") == std::string::npos)
     return;
 
+  // Protect generated C7x kernel (with l2,dma,etc) with critical section
+  this->PrintIndent();
+  stream << "CriticalSectionContext csContext;\n";
+
   // Initialize L2Context first, DMAContext needs it for L2 memory allocation
   this->PrintIndent();
   stream << "AllocL2Context L2Context;\n";
