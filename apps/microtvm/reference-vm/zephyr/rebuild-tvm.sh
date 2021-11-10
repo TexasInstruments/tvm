@@ -18,6 +18,14 @@
 
 set -e
 
+# Get number of cores for build
+if [ -n "${TVM_CI_NUM_CORES}" ]; then
+  num_cores=${TVM_CI_NUM_CORES}
+else
+  # default setup for Vagrantfile
+  num_cores=2
+fi
+
 cd "$(dirname $0)"
 cd "$(git rev-parse --show-toplevel)"
 BUILD_DIR=build-microtvm
@@ -28,8 +36,8 @@ fi
 cp cmake/config.cmake "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 sed -i 's/USE_MICRO OFF/USE_MICRO ON/' config.cmake
-sed -i 's/USE_GRAPH_RUNTIME_DEBUG OFF/USE_GRAPH_RUNTIME_DEBUG ON/' config.cmake
+sed -i 's/USE_GRAPH_EXECUTOR_DEBUG OFF/USE_GRAPH_EXECUTOR_DEBUG ON/' config.cmake
 sed -i 's/USE_LLVM OFF/USE_LLVM ON/' config.cmake
 cmake ..
 rm -rf standalone_crt host_standalone_crt  # remove stale generated files
-make -j4
+make -j${num_cores}

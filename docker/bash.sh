@@ -20,6 +20,8 @@
 #
 # Start a bash, mount /workspace to be current directory.
 #
+# Usage: bash.sh <CONTAINER_TYPE> [-i] [--net=host] [--mount path] <CONTAINER_NAME>  <COMMAND>
+#
 # Usage: docker/bash.sh <CONTAINER_NAME>
 #     Starts an interactive session
 #
@@ -38,8 +40,22 @@ if [ "$1" == "-i" ]; then
     shift
 fi
 
+CI_DOCKER_EXTRA_PARAMS=( )
+if [[ "$1" == "--net=host" ]]; then
+    CI_DOCKER_EXTRA_PARAMS+=('--net=host')
+    shift 1
+fi
+
+# Mount external directory to the docker
+CI_DOCKER_MOUNT_CMD=( )
+if [ "$1" == "--mount" ]; then
+    shift 1
+    CI_DOCKER_MOUNT_CMD=( -v "$1:$1" )
+    shift 1
+fi
+
 if [ "$#" -lt 1 ]; then
-    echo "Usage: docker/bash.sh [-i] <CONTAINER_NAME> [COMMAND]"
+    echo "Usage: docker/bash.sh [-i] [--net=host] <CONTAINER_NAME> [COMMAND]"
     exit -1
 fi
 
@@ -48,16 +64,15 @@ if [ -z "${DOCKER_IMAGE_NAME}" ]; then
     DOCKER_IMAGE_NAME=("$1")
 fi
 
-CI_DOCKER_EXTRA_PARAMS=( )
 if [ "$#" -eq 1 ]; then
     COMMAND="bash"
     interactive=1
     if [[ $(uname) == "Darwin" ]]; then
         # Docker's host networking driver isn't supported on macOS.
         # Use default bridge network and expose port for jupyter notebook.
-        CI_DOCKER_EXTRA_PARAMS=( "${CI_DOCKER_EXTRA_PARAMS[@]}" "-p 8888:8888" )
+        CI_DOCKER_EXTRA_PARAMS+=( "${CI_DOCKER_EXTRA_PARAMS[@]}" "-p 8888:8888" )
     else
-        CI_DOCKER_EXTRA_PARAMS=( "${CI_DOCKER_EXTRA_PARAMS[@]}" "--net=host" )
+        CI_DOCKER_EXTRA_PARAMS+=( "${CI_DOCKER_EXTRA_PARAMS[@]}" "--net=host" )
     fi
 else
     shift 1
@@ -147,6 +162,7 @@ ${DOCKER_BINARY} run --rm --pid=host\
     ${WORKSPACE_VOLUMES}\
     -v ${WORKSPACE}:/workspace \
     -v ${SCRIPT_DIR}:/docker \
+    "${CI_DOCKER_MOUNT_CMD[@]}" \
     "${EXTRA_MOUNTS[@]}" \
     -w /workspace \
     --ulimit stack=16777216:16777216 \

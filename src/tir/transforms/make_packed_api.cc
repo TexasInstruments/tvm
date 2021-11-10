@@ -20,7 +20,6 @@
 /*!
  * \file make_packed_api.cc Lower PrimFunc to use the packed function API.
  */
-#include <tvm/runtime/container.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/target/target.h>
@@ -229,7 +228,7 @@ PrimFunc MakePackedAPI(PrimFunc&& func, int num_unpacked_args) {
   //
   // For example, for auto broadcasting, checks are required to guarantee that
   // either 0 or the original stride will be correctly used. Checks here have
-  // to use the args that may have no let bining yet. Therefore, hoisting let
+  // to use the args that may have no let binding yet. Therefore, hoisting let
   // binding for args before buffer declaration is needed.
   for (const auto& kv : var_def) {
     binder.Bind(kv.second, kv.first, kv.first->name_hint, true);
@@ -249,10 +248,10 @@ PrimFunc MakePackedAPI(PrimFunc&& func, int num_unpacked_args) {
   // Set device context
   if (vmap.count(device_id.get())) {
     PrimExpr node = StringImm("default");
-    seq_check.push_back(AttrStmt(node, attr::device_context_id, device_id, nop));
-    seq_check.push_back(AttrStmt(node, attr::device_context_type, device_type, nop));
+    seq_check.push_back(AttrStmt(node, attr::device_id, device_id, nop));
+    seq_check.push_back(AttrStmt(node, attr::device_type, device_type, nop));
 
-    if (runtime::DeviceAPI::NeedSetDeviceContext(target_device_type)) {
+    if (runtime::DeviceAPI::NeedSetDevice(target_device_type)) {
       Stmt set_device =
           Evaluate(Call(DataType::Int(32), builtin::tvm_call_packed(),
                         {StringImm(runtime::symbol::tvm_set_device), device_type, device_id}));

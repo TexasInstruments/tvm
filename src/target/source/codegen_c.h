@@ -25,7 +25,6 @@
 #define TVM_TARGET_SOURCE_CODEGEN_C_H_
 
 #include <tvm/ir/op.h>
-#include <tvm/runtime/container.h>
 #include <tvm/target/codegen.h>
 #include <tvm/tir/analysis.h>
 #include <tvm/tir/builtin.h>
@@ -150,6 +149,7 @@ class CodeGenC : public ExprFunctor<void(const PrimExpr&, std::ostream&)>,
   void VisitStmt_(const LetStmtNode* op) override;
   void VisitStmt_(const StoreNode* op) override;
   void VisitStmt_(const ForNode* op) override;
+  void VisitStmt_(const WhileNode* op) override;
   void VisitStmt_(const IfThenElseNode* op) override;
   void VisitStmt_(const AllocateNode* op) override;
   void VisitStmt_(const AttrStmtNode* op) override;

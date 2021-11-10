@@ -47,7 +47,10 @@ class DFPattern(Node):
     """Base class of all Patterns."""
 
     def __call__(self, *args):
-        return CallPattern(self, list(args))
+        args = list(args)
+        if len(args) == 1 and args[0] is None:
+            args = None
+        return CallPattern(self, args)
 
     def __or__(self, other):
         return AltPattern(self, other)
@@ -544,11 +547,11 @@ class CallPattern(DFPattern):
 
     Parameters
     ----------
-    op: realy.dataflow_pattern.DFPattern
+    op: relay.dataflow_pattern.DFPattern
         The operation to be called.
 
-    args: List[realy.dataflow_pattern.DFPattern]
-        The arguments to the call.
+    args: List[relay.dataflow_pattern.DFPattern]
+        The arguments to the call or None to match any arguments.
 
     """
 
@@ -566,10 +569,10 @@ class FunctionPattern(DFPattern):
 
     Parameters
     ----------
-    params: List[realy.dataflow_pattern.DFPattern]
-        The parameters to the Function.
+    params: List[relay.dataflow_pattern.DFPattern]
+        The parameters to the Function or None to match any parameters.
 
-    body: realy.dataflow_pattern.DFPattern
+    body: relay.dataflow_pattern.DFPattern
         The body fo the Function
 
     """
@@ -883,7 +886,7 @@ def partition(
 
     Parameters
     ----------
-    partion: tvm.relay.dataflow_pattern.DFPattern
+    pattern: tvm.relay.dataflow_pattern.DFPattern
         The pattern to match
     expr : tvm.relay.Expr
         The expression to split into functions

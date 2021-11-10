@@ -33,11 +33,12 @@
 #include <tvm/relay/interpreter.h>
 #include <tvm/relay/qnn/transform.h>
 #include <tvm/relay/transform.h>
+#include <tvm/runtime/logging.h>
 #include <tvm/runtime/vm/vm.h>
-#include <tvm/support/logging.h>
 #include <tvm/te/operation.h>
 
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -57,6 +58,7 @@ namespace transform {
 
 Pass LambdaLift();
 Pass InlinePrimitives();
+Pass LabelOps();
 
 Pass MemoryPlan() {
   auto f = tvm::runtime::Registry::Get("relay.transform.MemoryPlan");
@@ -232,7 +234,7 @@ std::vector<int64_t> ToAllocTensorShape(NDArray shape) {
 Target CreateDefaultTarget(int device_type) {
   std::string name = runtime::DeviceName(device_type);
   if (name == "cpu") return Target("llvm");
-  if (name == "gpu") return Target("cuda");
+  if (name == "cuda") return Target("cuda");
   return Target(name);
 }
 
@@ -255,9 +257,11 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
         context_(context),
         target_host_(target_host),
         expr_device_map_(std::move(expr_device_map)) {
+    CheckAndUpdateHostConsistency(&targets, &target_host);
     for (const auto& it : targets) {
       targets_[it.first->value] = it.second;
     }
+    target_host_ = target_host;
   }
 
   VMFunction Compile(const GlobalVar& var, const Function& func) {
@@ -299,6 +303,11 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
 
     return VMFunction(var->name_hint, params_, instructions_, registers_num_, params_device_type);
   }
+  /*! \brief Attrs objects for each op. */
+  std::map<Index, Map<String, ObjectRef>> op_attrs;
+
+  /*! \brief Attrs objects for each callsite. */
+  std::map<Index, Map<String, ObjectRef>> callsite_attrs;
 
  protected:
   size_t NewRegister() { return registers_num_++; }
@@ -376,11 +385,18 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
     CompileMatch(match);
   }
 
-  void VisitExpr_(const LetNode* let_node) {
-    DLOG(INFO) << PrettyPrint(let_node->value);
-    this->VisitExpr(let_node->value);
-    var_register_map_.insert({let_node->var, this->last_register_});
-    this->VisitExpr(let_node->body);
+  void VisitExpr_(const LetNode* l) final {
+    Expr let_binding = GetRef<Expr>(l);
+    const LetNode* let;
+    while ((let = let_binding.as<LetNode>())) {
+      ICHECK(!let->value.as<FunctionNode>())
+          << "invariant violated, inner functions should not exist (did you set opt_level = 2?)";
+      VisitExpr(let->value);
+      var_register_map_.insert({let->var, this->last_register_});
+      let_binding = let->body;
+    }
+
+    VisitExpr(let_binding);
   }
 
   void VisitExpr_(const TupleGetItemNode* get_node) {
@@ -476,6 +492,9 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
       argument_registers.push_back(reg->second);
     }
 
+    // Extract functions attrs
+    op_attrs[op_index] = func->attrs->dict;
+
     Emit(Instruction::InvokePacked(op_index, argument_registers.size(), outputs.size(),
                                    argument_registers));
   }
@@ -549,6 +568,9 @@ class VMFunctionCompiler : ExprFunctor<void(const Expr& expr)> {
         op_index = context_->seen_funcs[pfunc];
       }
     }
+
+    // Extract functions attrs
+    op_attrs[op_index] = func->attrs->dict;
 
     Emit(Instruction::InvokePacked(op_index, argument_registers.size(), output_tuple->fields.size(),
                                    argument_registers));
@@ -895,6 +917,7 @@ void VMCompiler::Lower(IRModule mod, const TargetsMap& targets, const tvm::Targe
   exec_ = make_object<Executable>();
   targets_ = targets;
   target_host_ = target_host;
+  CheckAndUpdateHostConsistency(&targets_, &target_host_);
 
   // Run the optimizations necessary to target the VM.
   context_.module = OptimizeModule(mod, targets_, target_host_);
@@ -923,6 +946,11 @@ void VMCompiler::Lower(IRModule mod, const TargetsMap& targets, const tvm::Targe
       size_t func_index = context_.global_map.at(gvar);
       ICHECK(func_index < exec_->functions.size());
       exec_->functions[func_index] = vm_func;
+
+      // update structural hashes for tvm ops
+      for (auto p : func_compiler.op_attrs) {
+        exec_->op_attrs.insert(p);
+      }
     }
   }
 
@@ -955,6 +983,9 @@ void VMCompiler::Lower(IRModule mod, const TargetsMap& targets, const tvm::Targe
 
 transform::Sequential MemoryOpt(tvm::Target host_target, TargetsMap targets) {
   Array<Pass> pass_seqs;
+  // Remove unused functions
+  Array<runtime::String> entry_functions{"main"};
+  pass_seqs.push_back(transform::RemoveUnusedFunctions(entry_functions));
   // Manifest the allocations.
   pass_seqs.push_back(transform::ManifestAlloc(host_target, targets));
 
@@ -996,8 +1027,11 @@ transform::Sequential MemoryOpt(tvm::Target host_target, TargetsMap targets) {
   return transform::Sequential(pass_seqs);
 }
 
-IRModule VMCompiler::OptimizeModule(IRModule mod, const TargetsMap& targets,
-                                    const Target& target_host) {
+IRModule VMCompiler::OptimizeModule(IRModule mod, const TargetsMap& targets_arg,
+                                    const Target& target_host_arg) {
+  TargetsMap targets = targets_arg;
+  Target target_host = target_host_arg;
+  CheckAndUpdateHostConsistency(&targets, &target_host);
   if (params_.size()) {
     BaseFunc base_func = mod->Lookup("main");
     ICHECK(base_func->IsInstance<FunctionNode>())
@@ -1066,6 +1100,23 @@ IRModule VMCompiler::OptimizeModule(IRModule mod, const TargetsMap& targets,
   }
 
   pass_seqs.push_back(transform::FuseOps());
+  // Do layout rewrite for auto-scheduler.
+  transform::PassContext pass_ctx = PassContext::Current();
+  if (backend::IsAutoSchedulerEnabled() && targets.size() == 1) {
+    const auto& target = (*targets.begin()).second;
+    Pass major_pass = transform::AutoSchedulerLayoutRewrite();
+    bool enable_layout_rewrite_targets =
+        target->kind->device_type == kDLCPU || target->GetAttr<String>("device", "") == "mali";
+    if (enable_layout_rewrite_targets && pass_ctx.PassEnabled(major_pass->Info())) {
+      With<Target> tctx(target);
+      pass_seqs.push_back(major_pass);
+      // Defuse ops to fold constants, then fuse them again
+      pass_seqs.push_back(transform::DefuseOps());
+      pass_seqs.push_back(transform::FoldConstant());
+      pass_seqs.push_back(transform::FuseOps());
+    }
+  }
+
   pass_seqs.push_back(transform::ToANormalForm());
   pass_seqs.push_back(transform::InferType());
   pass_seqs.push_back(transform::LambdaLift());
@@ -1080,9 +1131,9 @@ IRModule VMCompiler::OptimizeModule(IRModule mod, const TargetsMap& targets,
 
   pass_seqs.push_back(MemoryOpt(target_host, targets));
   pass_seqs.push_back(transform::InferType());
+  pass_seqs.push_back(transform::LabelOps());
 
   transform::Sequential seq(pass_seqs);
-  transform::PassContext pass_ctx = PassContext::Current();
   tvm::With<relay::transform::PassContext> ctx(pass_ctx);
   if (targets.size() == 1) {
     const auto& it = targets.begin();
@@ -1110,46 +1161,44 @@ void VMCompiler::Codegen() {
   if (cached_funcs.size() == 0) {
     return;
   }
-  std::unordered_map<std::string, IRModule> funcs;
+  Map<Target, IRModule> funcs;
 
   for (auto& cfunc : cached_funcs) {
-    std::string target_str = cfunc->target->str();
+    Target target = cfunc->target;
     // NOTE: because module, is mutable, we need to make an
     // explicit copy of the IRModule.
     IRModule mod = cfunc->funcs;
     mod.CopyOnWrite();
 
-    if (target_str == "ext_dev") {
+    if (target->kind->device_type == kDLExtDev) {
       // Collect metadata in functions that are handled by external codegen.
       ICHECK(mod->ContainGlobalVar(cfunc->func_name));
       Function func = Downcast<Function>(mod->Lookup(cfunc->func_name));
       backend::UpdateConstants(func, &params_);
-      continue;
-    } else if (funcs.count(target_str) == 0) {
-      funcs.emplace(target_str, mod);
+    } else if (funcs.count(target) == 0) {
+      funcs.Set(target, mod);
     } else {
-      funcs[target_str]->Update(mod);
+      funcs[target]->Update(mod);
     }
   }
 
   auto compile_engine = CompileEngine::Global();
   auto ext_mods = compile_engine->LowerExternalFunctions();
+  runtime::Module lib;
   if (funcs.size() > 0) {
-    Map<String, IRModule> build_funcs;
-    for (const auto& i : funcs) {
-      build_funcs.Set(i.first, i.second);
-    }
-    exec_->lib = tvm::build(build_funcs, target_host_);
+    lib = tvm::build(funcs, target_host_);
   } else {
     // There is no function handled by TVM. We create a virtual main module
     // to make sure a DSO module will be also available.
-    exec_->lib = codegen::CSourceModuleCreate(";", "", Array<String>{});
+    lib = codegen::CSourceModuleCreate(";", "", Array<String>{});
   }
-  exec_->lib = codegen::CreateMetadataModule(params_, exec_->lib, ext_mods, target_host_);
+  lib = codegen::CreateMetadataModule(params_, lib, ext_mods, target_host_, runtime::Metadata());
+  exec_->SetLib(lib);
+  CompileEngine::Global()->Clear();
 }
 
 ExprDeviceMap VMCompiler::AnalyzeContext() const {
-  TVMContext default_device;
+  Device default_device;
   ExprDeviceMap expr_device_map;
   if (targets_.size() > 1) {
     int fallback_dev = GetFallbackDevice();

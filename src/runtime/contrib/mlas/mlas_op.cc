@@ -22,7 +22,7 @@
  */
 #include <mlas.h>
 #include <tvm/runtime/data_type.h>
-#include <tvm/support/logging.h>
+#include <tvm/runtime/logging.h>
 #include <tvm/runtime/registry.h>
 
 namespace tvm {

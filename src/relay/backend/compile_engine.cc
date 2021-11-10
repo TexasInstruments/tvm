@@ -31,7 +31,6 @@
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/op.h>
 #include <tvm/relay/op_attr_types.h>
-#include <tvm/runtime/container.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/te/operation.h>
 #include <tvm/te/schedule.h>
@@ -157,13 +156,13 @@ class ScheduleGetter : public backend::MemoizedExprTranslator<Array<te::Tensor>>
             runtime::Registry::Get("auto_scheduler.relay_integration.auto_schedule_topi_compute");
         ICHECK(fauto_schedule != nullptr)
             << "auto_scheduler.relay_integration.auto_schedule_topi_compute is not registered";
-        ObjectRef obj = (*fauto_schedule)(tensor_outs);
+        ObjectRef obj = (*fauto_schedule)(String(cache_node->func_name), tensor_outs);
         if (obj.defined()) {
           schedule = Downcast<te::Schedule>(obj);
         }
       }
 
-      // Use TOPI schdule if user specificed, or the function has no auto_scheduler schedule.
+      // Use TOPI schedule if user specificed, or the function has no auto_scheduler schedule.
       if (!schedule.defined()) {
         ICHECK(anchor_implementation_.defined());
         schedule = anchor_implementation_.Schedule(anchor_attrs_, tensor_outs, target_);
@@ -251,7 +250,7 @@ class ScheduleGetter : public backend::MemoizedExprTranslator<Array<te::Tensor>>
           << "Cannot apply TOPI schedule to a primitive function with two complicated ops"
           << " anchor=" << anchor_op_ << " current=" << op;
     }
-    if (op_pattern >= anchor_op_pattern_) {
+    if (op_pattern > anchor_op_pattern_) {
       anchor_op_ = op;
       anchor_attrs_ = call_node->attrs;
       anchor_op_pattern_ = op_pattern;
@@ -262,7 +261,7 @@ class ScheduleGetter : public backend::MemoizedExprTranslator<Array<te::Tensor>>
       ICHECK(tuple_type) << "Expect output to be a tuple type";
       ICHECK_EQ(tuple_type->fields.size(), outputs.size());
     }
-    // Set the name to `__copy`. It will be detected in graph runtime to perform
+    // Set the name to `__copy`. It will be detected in graph executor to perform
     // data copy across devices.
     if (op == device_copy_op_) {
       readable_name_stream_.str(std::string());
@@ -309,7 +308,7 @@ class ScheduleGetter : public backend::MemoizedExprTranslator<Array<te::Tensor>>
   tvm::Target target_;
   Op anchor_op_;
   Attrs anchor_attrs_;
-  int anchor_op_pattern_{0};
+  int anchor_op_pattern_{-1};
   OpImplementation anchor_implementation_;
   std::ostringstream readable_name_stream_;
   Array<te::Operation> scalars_;
@@ -692,6 +691,17 @@ class CompileEngineImpl : public CompileEngineNode {
     return items;
   }
 
+  // List all items in the shape_func_cache.
+  Array<ObjectRef> ListShapeFuncItems() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    Array<ObjectRef> items;
+    for (auto& kv : shape_func_cache_) {
+      items.push_back(kv.first);
+      items.push_back(kv.second);
+    }
+    return items;
+  }
+
   /*!
    * \brief Get the cache key of the function that is being lowered currently
    * \return the cache key
@@ -752,15 +762,9 @@ class CompileEngineImpl : public CompileEngineNode {
       all_args.push_back(arg);
     }
     // lower the function
-    if (const auto* f = runtime::Registry::Get("relay.backend.lower")) {
-      cache_node->funcs = (*f)(cfunc->schedule, all_args, cache_node->func_name, key->source_func);
-    } else {
-      using tvm::transform::PassContext;
-      With<PassContext> fresh_pass_ctx_scope(PassContext::Create());
+    std::unordered_map<te::Tensor, tir::Buffer> binds;
+    cache_node->funcs = tvm::LowerSchedule(cfunc->schedule, all_args, cache_node->func_name, binds);
 
-      std::unordered_map<te::Tensor, tir::Buffer> binds;
-      cache_node->funcs = tvm::lower(cfunc->schedule, all_args, cache_node->func_name, binds);
-    }
     value->cached_func = CachedFunc(cache_node);
     return value;
   }
@@ -796,7 +800,7 @@ class CompileEngineImpl : public CompileEngineNode {
     With<PassContext> fresh_pass_ctx_scope(PassContext::Create());
 
     std::unordered_map<te::Tensor, tir::Buffer> binds;
-    cache_node->funcs = tvm::lower(spair.first, all_args, cache_node->func_name, binds);
+    cache_node->funcs = tvm::LowerSchedule(spair.first, all_args, cache_node->func_name, binds);
     value->cached_func = CachedFunc(cache_node);
     return value;
   }
@@ -881,6 +885,13 @@ TVM_REGISTER_GLOBAL("relay.backend._CompileEngineListItems").set_body_typed([](C
   ICHECK(ptr != nullptr);
   return ptr->ListItems();
 });
+
+TVM_REGISTER_GLOBAL("relay.backend._CompileEngineListShapeFuncItems")
+    .set_body_typed([](CompileEngine self) {
+      CompileEngineImpl* ptr = dynamic_cast<CompileEngineImpl*>(self.operator->());
+      ICHECK(ptr != nullptr);
+      return ptr->ListShapeFuncItems();
+    });
 
 TVM_REGISTER_GLOBAL("relay.backend._CompileEngineGetCurrentCCacheKey")
     .set_body_typed([](CompileEngine self) {

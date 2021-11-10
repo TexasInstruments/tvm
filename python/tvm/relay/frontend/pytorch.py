@@ -21,30 +21,28 @@
 """PT: PyTorch frontend."""
 import itertools
 import logging
-import sys
 import math
+import sys
 
 import numpy as np
-
 import tvm
-from tvm.topi.utils import get_const_tuple
 from tvm.ir import IRModule
+from tvm.topi.utils import get_const_tuple
 
 from .. import analysis as _analysis
 from .. import expr as _expr
 from .. import function as _function
 from .. import op as _op
-from ..ty import TupleType, TensorType, Any
+from .. import qnn, transform
+from ..expr_functor import ExprMutator
 from ..loops import while_loop
-from .. import transform
+from ..prelude import Prelude, StaticTensorArrayOps
+from ..ty import Any, TensorType, TupleType
+from . import qnn_torch
 from .common import AttrCvt, get_relay_op
 from .common import infer_value as _infer_value
-from .common import try_infer_value
 from .common import infer_value_simulated as _infer_value_simulated
-from ..prelude import Prelude, StaticTensorArrayOps
-from ..expr_functor import ExprMutator
-
-from . import qnn_torch
+from .common import try_infer_value
 from .pytorch_utils import is_version_greater_than
 
 __all__ = ["from_pytorch"]
@@ -400,7 +398,13 @@ class PyTorchOpConverter:
         )
 
         # A fast path when slicing is nop.
-        if target_begin == 0 and target_end >= index_size_limit and stride == 1:
+        if (
+            isinstance(target_begin, int)
+            and isinstance(target_end, int)
+            and target_begin == 0
+            and target_end >= index_size_limit
+            and stride == 1
+        ):
             return data
 
         # Process begin
@@ -559,7 +563,7 @@ class PyTorchOpConverter:
             if isinstance(r, int):
                 reps.append(r)
             else:
-                reps.append(int(_infer_value(r, {}).asnumpy()))
+                reps.append(int(_infer_value(r, {}).numpy()))
 
         return _op.transform.tile(data, reps=reps)
 
@@ -599,7 +603,7 @@ class PyTorchOpConverter:
         for dim in data:
             if isinstance(dim, _expr.Expr):
                 if isinstance(dim, _expr.Constant):
-                    dim = int(dim.data.asnumpy())
+                    dim = int(dim.data.numpy())
                     if isinstance(size, list):
                         size.append(dim)
                     new_shape.append(dim)
@@ -750,9 +754,13 @@ class PyTorchOpConverter:
         return _op.nn.relu(data)
 
     def prelu(self, inputs, input_types):
+        # Reference: https://pytorch.org/docs/stable/generated/torch.nn.PReLU.html#torch.nn.PReLU
         data = inputs[0]
-        alpha = inputs[1]
-        return _op.nn.prelu(data, alpha)
+        dim = self.get_dims(data)
+        ndims = len(dim)
+        axis = 0 if ndims == 1 else 1
+        alpha = _op.broadcast_to(inputs[1], (dim[axis]))
+        return _op.nn.prelu(data, alpha, axis)
 
     def leaky_relu(self, inputs, input_types):
         data = inputs[0]
@@ -799,14 +807,35 @@ class PyTorchOpConverter:
         data = inputs[0]
         return _op.log(_op.tensor.sigmoid(data))
 
+    def hard_sigmoid(self, inputs, input_types):
+        def _relu6(x):
+            return _op.tensor.clip(x, 0.0, 6.0)
+
+        def func(x):
+            return _relu6(x + _expr.const(3.0)) / _expr.const(6.0)
+
+        if self.is_quantized_tensor(inputs[0]):
+            input_scale = _expr.const(inputs[1])
+            input_zero_point = _expr.const(inputs[2])
+            # PyTorch seems to use the following output qparams, but accuracy
+            # is broken if we use this.
+            # TODO(masahi): Revisit this parameter choice
+            #
+            # Taken from src/ATen/native/quantized/cpu/kernels/QuantizedOpKernels.cpp
+            # output_scale = _expr.const(0.00390625)  # 1.0 / 2^8
+            # output_zero_point = _expr.const(-128)
+            output_scale = input_scale
+            output_zero_point = input_zero_point
+
+            data = qnn.op.dequantize(inputs[0], input_scale, input_zero_point, axis=1)
+            out = func(data)
+            return qnn.op.quantize(out, output_scale, output_zero_point, out_dtype="uint8")
+
+        return func(inputs[0])
+
     def hard_swish(self, inputs, input_types):
         data = inputs[0]
-        dtype = input_types[0]
-
-        def _relu6(input_tensor):
-            return _op.tensor.clip(input_tensor, 0.0, 6.0)
-
-        return data * _relu6(data + _expr.const(3.0, dtype=dtype)) / _expr.const(6.0, dtype=dtype)
+        return data * self.hard_sigmoid(inputs, input_types)
 
     def adaptive_avg_pool_2d(self, inputs, input_types):
         data = inputs[0]
@@ -843,7 +872,7 @@ class PyTorchOpConverter:
         if isinstance(data, list):
             for i, _ in enumerate(data):
                 if isinstance(data[i], _expr.Expr):
-                    data[i] = int(_infer_value_simulated(data[i], {}).asnumpy())
+                    data[i] = int(_infer_value_simulated(data[i], {}).numpy())
         return data
 
     def maxpool_2d(self, inputs, input_types):
@@ -855,11 +884,15 @@ class PyTorchOpConverter:
         dilation = inputs[4]
         ceil_mode = int(inputs[5])
 
-        if dilation != [1, 1]:
-            msg = "MaxPool2d with dilation %s is not implemented" % (str(dilation))
-            raise NotImplementedError(msg)
-
-        return _op.nn.max_pool2d(data, pool_size, strides, padding, "NCHW", ceil_mode)
+        return _op.nn.max_pool2d(
+            data,
+            pool_size=pool_size,
+            strides=strides,
+            dilation=dilation,
+            padding=padding,
+            layout="NCHW",
+            ceil_mode=ceil_mode,
+        )
 
     def maxpool_2d_with_indices(self, inputs, input_types):
         # returns dummy indices too
@@ -874,11 +907,15 @@ class PyTorchOpConverter:
         dilation = inputs[4]
         ceil_mode = int(inputs[5])
 
-        if dilation != [1]:
-            msg = "MaxPool1d with dilation %s is not implemented" % (str(dilation))
-            raise NotImplementedError(msg)
-
-        return _op.nn.max_pool1d(data, pool_size, strides, padding, "NCW", ceil_mode)
+        return _op.nn.max_pool1d(
+            data,
+            pool_size=pool_size,
+            strides=strides,
+            dilation=dilation,
+            padding=padding,
+            layout="NCW",
+            ceil_mode=ceil_mode,
+        )
 
     def maxpool_3d(self, inputs, input_types):
         data = inputs[0]
@@ -888,12 +925,14 @@ class PyTorchOpConverter:
         padding = inputs[3]
         dilation = inputs[4]
         ceil_mode = int(inputs[5])
-        if dilation != [1, 1, 1]:
-            msg = "MaxPool3d with dilation %s is not implemented" % (str(dilation))
-            raise NotImplementedError(msg)
 
         return _op.nn.max_pool3d(
-            data, pool_size=pool_size, strides=strides, padding=padding, ceil_mode=ceil_mode
+            data,
+            pool_size=pool_size,
+            strides=strides,
+            dilation=dilation,
+            padding=padding,
+            ceil_mode=ceil_mode,
         )
 
     def hardtanh(self, inputs, input_types):
@@ -942,32 +981,52 @@ class PyTorchOpConverter:
         kernel_size = weight_shape[2:]
         use_bias = isinstance(bias, _expr.Expr)
 
-        if len(kernel_size) == 1:
-            strides = (1,) + strides
-            padding = (0,) + padding
-            dilation = (1,) + dilation
+        # We are trying to invoke various relay operations through a single conv_op variable.
+        # However the function signatures for some operations have additional attributes so we
+        # pass these in along with the standard ones.
+        additional_arguments = dict()
 
         if use_transpose:
             if len(kernel_size) == 3:
                 conv_op = _op.nn.conv3d_transpose
-            else:
+            elif len(kernel_size) == 2:
                 conv_op = _op.nn.conv2d_transpose
+            else:
+                conv_op = _op.nn.conv1d_transpose
+            output_padding = tuple(inputs[7])
+            additional_arguments["output_padding"] = output_padding
+
         else:
             if len(kernel_size) == 3:
                 conv_op = _op.nn.conv3d
-            else:
+            elif len(kernel_size) == 2:
                 conv_op = _op.nn.conv2d
+            else:
+                conv_op = _op.nn.conv1d
 
         if len(kernel_size) == 3:
             data_layout = "NCDHW"
             kernel_layout = "OIDHW"
-        else:
+        elif len(kernel_size) == 2:
             data_layout = "NCHW"
             kernel_layout = "OIHW"
+        else:
+            data_layout = "NCW"
+            kernel_layout = "OIW"
 
-        if len(kernel_size) == 1:
+        # Conv1d does not currently support grouped convolution so we convert it to conv2d
+        is_grouped_conv1d = False
+        if groups > 1 and len(kernel_size) == 1 and not use_transpose:
+            is_grouped_conv1d = True
+            conv_op = _op.nn.conv2d
+            kernel_size = [1] + kernel_size
+            strides = (1,) + strides
+            padding = (0,) + padding
+            dilation = (1,) + dilation
             data = _op.expand_dims(data, axis=2)
             weight = _op.expand_dims(weight, axis=2)
+            data_layout = "NCHW"
+            kernel_layout = "OIHW"
 
         conv_out = conv_op(
             data,
@@ -977,17 +1036,20 @@ class PyTorchOpConverter:
             dilation=dilation,
             groups=groups,
             channels=channels,
-            kernel_size=[1] + kernel_size if len(kernel_size) == 1 else kernel_size,
+            kernel_size=kernel_size,
             data_layout=data_layout,
             kernel_layout=kernel_layout,
             out_layout="",
             out_dtype="",
+            **additional_arguments,
         )
         if use_bias:
             res = _op.nn.bias_add(conv_out, bias)
         else:
             res = conv_out
-        if len(kernel_size) == 1:
+        if is_grouped_conv1d:
+            # Because we conducted grouped conv1d convolution through conv2d we must
+            # squeeze the output to get the correct result.
             res = _op.squeeze(res, axis=[2])
         return res
 
@@ -1066,8 +1128,7 @@ class PyTorchOpConverter:
             data, gamma, beta, axis=1, epsilon=epsilon, center=center, scale=scale
         )
 
-    @staticmethod
-    def get_dims(data):
+    def get_dims(self, data):
         import torch
 
         if isinstance(data, _expr.Expr):
@@ -1245,7 +1306,7 @@ class PyTorchOpConverter:
         for i, shape in enumerate(shape_inp):
             if isinstance(shape, _expr.Expr):
                 val = _infer_value_simulated(shape, {})
-                new_shape[i] = np.asscalar(val.asnumpy())
+                new_shape[i] = np.asscalar(val.numpy())
 
         return _op.transform.reshape(data, new_shape)
 
@@ -1257,7 +1318,7 @@ class PyTorchOpConverter:
         is_dyn = False
         for s in new_shape:
             if isinstance(s, _expr.Constant):
-                tmp_shape.append(int(s.data.asnumpy()))
+                tmp_shape.append(int(s.data.numpy()))
             elif isinstance(s, _expr.Expr):
                 dim, success = try_infer_value(s, lambda ret: int(ret))
                 tmp_shape.append(dim)
@@ -1326,47 +1387,80 @@ class PyTorchOpConverter:
         beta = _expr.const(float(inputs[1]), dtype=dtype)
         return _op.log(_op.exp(inputs[0] * beta) + _expr.const(1.0, dtype=dtype)) / beta
 
-    def avg_pool2d(self, inputs, input_types):
-        data = inputs[0]
+    def make_avg_pool(self, dim):
+        def avg_pool(inputs, input_types):
+            data = inputs[0]
 
-        pool_size = self.convert_const_list(inputs[1])
-        strides = self.convert_const_list(inputs[2] if inputs[2] else pool_size)
-        padding = inputs[3]
-        ceil_mode = int(inputs[4])
-        count_include_pad = int(inputs[5])
+            pool_size = self.convert_const_list(inputs[1])
+            strides = self.convert_const_list(inputs[2] if inputs[2] else pool_size)
+            padding = inputs[3]
+            ceil_mode = int(inputs[4])
+            count_include_pad = int(inputs[5])
 
-        def func(x):
-            return _op.nn.avg_pool2d(
-                x,
-                pool_size=pool_size,
-                strides=strides,
-                padding=padding,
-                ceil_mode=ceil_mode,
-                count_include_pad=count_include_pad,
+            def func(x):
+                if dim == 1:
+                    return _op.nn.avg_pool1d(
+                        x,
+                        pool_size=pool_size,
+                        strides=strides,
+                        padding=padding,
+                        dilation=(1,),
+                        ceil_mode=ceil_mode,
+                        count_include_pad=count_include_pad,
+                    )
+                elif dim == 2:
+                    return _op.nn.avg_pool2d(
+                        x,
+                        pool_size=pool_size,
+                        strides=strides,
+                        padding=padding,
+                        dilation=(1, 1),
+                        ceil_mode=ceil_mode,
+                        count_include_pad=count_include_pad,
+                    )
+                elif dim == 3:
+                    return _op.nn.avg_pool3d(
+                        x,
+                        pool_size=pool_size,
+                        strides=strides,
+                        padding=padding,
+                        dilation=(1, 1, 1),
+                        ceil_mode=ceil_mode,
+                        count_include_pad=count_include_pad,
+                    )
+                else:
+                    msg = "Average Pooling dimension should be between 1 and 3"
+                    raise RuntimeError(msg)
+
+            if self.is_quantized_tensor(data):
+                return qnn_torch.apply_with_upcast(data, func)
+
+            return func(data)
+
+        return avg_pool
+
+    def linear(self, inputs, input_types):
+        # https://pytorch.org/docs/stable/nn.functional.html#linear
+        # 0 - input
+        # 1 - weight
+        bias = inputs[2]
+        a_shape = self.infer_shape_with_prelude(inputs[0])
+        b_shape = self.infer_shape_with_prelude(inputs[1])
+        if len(a_shape) == 2 and len(b_shape) == 2:
+            mm_out = _op.nn.dense(inputs[0], inputs[1])
+        elif len(b_shape) == 1:
+            mm_out = self.matmul([inputs[0], inputs[1]], input_types[:2])
+        else:
+            mm_out = self.matmul(
+                [inputs[0], _op.transpose(inputs[1], axes=(1, 0))], input_types[:2]
             )
-
-        if self.is_quantized_tensor(data):
-            return qnn_torch.apply_with_upcast(data, func)
-
-        return func(data)
-
-    def avg_pool3d(self, inputs, input_types):
-        data = inputs[0]
-
-        pool_size = inputs[1]
-        strides = inputs[2] if inputs[2] else pool_size
-        padding = inputs[3]
-        ceil_mode = int(inputs[4])
-        count_include_pad = int(inputs[5])
-
-        return _op.nn.avg_pool3d(
-            data,
-            pool_size=pool_size,
-            strides=strides,
-            padding=padding,
-            ceil_mode=ceil_mode,
-            count_include_pad=count_include_pad,
-        )
+        if isinstance(bias, _expr.Expr):
+            bias_ndims = len(self.infer_shape_with_prelude(bias))
+            if bias_ndims == 1:
+                return _op.nn.bias_add(mm_out, bias)
+            mm_dtype = self.infer_type_with_prelude(mm_out).dtype
+            return self.add([mm_out, bias], [mm_dtype, input_types[2]])
+        return mm_out
 
     def dropout(self, inputs, input_types):
         data = inputs[0]
@@ -1532,27 +1626,57 @@ class PyTorchOpConverter:
         b_shape = self.infer_shape_with_prelude(inputs_1)
 
         # When performing a batch matmul, we need to properly handle N-dim shapes.
-        if len(a_shape) > 2 or len(b_shape) > 2:
-            # Convert a and b into 3 dimensional tensors.
-            a = _op.reshape(inputs_0, [-1, a_shape[-2], a_shape[-1]])
-            b = _op.reshape(inputs_1, [-1, b_shape[-2], b_shape[-1]])
+        if len(a_shape) > 2 and len(b_shape) > 2:
+            # Convert a into a 3 dimensional tensors.
+            need_reshape_output = False
+            if len(a_shape) != 3:
+                a = _op.reshape(inputs_0, [-1, a_shape[-2], a_shape[-1]])
+                need_reshape_output = True
+            else:
+                a = inputs_0
+
             # Transpose matrix dimensions of b.
-            b = _op.transpose(b, [0, 2, 1])
+            trans_axes = list(range(len(b_shape)))
+            trans_axes[-2], trans_axes[-1] = trans_axes[-1], trans_axes[-2]
+            b = _op.transpose(inputs_1, trans_axes)
+
+            # Convert b into a 3 dimensional tensor. Note that the last two dimensions
+            # are transposed.
+            if len(b_shape) != 3:
+                b = _op.reshape(b, [-1, b_shape[-1], b_shape[-2]])
+
             # Perform a batch matmul.
             output = _op.nn.batch_matmul(a, b)
-            # Reshape output to original dimensions.
-            return _op.reshape(output, [*a_shape[:-2], a_shape[-2], b_shape[-1]])
 
-        # Otherwise a simple dense op will get the job done.
-        if len(b_shape) == 1:
-            input_1 = _op.expand_dims(inputs_1, 0, 1)
-        else:
+            # Reshape output to original dimensions.
+            if need_reshape_output:
+                return _op.reshape(output, [*a_shape[:-2], a_shape[-2], b_shape[-1]])
+            return output
+        elif len(a_shape) > 2:
+            inputs_0 = _op.reshape(inputs_0, [-1, a_shape[-1]])
+
+        if len(b_shape) > 2:
+            trans_axes = list(range(len(b_shape)))
+            trans_axes[-2], trans_axes[-1] = trans_axes[-1], trans_axes[-2]
+            input_1 = _op.reshape(_op.transpose(inputs_1, trans_axes), [-1, b_shape[-2]])
+        elif len(b_shape) == 2:
             input_1 = _op.transpose(inputs_1, axes=(1, 0))
+        elif len(b_shape) == 1:
+            input_1 = _op.expand_dims(inputs_1, 0, 1)
 
         out = _op.nn.dense(inputs_0, input_1)
 
         if len(b_shape) == 1:
             out = _op.squeeze(out, axis=[-1])
+
+        # Reshape output into a N dimensional tensor when a or b dim > 2
+        if len(a_shape) > 2:
+            out = _op.reshape(out, [*a_shape[:-1], b_shape[-1]])
+        elif len(b_shape) > 2:
+            out = _op.reshape(out, [a_shape[-2], -1, b_shape[-1]])
+            out = _op.reshape(
+                _op.transpose(out, [1, 0, 2]), [*b_shape[:-2], a_shape[-2], b_shape[-1]]
+            )
 
         return out
 
@@ -1573,7 +1697,7 @@ class PyTorchOpConverter:
         for i in range(out_dims):
             if sizes[i] != -1 and shape[i] == 1:
                 if not isinstance(sizes[i], int):
-                    sizes[i] = int(_infer_value(sizes[i], {}).asnumpy())
+                    sizes[i] = int(_infer_value(sizes[i], {}).numpy())
                 out = _op.repeat(out, sizes[i], axis=i)
 
         return out
@@ -1619,7 +1743,7 @@ class PyTorchOpConverter:
                 const_paddings.append([])
                 for p in pad:
                     if not isinstance(p, int):
-                        p = int(_infer_value(p, {}).asnumpy())
+                        p = int(_infer_value(p, {}).numpy())
                     const_paddings[-1].append(p)
 
             if mode == "constant":
@@ -1631,8 +1755,20 @@ class PyTorchOpConverter:
 
     def clamp(self, inputs, input_types):
         data = inputs[0]
-        amin = inputs[1] if inputs[1] else np.finfo(np.float32).min
-        amax = inputs[2] if inputs[2] else np.finfo(np.float32).max
+
+        def get_v(v, default_v):
+            if isinstance(v, _expr.Constant):
+                return float(v.data.numpy())
+            if isinstance(v, _expr.Expr):
+                infer_v, success = try_infer_value(v, lambda ret: float(ret))
+                if success:
+                    return infer_v
+            if v is not None:
+                return v
+            return default_v
+
+        amin = get_v(inputs[1], np.finfo(np.float32).min)
+        amax = get_v(inputs[2], np.finfo(np.float32).max)
         return _op.clip(data, amin, amax)
 
     def to(self, inputs, input_types):
@@ -1667,7 +1803,7 @@ class PyTorchOpConverter:
         if inputs[1] is not None:
             for size in inputs[1]:
                 if not isinstance(size, int):
-                    out_size.append(int(_infer_value(size, {}).asnumpy()))
+                    out_size.append(int(_infer_value(size, {}).numpy()))
                 else:
                     out_size.append(size)
         else:
@@ -2028,26 +2164,13 @@ class PyTorchOpConverter:
         indices = inputs[1]
         values = inputs[2]
         accumulate = inputs[3]
-        # accumulate parameter is ignored.
-        # torch.index_put default is False but Relay.scatter_nd accumulates values.
-        # We assume there is no duplicate indices in torch.index_put input
         if not accumulate:
-            logging.warning(
-                "torch.index_put accumulate parameter is False. "
-                "TVM uses tvm.relay.scatter_nd operator which accumulates values. "
-                "Make sure there is no duplicate indices in torch.index_put input."
-            )
-        # Relay scatter_nd does not support input tensor
-        # We assume that torch.index_put is used with empty zero-values input tensor
-        # scatter_nd will create empty zero-values tensor with a given shape
-        out_shape = self.infer_shape(in_tensor)
-        logging.warning(
-            "tvm.relay.scatter_nd operator does not support input tensor parameter. "
-            "TVM assumes that torch.index_put is used with empty zero-values input tensor"
-        )
+            mode = "update"
+        else:
+            mode = "add"
         # Combine array of index tensors into one index tensor with shape (N,_)
         index_tensor = _op.stack(indices, axis=0)
-        return _op.transform.scatter_nd(values, index_tensor, out_shape)
+        return _op.transform.scatter_nd(in_tensor, index_tensor, values, mode)
 
     def scalar_tensor(self, inputs, input_types):
         data = inputs[0]
@@ -2059,7 +2182,7 @@ class PyTorchOpConverter:
         }
         type_key = inputs[1]
         if isinstance(data, _expr.Constant):
-            data = data.data.asnumpy().tolist()
+            data = data.data.numpy().tolist()
         return _expr.const(data, cast_map[type_key])
 
     def interpolate(self, inputs, input_types):
@@ -2184,16 +2307,18 @@ class PyTorchOpConverter:
             logging.warning("TVM always assumes sorted=True for torch.unique")
             is_sorted = True
         if return_counts:
-            [unique, indices, num_uniq, counts] = _op.unique(
+            [unique, indices, inverse_indices, num_uniq, counts] = _op.unique(
                 data, is_sorted=is_sorted, return_counts=True
             )
             unique_sliced = _op.strided_slice(unique, begin=[0], end=num_uniq, slice_mode="size")
             counts_sliced = _op.strided_slice(counts, begin=[0], end=num_uniq, slice_mode="size")
-            return (unique_sliced, indices, counts_sliced)
+            return (unique_sliced, inverse_indices, counts_sliced)
         else:
-            [unique, indices, num_uniq] = _op.unique(data, is_sorted=is_sorted, return_counts=False)
+            [unique, indices, inverse_indices, num_uniq] = _op.unique(
+                data, is_sorted=is_sorted, return_counts=False
+            )
             unique_sliced = _op.strided_slice(unique, begin=[0], end=num_uniq, slice_mode="size")
-            return (unique_sliced, indices)
+            return (unique_sliced, inverse_indices)
 
     # Operator mappings
     def create_convert_map(self):
@@ -2281,8 +2406,10 @@ class PyTorchOpConverter:
             "aten::log_softmax": self.log_softmax,
             "aten::sigmoid": self.sigmoid,
             "aten::softplus": self.softplus,
-            "aten::avg_pool2d": self.avg_pool2d,
-            "aten::avg_pool3d": self.avg_pool3d,
+            "aten::avg_pool1d": self.make_avg_pool(1),
+            "aten::avg_pool2d": self.make_avg_pool(2),
+            "aten::avg_pool3d": self.make_avg_pool(3),
+            "aten::linear": self.linear,
             "aten::dropout": self.dropout,
             "aten::dropout_": self.dropout,
             "aten::feature_dropout": self.dropout,
@@ -2397,6 +2524,8 @@ class PyTorchOpConverter:
             "aten::__not__": self.logical_not,
             "aten::hardswish_": self.hard_swish,
             "aten::hardswish": self.hard_swish,
+            "aten::hardsigmoid_": self.hard_sigmoid,
+            "aten::hardsigmoid": self.hard_sigmoid,
             "aten::cumsum": self.cumsum,
             "aten::masked_fill": self.masked_fill,
             "aten::masked_select": self.masked_select,
@@ -2409,7 +2538,7 @@ class PyTorchOpConverter:
         self.convert_map.update(custom_map)
 
     def report_missing_conversion(self, op_names):
-        """ Check if all ops in an input graph are supported by TVM """
+        """Check if all ops in an input graph are supported by TVM"""
         known_ops = [
             "prim::Constant",
             "prim::GetAttr",
@@ -2431,13 +2560,13 @@ class PyTorchOpConverter:
             raise NotImplementedError(msg)
 
     def convert_block(self, block, outputs):
-        """ Translate Torch "Block", used for prim::If and prim::Loop """
+        """Translate Torch "Block", used for prim::If and prim::Loop"""
         ops = _get_operator_nodes(block.nodes())
         ret_names = _get_input_names(block.returnNode())
         return self.convert_operators(ops, outputs, ret_names)
 
     def convert_if(self, if_node, outputs):
-        """ Translate Torch prim::If to Relay If """
+        """Translate Torch prim::If to Relay If"""
         cond = outputs[if_node.inputsAt(0).debugName()]
         blocks = list(if_node.blocks())
         true_branch = self.convert_block(blocks[0], outputs)
@@ -2446,7 +2575,7 @@ class PyTorchOpConverter:
         return _expr.If(cond, true_branch[0], false_branch[0])
 
     def convert_loop(self, loop_node, outputs):
-        """ Translate Torch prim::Loop to Relay while_loop """
+        """Translate Torch prim::Loop to Relay while_loop"""
 
         def get_input(index):
             ivalue = loop_node.inputsAt(index)
@@ -2576,7 +2705,7 @@ class PyTorchOpConverter:
         return [_expr.TupleGetItem(loop_val, i + 1) for i in range(num_loop_var)]
 
     def convert_operators(self, operators, outputs, ret_names):
-        """ Convert each Torch IR operators to Relay equivalent """
+        """Convert each Torch IR operators to Relay equivalent"""
         for node_name, op_node in operators:
             operator = op_node.kind()
             inputs = _get_op_inputs(op_node, outputs)
@@ -2758,7 +2887,7 @@ def _wrap_const(c):
 
 
 def _run_jit_passes(graph):
-    """ The inline pass is necessary to unwrap prim::CallMethod """
+    """The inline pass is necessary to unwrap prim::CallMethod"""
     # pylint: disable=c-extension-no-member
     import torch
 
@@ -2864,7 +2993,7 @@ def _get_input_types(op_node, outputs, default_dtype="float32"):
 
 
 def _get_constant(node):
-    """ Retrieve a constant associated with this prim::Constant node """
+    """Retrieve a constant associated with this prim::Constant node"""
     attribute_names = node.attributeNames()
     num_attributes = len(attribute_names)
 
@@ -2898,7 +3027,7 @@ def _get_constant(node):
 
 
 def _get_operator_nodes(nodes):
-    """ Returns torch IR nodes that need conversion to Relay """
+    """Returns torch IR nodes that need conversion to Relay"""
     ops = []
     # Traverse nodes and add to graph
     for node in nodes:
@@ -3112,7 +3241,7 @@ def convert_params(graph, state_dict):
 
 
 def get_all_op_names(graph):
-    """ Return all operator names in the input graph """
+    """Return all operator names in the input graph"""
     nodes = list(graph.nodes())
     prim_with_blocks = ["prim::If", "prim::Loop"]
     for prim in prim_with_blocks:
@@ -3195,5 +3324,16 @@ def from_pytorch(script_module, input_infos, custom_convert_map=None, default_dt
         # ListConstruct kept original python list. Convert to tuple.
         ret = _expr.Tuple(ret)
 
-    mod["main"] = tvm.relay.Function(_analysis.free_vars(ret), ret)
+    # Separate data inputs and parameters to make sure data inputs are always in the beginning.
+    func_args = []
+    data_inputs = []
+    for arg in _analysis.free_vars(ret):
+        if arg.name_hint not in tvm_params.keys():
+            data_inputs.append(arg)
+        else:
+            func_args.append(arg)
+    func_args = data_inputs + func_args
+
+    mod["main"] = tvm.relay.Function(func_args, ret)
+
     return transform.RemoveUnusedFunctions()(mod), tvm_params

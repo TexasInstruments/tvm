@@ -32,14 +32,14 @@ import typing
 from random import getrandbits
 from collections import namedtuple
 import tempfile
-import numpy as np
 
 import tvm._ffi
 import tvm.ir.transform
 from tvm import nd, rpc as _rpc
 from tvm.error import TVMError
 from tvm.driver import build
-from tvm.contrib import nvcc, ndk, tar
+from tvm.contrib import nvcc, ndk, tar, stackvm
+from tvm.target import Target
 
 from ..utils import get_const_tuple
 from ..env import AutotvmGlobalScope
@@ -80,6 +80,7 @@ class LocalBuilder(Builder):
     build_func: callable or str
         If is 'default', use default build function
         If is 'ndk', use function for android ndk
+        If id 'stackvm', use function for stackvm
         If is callable, use it as custom build function, expect lib_format field.
     """
 
@@ -91,6 +92,8 @@ class LocalBuilder(Builder):
                 build_func = tar.tar
             elif build_func == "ndk":
                 build_func = ndk.create_shared
+            elif build_func == "stackvm":
+                build_func = stackvm.build
             else:
                 raise ValueError("Invalid build_func" + build_func)
         self.build_func = _WrappedBuildFunc(build_func)
@@ -261,26 +264,30 @@ class RPCRunner(Runner):
             or "vulkan" in self.task.target.keys
         ):
             remote = request_remote(self.key, self.host, self.port)
-            ctx = remote.context(str(self.task.target), 0)
-            max_dims = ctx.max_thread_dimensions
+            dev = remote.device(str(self.task.target), 0)
+            max_dims = dev.max_thread_dimensions
             kwargs["check_gpu"] = {
-                "max_shared_memory_per_block": ctx.max_shared_memory_per_block,
-                "max_threads_per_block": ctx.max_threads_per_block,
+                "max_shared_memory_per_block": dev.max_shared_memory_per_block,
+                "max_threads_per_block": dev.max_threads_per_block,
                 "max_thread_x": max_dims[0],
                 "max_thread_y": max_dims[1],
                 "max_thread_z": max_dims[2],
             }
 
             if "cuda" in self.task.target.keys:
-                kwargs["cuda_arch"] = "sm_" + "".join(ctx.compute_version.split("."))
-        if self.task.target.device_name == "micro_dev":
-            kwargs.setdefault("build_option", {})["tir.disable_vectorize"] = True
+                kwargs["cuda_arch"] = "sm_" + "".join(dev.compute_version.split("."))
 
         return kwargs
 
     def run(self, measure_inputs, build_results):
         results = []
-        remote_args = (self.key, self.host, self.port, self.priority, self.timeout)
+        remote_kwargs = dict(
+            device_key=self.key,
+            host=self.host,
+            port=self.port,
+            priority=self.priority,
+            timeout=self.timeout,
+        )
 
         for i in range(0, len(measure_inputs), self.n_parallel):
             futures = []
@@ -300,7 +307,7 @@ class RPCRunner(Runner):
                     self.repeat,
                     self.min_repeat_ms,
                     self.cooldown_interval,
-                    remote_args,
+                    remote_kwargs,
                     self.enable_cpu_cache_flush,
                     module_loader,
                 )
@@ -390,19 +397,17 @@ class LocalRunner(RPCRunner):
         from ...rpc.server import Server
 
         self.task = task
-        tracker = Tracker("0.0.0.0", port=9000, port_end=10000, silent=True)
+        tracker = Tracker(port=9000, port_end=10000, silent=True)
         device_key = "$local$device$%d" % tracker.port
         server = Server(
-            "0.0.0.0",
             port=9000,
             port_end=10000,
             key=device_key,
-            use_popen=True,
             silent=True,
-            tracker_addr=(tracker.host, tracker.port),
+            tracker_addr=("127.0.0.1", tracker.port),
         )
         self.key = device_key
-        self.host = tracker.host
+        self.host = "127.0.0.1"
         self.port = tracker.port
 
         super(LocalRunner, self).set_task(task)
@@ -412,6 +417,8 @@ class LocalRunner(RPCRunner):
 def _build_func_common(measure_input, check_gpu=None, cuda_arch=None, build_option=None):
     """Common part for building a configuration"""
     target, task, config = measure_input
+    target, task.target_host = Target.check_and_update_host_consist(target, task.target_host)
+
     with target:
         s, args = task.instantiate(config)
 
@@ -450,7 +457,7 @@ class _WrappedBuildFunc:
     Parameters
     ----------
     build_func : The compilation function
-        We expect fcompile to contain an attr "output_format"
+        We expect fcompile to contain an attr "output_format".
 
     Returns
     -------
@@ -549,7 +556,7 @@ def run_through_rpc(
     try:
         # upload built module
         with module_loader(remote_kwargs, build_result) as (remote, mod):
-            ctx = remote.context(str(measure_input.target), 0)
+            dev = remote.device(str(measure_input.target), 0)
 
             # Limitation:
             # We can not get PackFunction directly in the remote mode as it is wrapped
@@ -559,7 +566,7 @@ def run_through_rpc(
             f_prepare = "cache_flush_cpu_non_first_arg" if enable_cpu_cache_flush else ""
             time_f = mod.time_evaluator(
                 mod.entry_name,
-                ctx,
+                dev,
                 number=number,
                 repeat=repeat,
                 min_repeat_ms=min_repeat_ms,
@@ -572,12 +579,12 @@ def run_through_rpc(
                 raise AttributeError(
                     "Please make sure USE_RANDOM is ON in the config.cmake " "on the remote devices"
                 )
-            args = [nd.array(np.zeros(x[0], dtype=x[1]), ctx=ctx) for x in build_result.arg_info]
+            args = [nd.empty(x[0], x[1], dev) for x in build_result.arg_info]
             if "scatter" not in measure_input.task.name:
                 # the index tensor of scatter op cannot be randomly initialized
                 for arg in args:
                     random_fill(arg)
-            ctx.sync()
+            dev.sync()
 
             costs = time_f(*args).results
 
@@ -692,8 +699,8 @@ def check_remote(target, device_key, host=None, port=None, priority=100, timeout
 
     def _check():
         remote = request_remote(device_key, host, port, priority)
-        ctx = remote.context(str(target))
-        while not ctx.exist:  # wait until we get an available device
+        dev = remote.device(str(target))
+        while not dev.exist:  # wait until we get an available device
             pass
 
     t = threading.Thread(

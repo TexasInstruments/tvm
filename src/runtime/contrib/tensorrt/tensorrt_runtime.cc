@@ -32,7 +32,7 @@
 #include "../json/json_node.h"
 #include "../json/json_runtime.h"
 
-#ifdef TVM_GRAPH_RUNTIME_TENSORRT
+#ifdef TVM_GRAPH_EXECUTOR_TENSORRT
 #include "NvInfer.h"
 #include "tensorrt_builder.h"
 #endif
@@ -111,7 +111,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
     }
   }
 
-#ifdef TVM_GRAPH_RUNTIME_TENSORRT
+#ifdef TVM_GRAPH_EXECUTOR_TENSORRT
   /*! \brief Destroy engines and contexts. */
   void DestroyEngines() {
     for (auto& it : trt_engine_cache_) {
@@ -140,7 +140,13 @@ class TensorRTRuntime : public JSONRuntimeBase {
           const std::string name = nodes_[nid].GetOpName() + "_" + std::to_string(j);
           int binding_index = engine->getBindingIndex(name.c_str());
           ICHECK_NE(binding_index, -1);
-          if (data_entry_[eid]->ctx.device_type == kDLGPU) {
+          if (!use_implicit_batch_) {
+            std::vector<int64_t> shape(data_entry_[eid]->shape,
+                                       data_entry_[eid]->shape + data_entry_[eid]->ndim);
+            auto dims = VectorToTrtDims(shape);
+            ICHECK(context->setBindingDimensions(binding_index, dims));
+          }
+          if (data_entry_[eid]->device.device_type == kDLCUDA) {
             bindings[binding_index] = data_entry_[eid]->data;
           } else {
             auto device_buffer = GetOrAllocateDeviceBuffer(eid, binding_index);
@@ -156,7 +162,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
       const std::string& name = engine_and_context.outputs[i];
       int binding_index = engine->getBindingIndex(name.c_str());
       ICHECK_NE(binding_index, -1);
-      if (data_entry_[eid]->ctx.device_type == kDLGPU) {
+      if (data_entry_[eid]->device.device_type == kDLCUDA) {
         bindings[binding_index] = data_entry_[eid]->data;
       } else {
         auto device_buffer = GetOrAllocateDeviceBuffer(eid, binding_index);
@@ -180,7 +186,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
       const std::string& name = engine_and_context.outputs[i];
       int binding_index = engine->getBindingIndex(name.c_str());
       ICHECK_NE(binding_index, -1);
-      if (data_entry_[eid]->ctx.device_type != kDLGPU) {
+      if (data_entry_[eid]->device.device_type != kDLCUDA) {
         auto device_buffer = GetOrAllocateDeviceBuffer(eid, binding_index);
         device_buffer.CopyTo(const_cast<DLTensor*>(data_entry_[eid]));
       }
@@ -300,7 +306,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
     helper.DeclareField("inputs", &engine_and_context.inputs);
     helper.DeclareField("outputs", &engine_and_context.outputs);
     helper.ReadAllFields(&reader);
-    const int batch_size = 1;
+    const int batch_size = GetBatchSize();
     trt_engine_cache_[std::make_pair(symbol_name_, batch_size)] = engine_and_context;
     return true;
   }
@@ -350,7 +356,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
       if (shape[0] > device_buffers_[binding_index]->shape[0]) {
         // Buffer is too small. Need to allocate bigger buffer.
         device_buffers_[binding_index] =
-            runtime::NDArray::Empty(shape, data_entry_[entry_id]->dtype, {kDLGPU, 0});
+            runtime::NDArray::Empty(shape, data_entry_[entry_id]->dtype, {kDLCUDA, 0});
       } else if (shape[0] < device_buffers_[binding_index]->shape[0]) {
         // Buffer is too large. Create view.
         return device_buffers_[binding_index].CreateView(shape, data_entry_[entry_id]->dtype);
@@ -358,7 +364,7 @@ class TensorRTRuntime : public JSONRuntimeBase {
     } else {
       // Buffer not initialized yet.
       device_buffers_[binding_index] =
-          runtime::NDArray::Empty(shape, data_entry_[entry_id]->dtype, {kDLGPU, 0});
+          runtime::NDArray::Empty(shape, data_entry_[entry_id]->dtype, {kDLCUDA, 0});
     }
     return device_buffers_.at(binding_index);
   }

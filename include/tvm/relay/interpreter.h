@@ -36,7 +36,7 @@
 
 #include <tvm/ir/module.h>
 #include <tvm/relay/expr.h>
-#include <tvm/runtime/container.h>
+#include <tvm/runtime/container/closure.h>
 #include <tvm/runtime/object.h>
 #include <tvm/target/target.h>
 
@@ -58,11 +58,11 @@ namespace relay {
  * Relay's semantics, but a readable and clear one.
  *
  * \param mod The function module.
- * \param context The primary context that the interepreter runs on.
+ * \param device The primary device that the interepreter runs on.
  * \param target Compiler target flag to compile the functions on the context.
  * \return A function that takes in an expression and returns a value.
  */
-runtime::TypedPackedFunc<ObjectRef(Expr)> CreateInterpreter(IRModule mod, DLContext context,
+runtime::TypedPackedFunc<ObjectRef(Expr)> CreateInterpreter(IRModule mod, Device device,
                                                             Target target);
 
 /*! \brief The container type of Closures used by the interpreter. */

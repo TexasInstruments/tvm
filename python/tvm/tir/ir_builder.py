@@ -263,6 +263,35 @@ class IRBuilder(object):
 
         return WithScope(loop_var, _exit_cb)
 
+    def while_loop(self, condition):
+        """Create a while loop scope.
+
+        Parameters
+        ----------
+        condition : Expr
+            The termination condition.
+
+        Returns
+        -------
+        loop_scope : With.Scope of Var
+            The while scope.
+
+        Examples
+        --------
+        .. code-block:: python
+
+            ib = tvm.tir.ir_builder.create()
+            iterations = ib.allocate("int32", (1,), name="iterations", scope="local")
+            with ib.while_loop(iterations[0] < 10):
+                iterations[0] += 1
+        """
+        self._seq_stack.append([])
+
+        def _exit_cb():
+            self.emit(_stmt.While(condition, self._pop_seq()))
+
+        return WithScope(None, _exit_cb)
+
     def if_scope(self, cond):
         """Create an if scope.
 
@@ -344,6 +373,26 @@ class IRBuilder(object):
             self.emit(self._pop_seq())
 
         return WithScope(None, _exit_cb)
+
+    def let(self, var_name, value):
+        """Create a new let stmt binding.
+
+        Parameters
+        ----------
+        var_name : str
+            The name of the variable
+
+        value : PrimExpr
+            The value to be bound
+
+        Returns
+        -------
+        var : tvm.tir.Var
+           The var that can be in for future emits.
+        """
+        var = _expr.Var(var_name, dtype=value.dtype)
+        self.emit(lambda x: _stmt.LetStmt(var, value, x))
+        return var
 
     def allocate(self, dtype, shape, name="buf", scope=None):
         """Create a allocate statement.

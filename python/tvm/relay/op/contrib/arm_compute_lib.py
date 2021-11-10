@@ -17,20 +17,19 @@
 # pylint: disable=invalid-name, unused-argument
 """Arm Compute Library supported operators."""
 import tvm
-
+from tvm import relay
 from tvm._ffi import register_func
-from tvm.relay.expr import const
 from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name
-from tvm.relay.testing.temp_op_attr import TempOpAttr
+from tvm.relay.expr import const
 
-from ...dataflow_pattern import wildcard, is_op, is_constant, is_expr
-from .register import register_pattern_table
+from ...dataflow_pattern import is_constant, is_expr, is_op, wildcard
 from ..strategy.generic import is_depthwise_conv2d
+from .register import register_pattern_table
 
 
 def is_arm_compute_runtime_enabled():
-    """Check if the ACL graph runtime is present.
+    """Check if the ACL graph executor is present.
 
     Returns
     -------
@@ -43,7 +42,7 @@ def is_arm_compute_runtime_enabled():
     return False
 
 
-def partition_for_arm_compute_lib(mod, params=None):
+def partition_for_arm_compute_lib(mod, params=None, **opts):
     """Partition the graph greedily offloading supported
     operators to Arm Compute Library.
 
@@ -111,9 +110,9 @@ def preprocess_module(mod):
 
         return convert_conv
 
-    with TempOpAttr(
+    with OpAttrContext(
         "nn.conv2d", "FTVMConvertOpLayout", convert_layout_conv2d(tvm.relay.nn.conv2d)
-    ), TempOpAttr(
+    ), OpAttrContext(
         "qnn.conv2d", "FTVMConvertOpLayout", convert_layout_conv2d(tvm.relay.qnn.op.conv2d)
     ):
         seq = tvm.transform.Sequential(
@@ -140,7 +139,7 @@ def arm_compute_lib_pattern_table():
         pattern : dataflow_pattern.AltPattern
             Denotes the convolution pattern.
         """
-        pattern = is_op("nn.pad")(wildcard()) | wildcard()
+        pattern = is_op("nn.pad")(wildcard(), wildcard()) | wildcard()
         pattern = is_op("nn.conv2d")(pattern, is_constant())
         pattern = pattern.optional(lambda x: is_op("nn.bias_add")(x, is_constant()))
         pattern = pattern.optional(is_op("nn.relu"))
@@ -154,7 +153,7 @@ def arm_compute_lib_pattern_table():
         pattern : dataflow_pattern.AltPattern
             Denotes the convolution pattern.
         """
-        pattern = is_op("nn.pad")(wildcard()) | wildcard()
+        pattern = is_op("nn.pad")(wildcard(), wildcard()) | wildcard()
         pattern = is_op("qnn.conv2d")(
             pattern, is_constant(), is_constant(), is_constant(), is_constant(), is_constant()
         )
@@ -398,6 +397,14 @@ def qnn_dense(expr):
     return True
 
 
+def check_dilation(attrs):
+    """Prevents offloading if dilation other than (1, 1)"""
+    if not isinstance(attrs, relay.op.op_attrs.GlobalPool2DAttrs):
+        if not (len(attrs.dilation) == 2 and attrs.dilation[0] == 1 and attrs.dilation[1] == 1):
+            return False
+    return True
+
+
 @tvm.ir.register_op_attr("nn.max_pool2d", "target.arm_compute_lib")
 def max_pool2d(expr):
     """Check if the external ACL codegen for maxpool2d should be used."""
@@ -407,7 +414,7 @@ def max_pool2d(expr):
     typ = args[0].checked_type
     if typ.dtype not in ["float32", "uint8"]:
         return False
-    return True
+    return check_dilation(attrs)
 
 
 @tvm.ir.register_op_attr("nn.avg_pool2d", "target.arm_compute_lib")
@@ -425,7 +432,7 @@ def avg_pool2d(expr, from_quantized_composite=False):
     if attrs.layout != "NHWC":
         return False
 
-    return True
+    return check_dilation(attrs)
 
 
 @tvm.ir.register_op_attr("nn.global_max_pool2d", "target.arm_compute_lib")
@@ -481,3 +488,36 @@ def qnn_add(expr):
             return False
 
     return True
+
+
+class OpAttrContext(object):
+    """Temporarily changes the attr of an op."""
+
+    def __init__(self, op_name, attr_key, attr_value):
+        """Saves the required info for RAII pattern usage.
+
+        Parameters
+        ----------
+        op_name : str
+            The op name.
+
+        attr_key : str
+            The attribute name.
+
+        attr_value : object
+            The attribute value.
+        """
+        self.op = relay.op.get(op_name)
+        self.attr_key = attr_key
+        self.attr_value = attr_value
+
+    def __enter__(self):
+        self.older_attr = self.op.get_attr(self.attr_key)
+        self.op.reset_attr(self.attr_key)
+        self.op.set_attr(self.attr_key, self.attr_value)
+        return self
+
+    def __exit__(self, ptype, value, trace):
+        self.op.reset_attr(self.attr_key)
+        if self.older_attr:
+            self.op.set_attr(self.attr_key, self.older_attr)

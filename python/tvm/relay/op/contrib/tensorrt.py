@@ -23,13 +23,14 @@ from tvm import relay
 from tvm.relay import transform
 from tvm.relay.build_module import bind_params_by_name
 from tvm.relay.expr import Call, Constant, Tuple, GlobalVar, Var, TupleGetItem
+from tvm.ir import Op
 from tvm.relay.expr_functor import ExprMutator, ExprVisitor
 
 logger = logging.getLogger("TensorRT")
 
 
 def is_tensorrt_runtime_enabled():
-    """Check if the TensorRT graph runtime is present.
+    """Check if the TensorRT graph executor is present.
     Returns
     -------
     ret: bool
@@ -177,9 +178,18 @@ def check_dynamism(args, op_name):
     """
     for arg in args:
         if isinstance(arg, (Call, Var, Constant, TupleGetItem)):
-            for dim_shape in arg.checked_type.shape[1:]:
-                if isinstance(dim_shape, tvm.tir.expr.Any):
-                    return True
+            if (
+                op_name not in ["nn.conv2d", "nn.conv2d_transpose", "nn.dense"]
+                and not get_tensorrt_use_implicit_batch_mode()
+            ):
+                # Explicit batch mode doesn't support any dynamic shapes yet, except for conv2d
+                for dim_shape in arg.checked_type.shape:
+                    if isinstance(dim_shape, tvm.tir.expr.Any):
+                        return True
+            else:
+                for dim_shape in arg.checked_type.shape[1:]:
+                    if isinstance(dim_shape, tvm.tir.expr.Any):
+                        return True
         elif isinstance(arg, Tuple):
             return check_dynamism(arg.fields, op_name)
         else:
@@ -266,7 +276,7 @@ _register_external_op_helper("clip")
 
 def reduce_annotate_fn(attrs, args, op_name):
     """Helper for reduce operations."""
-    if not attrs.axis or len(attrs.axis) == 0:
+    if get_tensorrt_use_implicit_batch_mode() and (not attrs.axis or len(attrs.axis) == 0):
         logger.info("%s: cannot reduce to scalar.", op_name)
         return False
     if attrs.exclude:
@@ -318,10 +328,9 @@ def add_annotate_fn(expr):  # pylint: disable=unused-variable
         for arg in args
     ]
 
-    # RelayVM + TRT doesn't support scalar addition yet.
-    for shape in shapes:
-        if len(shape) < 1:
-            return False
+    # Scalars require explicit batch mode.
+    if get_tensorrt_use_implicit_batch_mode() and any([len(shape) < 1 for shape in shapes]):
+        return False
 
     if any([x.checked_type.dtype != "float32" for x in args]):
         logger.info("Only float32 inputs are supported for TensorRT.")
@@ -329,6 +338,8 @@ def add_annotate_fn(expr):  # pylint: disable=unused-variable
     if (
         not get_tensorrt_use_implicit_batch_mode()
         and (isinstance(args[0], Constant) or isinstance(args[1], Constant))
+        and len(shapes[0]) > 0
+        and len(shapes[1]) > 0
         and shapes[0][0] == shapes[1][0]
         and shapes[0][0] != 1
         and (len(shapes[0]) > 3 or len(shapes[1]) > 3)
@@ -581,6 +592,19 @@ def concatenate_annotate_fn(expr):  # pylint: disable=unused-variable
     return True
 
 
+@_register_external_dynamic_check_func("split")
+def split_annotate_fn(expr):
+    """Check if split is supported by TensorRT."""
+
+    if any([x.checked_type.dtype != "float32" for x in expr.args]):
+        logger.info("Only float32 inputs are supported for TensorRT.")
+        return False
+    if get_tensorrt_use_implicit_batch_mode() and int(expr.attrs.axis) == 0:
+        logger.info("split: can't modify batch dimension.")
+        return False
+    return True
+
+
 @_register_external_dynamic_check_func("nn.conv2d_transpose")
 def conv2d_transpose_annotate_fn(expr):  # pylint: disable=unused-variable
     """Check if nn.conv2d_transpose is supported by TensorRT."""
@@ -709,14 +733,22 @@ def pad_annotate_fn(expr):  # pylint: disable=unused-variable
     if attrs.pad_mode != "constant":
         logger.info("nn.pad: pad mode is %s but must be constant.", attrs.pad_mode)
         return False
-    if float(attrs.pad_value) != 0.0:
-        logger.info("nn.pad: pad value is %f but must be 0.0.", float(attrs.pad_value))
+    if (
+        not isinstance(args[1], relay.Constant)
+        or len(args[1].checked_type.shape) != 0
+        or args[1].data.numpy().item() != 0.0
+    ):
+        logger.info("nn.pad: pad value is %s but must be 0.0.", args[1])
+        return False
+    if len(attrs.pad_width) not in [4, 5]:
+        logger.info("nn.pad: can only pad 4D or 5D inputs")
         return False
     if any([x != 0 for x in attrs.pad_width[0]]) or any([x != 0 for x in attrs.pad_width[1]]):
         logger.info("nn.pad: can't pad batch or channel dimensions.")
         return False
     if len(attrs.pad_width) == 5 and any([x != 0 for x in attrs.pad_width[2]]):
         logger.info("nn.pad: can only pad last two dimensions for 5D inputs.")
+        return False
     return True
 
 
@@ -899,6 +931,11 @@ class IsComputeIntensiveGraph(ExprVisitor):
                 "nn.conv3d_transpose",
                 "nn.dense",
                 "nn.batch_matmul",
+                "sum",
+                "prod",
+                "max",
+                "min",
+                "mean",
             ]
         )
         if isinstance(call.op, tvm.tir.op.Op):
@@ -997,6 +1034,7 @@ def prune_tensorrt_subgraphs(mod):
     # Create new pruned module
     new_mod = tvm.IRModule(mod.functions, mod.type_definitions)
     new_mod["main"] = SubgraphRemover(subgraphs_to_remove, mod, new_mod).visit(mod["main"])
+    new_mod = transform.RemoveUnusedFunctions()(new_mod)
     return new_mod
 
 
@@ -1011,6 +1049,7 @@ class RemoveDropout(ExprMutator):
             return visit
         if (
             isinstance(visit.tuple_value, Call)
+            and isinstance(visit.tuple_value.op, Op)
             and visit.tuple_value.op.name == "nn.dropout"
             and visit.index == 0
         ):

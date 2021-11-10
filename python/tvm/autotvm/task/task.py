@@ -21,6 +21,8 @@ Task can be constructed from tuple of func, args, and kwargs.
 func is a state-less function, or a string that
 registers the standard task.
 """
+import functools
+
 import numpy as np
 
 from tvm import runtime
@@ -175,6 +177,9 @@ class Task(object):
         # and restore the function by name when unpickling it.
         import cloudpickle  # pylint: disable=import-outside-toplevel
 
+        self.target, self.target_host = Target.check_and_update_host_consist(
+            self.target, self.target_host
+        )
         return {
             "name": self.name,
             "args": self.args,
@@ -195,8 +200,9 @@ class Task(object):
         self.config_space = state["config_space"]
         self.func = cloudpickle.loads(state["func"])
         self.flop = state["flop"]
-        self.target = state["target"]
-        self.target_host = state["target_host"]
+        self.target, self.target_host = Target.check_and_update_host_consist(
+            state["target"], state["target_host"]
+        )
 
     def __repr__(self):
         return "Task(func_name=%s, args=%s, kwargs=%s, workload=%s)" % (
@@ -407,6 +413,7 @@ def template(task_name, func=None):
     """
 
     def _decorate(f):
+        @functools.wraps(f)
         def wrapper(*args, **kwargs):
             assert not kwargs, "Do not support kwargs in template function call"
             workload = args_to_workload(args, task_name)
@@ -447,6 +454,8 @@ def create(task_name, args, target, target_host=None):
 
     if isinstance(target, str):
         target = Target(target)
+
+    target, target_host = Target.check_and_update_host_consist(target, target_host)
 
     # init config space
     ret.config_space = ConfigSpace()
