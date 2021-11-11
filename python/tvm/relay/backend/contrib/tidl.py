@@ -34,7 +34,7 @@ from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple_ge
 from tvm.relay.expr_functor import ExprMutator
 from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
-from tvm.contrib import graph_runtime
+from tvm.contrib import graph_executor
 #import tvm.relay.op.contrib.tidl as tidl_annotation
 from .tidl_reduce_subgraph_size import reduce_subgraph_size
 from .tidl_visualize import visualize_relay_graph
@@ -935,7 +935,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
     os.environ.pop("TIDL_TVM_HOST_REF_ONLY_BUILD")
     print("Running graph on host for tensor data collection...")
-    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    mod = graph_executor.create(graph, lib, tvm.cpu(0))
     mod.set_input(**params)
 
     subgraph_tensors_list = []
@@ -1020,7 +1020,7 @@ def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp
     with tvm.transform.PassContext(opt_level=2):
         graph, lib, params = relay.build(mod_tvm, "llvm", params=params)
     os.environ.pop("TIDL_TVM_HOST_REF_ONLY_BUILD")
-    mod = graph_runtime.create(graph, lib, ctx=tvm.cpu(0))
+    mod = graph_executor.create(graph, lib, tvm.cpu(0))
     mod.set_input(**params)
 
     graph_input = graph_input_list[-1]
