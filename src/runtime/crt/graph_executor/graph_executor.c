@@ -138,7 +138,11 @@ void TVMGraphExecutorNode_LoadAttrs(TVMGraphExecutorNode* node, JSONReader* read
       param->flatten_data = strtoul(value, 0, 10);
       bitmask |= 8;
     } else {
+      // Begin TI, relay build_module generated json has more keys, ignore and do not print
+      #if 0
       fprintf(stderr, "do not support key %s", key);
+      #endif
+      // End TI
     }
   }
   if (bitmask != (1 | 2 | 4 | 8)) {
@@ -942,7 +946,7 @@ void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
 
       if (tvm_rt_debug_level > 2)
       {
-        uint32_t eid = TVMGraphRuntime_GetEntryId(executor, idx, 0);
+        uint32_t eid = TVMGraphExecutor_GetEntryId(executor, idx, 0);
         DLTensor *tensor = &(executor->data_entry[eid].dl_tensor);
         print_stats(tensor);
       }
@@ -1196,7 +1200,7 @@ int TVMGraphExecutor_SetupOpExecs(TVMGraphExecutor* executor) {
     for (nid = 0; nid < executor->nodes_count; nid++) {
       if (executor->op_execs[nid].fexec)  num_execs += 1;
     }
-    err = TVMPlatformMemoryAllocate((num_execs+1)*sizeof(uint64_t), ctx, (void**)&tvm_nodes_time);
+    err = TVMPlatformMemoryAllocate((num_execs+1)*sizeof(uint64_t), dev, (void**)&tvm_nodes_time);
     if (err != kTvmErrorNoError)
     {
       fprintf(stderr, "Fail to alloc mem for profiling time of %d nodes.\n", num_execs);
@@ -1380,7 +1384,7 @@ int TVMGraphExecutor_Release(TVMGraphExecutor** pptr) {
   }
   // Begin TI
   if (tvm_nodes_time != NULL)
-    status = TVMPlatformMemoryFree(tvm_nodes_time, ctx);
+    status = TVMPlatformMemoryFree(tvm_nodes_time, dev);
   if (status != 0) {
     return status;
   }

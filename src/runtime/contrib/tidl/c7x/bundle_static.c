@@ -23,9 +23,9 @@
 #include <string.h>
 #include <setjmp.h>
 #include <tvm/runtime/crt/crt.h>
-#include <tvm/runtime/crt/graph_runtime.h>
-#include <tvm/runtime/crt/memory.h>
+#include <tvm/runtime/crt/graph_executor.h>
 #include <tvm/runtime/crt/packed_func.h>
+#include <tvm/runtime/crt/page_allocator.h>
 
 #include "bundle.h"
 #include "tidl_api.h"
@@ -91,7 +91,7 @@ void    tvmcrt_exit(int ecode)
   } while (0)
 
 
-void* tvm_runtime_create(const char* json_data, const char* params_data,
+TVM_DLL void* tvm_runtime_create(const char* json_data, const char* params_data,
                                  const uint64_t params_size) {
   int64_t device_type = kDLCPU;
   int64_t device_id = 0;
@@ -100,9 +100,9 @@ void* tvm_runtime_create(const char* json_data, const char* params_data,
   params.data = params_data;
   params.size = params_size;
 
-  TVMContext ctx;
-  ctx.device_type = (DLDeviceType)device_type;
-  ctx.device_id = device_id;
+  DLDevice dev;
+  dev.device_type = (DLDeviceType)device_type;
+  dev.device_id = device_id;
 
   // get pointers
 #if defined(__C7100__) && ! defined(HOST_EMULATION)
@@ -123,11 +123,11 @@ void* tvm_runtime_create(const char* json_data, const char* params_data,
   memset(tvmcrt_alloc_size_map, 0, sizeof(AllocPtrSizeMap_t));
 #endif
 
-  TVMGraphRuntime* graph_runtime = NULL;
+  TVMGraphExecutor* graph_executor = NULL;
 
   if (! setjmp(tvmcrt_jmpbuf))
   {
-    TVM_CCALL(MemoryManagerCreate(&g_memory_manager, g_crt_memory, CRT_MEMORY_SIZE,
+    TVM_CCALL(PageMemoryManagerCreate(&g_memory_manager, g_crt_memory, CRT_MEMORY_SIZE,
                                   CRT_MEMORY_PAGE_SIZE_LOG2));
     // TVMInitializeRuntime leaks 2 memory allocs, each TVM_CRT_GLOBAL_FUNC_REGISTRY_SIZE_BYTES
     TVM_CCALL(TVMInitializeRuntime());
@@ -145,30 +145,30 @@ void* tvm_runtime_create(const char* json_data, const char* params_data,
     TVMModuleHandle mod_syslib = TVMArgs_AsModuleHandle(&pf.ret_value, 0);
 
     // create runtime modules
-    TVM_CCALL(TVMGraphRuntime_Create(json_data, mod_syslib, &ctx, &graph_runtime));
-    TVM_CCALL(TVMGraphRuntime_LoadParams(graph_runtime, params.data, params.size));
+    TVM_CCALL(TVMGraphExecutor_Create(json_data, mod_syslib, &dev, &graph_executor));
+    TVM_CCALL(TVMGraphExecutor_LoadParams(graph_executor, params.data, params.size));
   }
   else
   {
     tvmcrt_free_all();
-    graph_runtime = NULL;
+    graph_executor = NULL;
   }
 
-  return graph_runtime;
+  return graph_executor;
 }
 
-TVM_DLL int tvm_runtime_destroy(void* runtime) {
-  TVMGraphRuntime* graph_runtime = (TVMGraphRuntime*)runtime;
-  TVMGraphRuntime_Release(&graph_runtime);
+TVM_DLL int tvm_runtime_destroy(void* executor) {
+  TVMGraphExecutor* graph_executor = (TVMGraphExecutor*)executor;
+  TVMGraphExecutor_Release(&graph_executor);
   tvmcrt_free_all();
   return 0;
 }
 
-TVM_DLL int tvm_runtime_set_input(void* runtime, const char* name, DLTensor* tensor) {
+TVM_DLL int tvm_runtime_set_input(void* executor, const char* name, DLTensor* tensor) {
   if (! setjmp(tvmcrt_jmpbuf))
   {
-    TVMGraphRuntime* graph_runtime = (TVMGraphRuntime*)runtime;
-    TVMGraphRuntime_SetInput(graph_runtime, name, tensor);
+    TVMGraphExecutor* graph_executor = (TVMGraphExecutor*)executor;
+    TVMGraphExecutor_SetInput(graph_executor, name, tensor);
   }
   else
   {
@@ -179,11 +179,11 @@ TVM_DLL int tvm_runtime_set_input(void* runtime, const char* name, DLTensor* ten
   return 0;
 }
 
-TVM_DLL int tvm_runtime_set_input_raw(void* runtime, const char* name, void* tensor_raw) {
+TVM_DLL int tvm_runtime_set_input_raw(void* executor, const char* name, void* tensor_raw) {
   if (! setjmp(tvmcrt_jmpbuf))
   {
-    TVMGraphRuntime* graph_runtime = (TVMGraphRuntime*)runtime;
-    TVMGraphRuntime_SetInputRaw(graph_runtime, name, tensor_raw);
+    TVMGraphExecutor* graph_executor = (TVMGraphExecutor*)executor;
+    TVMGraphExecutor_SetInputRaw(graph_executor, name, tensor_raw);
   }
   else
   {
@@ -194,11 +194,11 @@ TVM_DLL int tvm_runtime_set_input_raw(void* runtime, const char* name, void* ten
   return 0;
 }
 
-TVM_DLL int tvm_runtime_run(void* runtime) {
+TVM_DLL int tvm_runtime_run(void* executor) {
   if (! setjmp(tvmcrt_jmpbuf))
   {
-    TVMGraphRuntime* graph_runtime = (TVMGraphRuntime*)runtime;
-    TVMGraphRuntime_Run(graph_runtime);
+    TVMGraphExecutor* graph_executor = (TVMGraphExecutor*)executor;
+    TVMGraphExecutor_Run(graph_executor);
   }
   else
   {
@@ -209,11 +209,11 @@ TVM_DLL int tvm_runtime_run(void* runtime) {
   return 0;
 }
 
-TVM_DLL int tvm_runtime_get_output(void* runtime, int32_t index, DLTensor* tensor) {
+TVM_DLL int tvm_runtime_get_output(void* executor, int32_t index, DLTensor* tensor) {
   if (! setjmp(tvmcrt_jmpbuf))
   {
-    TVMGraphRuntime* graph_runtime = (TVMGraphRuntime*)runtime;
-    TVMGraphRuntime_GetOutput(graph_runtime, index, tensor);
+    TVMGraphExecutor* graph_executor = (TVMGraphExecutor*)executor;
+    TVMGraphExecutor_GetOutput(graph_executor, index, tensor);
   }
   else
   {
@@ -224,11 +224,11 @@ TVM_DLL int tvm_runtime_get_output(void* runtime, int32_t index, DLTensor* tenso
   return 0;
 }
 
-TVM_DLL int tvm_runtime_get_output_raw(void* runtime, int32_t index, void* tensor_raw) {
+TVM_DLL int tvm_runtime_get_output_raw(void* executor, int32_t index, void* tensor_raw) {
   if (! setjmp(tvmcrt_jmpbuf))
   {
-    TVMGraphRuntime* graph_runtime = (TVMGraphRuntime*)runtime;
-    TVMGraphRuntime_GetOutputRaw(graph_runtime, index, tensor_raw);
+    TVMGraphExecutor* graph_executor = (TVMGraphExecutor*)executor;
+    TVMGraphExecutor_GetOutputRaw(graph_executor, index, tensor_raw);
   }
   else
   {
@@ -264,13 +264,13 @@ void __attribute__((noreturn)) TVMPlatformAbort(tvm_crt_error_t error_code) {
   tvmcrt_exit(-1);
 }
 
-tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLContext ctx, void** out_ptr) {
+tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLDevice dev, void** out_ptr) {
   *out_ptr = NULL;
 
   // Tier 1: try CRT_MEMORY first
   if (num_bytes <= CRT_MEMORY_MAX_ALLOC_SIZE && g_memory_manager != NULL)
   {
-    g_memory_manager->Allocate(g_memory_manager, num_bytes, ctx, out_ptr);
+    g_memory_manager->Allocate(g_memory_manager, num_bytes, dev, out_ptr);
   }
 
   // Tier 2: directly allocate from appMem, bookkeep (ptr, size) for Free() later
@@ -304,12 +304,12 @@ tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLContext ctx, void*
   return kTvmErrorPlatformNoMemory;
 }
 
-tvm_crt_error_t TVMPlatformMemoryFree(void* ptr, DLContext ctx) {
+tvm_crt_error_t TVMPlatformMemoryFree(void* ptr, DLDevice dev) {
   tvm_crt_error_t err = kTvmErrorNoError;
 
   if (ptr >= g_crt_memory && ptr < g_crt_memory + CRT_MEMORY_SIZE)
   {
-    err = g_memory_manager->Free(g_memory_manager, ptr, ctx);
+    err = g_memory_manager->Free(g_memory_manager, ptr, dev);
   }
   else
   {

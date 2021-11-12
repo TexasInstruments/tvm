@@ -28,7 +28,7 @@ CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
 CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG)
 
 COMMON_O_FILES=$(patsubst $(CRT_ROOT)/common/%.c,$(BUILD_DIR)/common/%.o,$(wildcard $(CRT_ROOT)/common/*.c))
-GRAPHRT_O_FILES=$(patsubst $(CRT_ROOT)/graph_runtime/%.c,$(BUILD_DIR)/graph_runtime/%.o,$(wildcard $(CRT_ROOT)/graph_runtime/*.c))
+GRAPHRT_O_FILES=$(patsubst $(CRT_ROOT)/graph_executor/%.c,$(BUILD_DIR)/graph_executor/%.o,$(wildcard $(CRT_ROOT)/graph_executor/*.c))
 MEMORY_O_FILES=$(patsubst $(CRT_ROOT)/memory/%.c,$(BUILD_DIR)/memory/%.o,$(wildcard $(CRT_ROOT)/memory/*.c))
 
 all: $(LIB_NAME)
@@ -37,7 +37,7 @@ $(BUILD_DIR)/common/%.o: $(CRT_ROOT)/common/%.c
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c --output_file "$@" "$<"
 
-$(BUILD_DIR)/graph_runtime/%.o: $(CRT_ROOT)/graph_runtime/%.c
+$(BUILD_DIR)/graph_executor/%.o: $(CRT_ROOT)/graph_executor/%.c
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c --output_file "$@" "$<"
 

@@ -29,14 +29,13 @@
  */
 #include "codegen_c7x.h"
 
-#include <tvm/runtime/container.h>
 #include <tvm/runtime/crt/error_codes.h>
 #include <tvm/runtime/module.h>
 #include <tvm/target/codegen.h>
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/ir/op.h>
 #include <tvm/tir/op_attr_types.h>
-#include <tvm/support/logging.h>
+#include <tvm/runtime/logging.h>
 
 #include <sstream>
 #include <string>
@@ -1491,7 +1490,7 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   cg.Init(output_ssa, emit_asserts, target->str());
 
   // debug
-  if (::dmlc::DebugLoggingEnabled()) {
+  if (::tvm::runtime::detail::DebugLoggingEnabled()) {
     DLOG(INFO) << "BuildC7x";
     DLOG(INFO) << PrettyPrint(mod);
   }

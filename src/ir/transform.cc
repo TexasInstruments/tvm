@@ -482,7 +482,7 @@ IRModule SequentialNode::operator()(IRModule mod, const PassContext& pass_ctx) c
     DLOG(INFO) << "--> " << pass_info->name.c_str();
     mod = pass(std::move(mod), pass_ctx);
 
-    if (::dmlc::DebugLoggingEnabled()) {
+    if (::tvm::runtime::detail::DebugLoggingEnabled()) {
       auto printIRpass = PrintIR("after "+pass_info->name, false);
       printIRpass(mod, pass_ctx);
     }
