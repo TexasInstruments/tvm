@@ -527,11 +527,17 @@ class RelayBuildModule : public runtime::ModuleNode {
     // Update all the targets in the targets_ TargetsMap
     CheckAndUpdateHostConsistency(&targets_, &target_host);
 
+    if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+      LOG_INFO << "calling Optimize() on relay module, target=" << target_host->kind->name;
+
     // Relay IRModule -> IRModule optimizations.
     relay_module = Optimize(relay_module, targets_, params);
 
     // Get the updated function.
     auto func = Downcast<Function>(relay_module->Lookup("main"));
+
+    if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+      LOG_INFO << "calling Codegen() on main func, target=" << target_host->kind->name;
 
     // Generate code for the updated function.
     executor_codegen_ = MakeExecutorCodegen(executor_);
@@ -576,7 +582,8 @@ class RelayBuildModule : public runtime::ModuleNode {
         ret_.mod = tvm::codegen::CSourceModuleCreate(";", "", Array<String>{});
       }
     } else {
-      DLOG(INFO) << "calling tvm::build, target=" << target_host->kind->name;
+      if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+        LOG_INFO << "calling tvm::build, target=" << target_host->kind->name;
       ret_.mod = tvm::build(lowered_funcs, target_host_);
     }
 

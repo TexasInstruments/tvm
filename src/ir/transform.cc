@@ -470,7 +470,8 @@ Pass GetPass(const String& pass_name) {
 // a Sequential without the consideration of their orders. The phase
 // ordering problem needs to be handled in the future.
 IRModule SequentialNode::operator()(IRModule mod, const PassContext& pass_ctx) const {
-  DLOG(INFO) << "Sequential Pass:";
+  if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+    LOG_INFO << "Sequential Pass:";
   for (const Pass& pass : passes) {
     ICHECK(pass.defined()) << "Found undefined pass for optimization.";
     const PassInfo& pass_info = pass->Info();
@@ -479,10 +480,11 @@ IRModule SequentialNode::operator()(IRModule mod, const PassContext& pass_ctx) c
     for (const auto& it : pass_info->required) {
       mod = GetPass(it)(std::move(mod), pass_ctx);
     }
-    DLOG(INFO) << "--> " << pass_info->name.c_str();
+    if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+      LOG_INFO << "--> " << pass_info->name.c_str();
     mod = pass(std::move(mod), pass_ctx);
 
-    if (::tvm::runtime::detail::DebugLoggingEnabled()) {
+    if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN")) {
       auto printIRpass = PrintIR("after "+pass_info->name, false);
       printIRpass(mod, pass_ctx);
     }

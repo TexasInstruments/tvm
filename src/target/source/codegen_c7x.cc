@@ -1494,9 +1494,9 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   cg.Init(output_ssa, emit_asserts, target->str());
 
   // debug
-  if (::tvm::runtime::detail::DebugLoggingEnabled()) {
-    DLOG(INFO) << "BuildC7x";
-    DLOG(INFO) << PrettyPrint(mod);
+  if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN")) {
+    LOG_INFO << "BuildC7x";
+    LOG_INFO << PrettyPrint(mod);
   }
 
   Map<String, LinkedParam> linked_params;
@@ -1532,7 +1532,8 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   }
 
   std::string code = cg.Finish();
-  DLOG(INFO) << "Code:\n" << code;
+  if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+    LOG_INFO << "Code:\n" << code;
   return CSourceModuleCreate(code, "c", cg.GetFunctionNames());
 }
 

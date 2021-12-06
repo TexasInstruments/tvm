@@ -26,6 +26,8 @@ import re
 import functools
 import json
 import numpy as np
+import logging
+import importlib
 import tvm
 from tvm import relay
 import tvm.ir
@@ -3296,6 +3298,9 @@ class build_config():
             platform            = tidl_compiler.tidl_platform
             c7x_codegen_enabled = tidl_compiler.c7x_codegen
         assert artifacts_folder, "artifacts_folder must be specified for TVM+TIDL compilation"
+        self.debug_c7x_codegen = False
+        if (os.environ.get("TIDL_C7X_CODEGEN_DEBUG") != None) and (gen_c7x_mod_enabled != 0):
+            self.debug_c7x_codegen = True
         self.temp_folder = os.path.join(artifacts_folder, "tempDir")
         if (c7x_codegen_enabled == 1 and gen_c7x_mod_enabled == 0):
             self.temp_folder = None
@@ -3306,6 +3311,11 @@ class build_config():
                                       config={'tir.disable_vectorize': (c7x_codegen_enabled == 9)})
 
     def __enter__(self):
+        if self.debug_c7x_codegen:
+            self.prev_logging_level = logging.getLogger().getEffectiveLevel()
+            importlib.reload(logging)
+            logging.basicConfig(level=logging.DEBUG)
+            os.environ["TIDL_C7X_CODEGEN_DEBUG_BEGIN"] = "1"
         if self.temp_folder:
             os.environ["TIDL_ARTIFACTS_TEMP_FOLDER"] = self.temp_folder
         self.tidl_context.__enter__()
@@ -3316,6 +3326,10 @@ class build_config():
         self.tvm_context.__exit__(ctx_type, ctx_value, ctx_trace)
         if self.temp_folder:
             os.environ.pop("TIDL_ARTIFACTS_TEMP_FOLDER")
+        if self.debug_c7x_codegen:
+            os.environ.pop("TIDL_C7X_CODEGEN_DEBUG_BEGIN")
+            importlib.reload(logging)
+            logging.basicConfig(level=self.prev_logging_level)
 
 def remove_tidl_params(params):
     """ Remove params used by TIDL subgraphs from deployable module params
