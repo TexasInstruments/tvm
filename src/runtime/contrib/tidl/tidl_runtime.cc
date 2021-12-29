@@ -542,11 +542,7 @@ class TIDLJ7Module : public runtime::ModuleNode {
                            << " is not supported in TIDL RT\n";
             }
 
-            // Skip pitch for now (assuming TVM tensor is continuous)
-            rt_arg->pitch[2] = rt_arg->dimValues[3];
-            rt_arg->pitch[1] = rt_arg->dimValues[2] * rt_arg->dimValues[3];
-            rt_arg->pitch[0] = rt_arg->dimValues[1] * rt_arg->dimValues[2] *
-                               rt_arg->dimValues[3];
+            // Skip pitch for now (use TIDLRT_setTensorDefault_() values: -1)
             TIDL_LOG << "#TVM#  pitch: " << rt_arg->pitch[0] << " "
                      << rt_arg->pitch[1] << " " << rt_arg->pitch[2];
           }

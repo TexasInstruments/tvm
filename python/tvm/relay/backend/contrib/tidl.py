@@ -321,6 +321,16 @@ def obtain_tensor_quantization(names, relay_quantization):
 
     return zp_list, scale_inv_list
 
+def obtain_tensor_etype(names, relay_etypes):
+    """ Obtain TIDL_ElementType for the named tensors
+    """
+
+    etype_list = []
+    for name in names:
+        assert name in relay_etypes, f"Unknow TIDL_ElementType for {name}"
+        etype_list.append(relay_etypes[name])
+    return etype_list
+
 def obtain_inout_quant_dict(subgraph, subgraph_id, relay_quantization):
     r"""Populate input/output expr to quant dict with info from relay_quantization"""
 
@@ -423,10 +433,12 @@ def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
             if data_layout == "NHWC" and len(input_tensor.shape) == 3:
                 input_tensor = input_tensor.transpose(2, 0, 1)
 
-            tensor_norm = np.multiply(input_tensor, scale)
-            tensor_quant = np.rint(tensor_norm)
-            tensor_quant = np.clip(tensor_quant, quant_min, quant_max)
-            output = tensor_quant.flatten()   # works only if tensor_quant is in "CxHxW" format
+            # No more quant.  Keep TVM tensor as is, Use TIDL data convert layers
+            #tensor_norm = np.multiply(input_tensor, scale)
+            #tensor_quant = np.rint(tensor_norm)
+            #tensor_quant = np.clip(tensor_quant, quant_min, quant_max)
+            #output = tensor_quant.flatten()   # works only if tensor_quant is in "CxHxW" format
+            output = input_tensor.flatten()
 
             quant_tensors.append(output)
         quant_tensors_list.append(quant_tensors)
@@ -863,6 +875,34 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
     else:
         assert False, f'Do not know how to get quantization for expr'
 
+def get_tidl_element_type(expr):
+    """Get corresponding TIDL element type
+    Parameters
+    ----------
+    expr : tvm.relay.Expr
+        TIDL subgraph input parameter or output expr
+    Returns
+    -------
+    etype: int
+        TIDL element type
+    """
+    dtype = expr.checked_type.dtype
+    if dtype == 'uint8':
+        return 0  # TIDL_UnsignedChar
+    if dtype == 'int8':
+        return 1  # TIDL_SignedChar
+    if dtype == 'uint32':
+        return 4  # TIDL_UnsignedWord
+    if dtype == 'int32':
+        return 5  # TIDL_SignedWord
+    if dtype == 'float32':
+        return 6  # TIDL_SinglePrecFloat
+    if dtype == 'uint64':
+        return 7  # TIDL_UnsignedDoubleWord
+    if dtype == 'int64':
+        return 8  # TIDL_SignedDoubleWord
+    assert False, f'Unsupported TVM dtype: {dtype} for TIDL subgraph input/output'
+
 def dequantize_tensor(tensor, zp, scale, data_layout):
     """Dequantize tensor into floating point using zp and scale
     Parameters
@@ -920,6 +960,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
         print(mod_tvm.astext(show_meta_data=False), file=relay_txt)
 
     relay_quantization = {}
+    relay_etypes = {}
     outputs_expr = mod_tvm["main"].body
     for i, output_i_expr in enumerate(outputs_expr.fields):
         if i in calib_mutator.name_map:
@@ -928,6 +969,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
                                                                                  mod_tvm)
             else:
                 relay_quantization[calib_mutator.name_map[i]] = get_default_quantization()
+            relay_etypes[calib_mutator.name_map[i]] = get_tidl_element_type(output_i_expr)
 
     print("Building graph on host for tensor data collection...")
     # Build and execute calibration graph on host to get outputs
@@ -976,14 +1018,15 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
                 #     - we then compute (minTensorValue, maxTensorValue) from relay layer,
                 #       without any calibration data, set 
                 zp, scale = relay_quantization[calib_mutator.name_map[i]]
-                res = dequantize_tensor(res, zp, scale, data_layout)
+                # Keep TVM results as is, Use TIDL data convert layers to interface
+                #res = dequantize_tensor(res, zp, scale, data_layout)
                 subgraph_tensors[calib_mutator.name_map[i]] = res
                 if save_output:
                     file_name = os.path.join(temp_folder, calib_mutator.name_map[i] + ".txt")
                     np.savetxt(file_name, res.flatten(), fmt='%10.5f')
         subgraph_tensors_list.append(subgraph_tensors)
 
-    return subgraph_tensors_list, relay_quantization
+    return subgraph_tensors_list, relay_quantization, relay_etypes
 
 def generate_tidl_layer_tensors(tidl_target, mod, params, graph_input_list, temp_folder,
                                 data_layout, has_qnn_ops=False):
@@ -1258,7 +1301,7 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
         cfg_file.write("outScaleF2Q   = {}\n".format(print_list(output_scale)))
         cfg_file.write("outIsNCHW     = {}\n".format(print_list(out_is_nchw)))
 
-def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_signed,
+def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_etypes,
                          temp_folder,
                          net_file, params_file, platform="AM57", tensor_bits=8,
                          tidl_calib_flags=0, tidl_bias_calib_iters=50,
@@ -1274,16 +1317,14 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_si
     # Multiple calibration data are written to the same file, one after another
     for input_quant_vec in input_quant_vec_list:
         for i in range(len(input_quant_vec)):
-            if tensor_bits == 8:
-                if input_signed[i] == 1:
-                    input_quant_vec[i].astype('int8').tofile(fid)
-                else:
-                    input_quant_vec[i].astype('uint8').tofile(fid)
+            if (input_etypes[i] == 0):
+                input_quant_vec[i].astype('uint8').tofile(fid)
+            elif (input_etypes[i] == 1):
+                input_quant_vec[i].astype('int8').tofile(fid)
+            elif (input_etypes[i] == 6):
+                input_quant_vec[i].astype('float32').tofile(fid)
             else:
-                if input_signed[i] == 1:
-                    input_quant_vec[i].astype('int16').tofile(fid)
-                else:
-                    input_quant_vec[i].astype('uint16').tofile(fid)
+                assert False, f'Unsupported TIDL calibration data type: {input_etypes[i]}'
     fid.close()
 
     if platform == "J7":
@@ -1409,8 +1450,9 @@ class InOutNodes(ctypes.Structure):
 
 class TensorDescriptor(ctypes.Structure):
     """ Input/output tensor descriptor for TIDL subgraphs """
-    _fields_ = [('input_scale', ctypes.c_double),
-                ('input_signed', ctypes.c_int),
+    _fields_ = [('scale', ctypes.c_double),
+                ('zp', ctypes.c_int),
+                ('element_type', ctypes.c_int),
                 ('channel', ctypes.c_int),
                 ('height', ctypes.c_int),
                 ('width', ctypes.c_int),
@@ -1751,21 +1793,30 @@ class TIDLImport:
         import_lib_mul(mul_params, ctypes.POINTER(ctypes.c_int)())
         return True
 
-    def tidl_import_init(self, subgraph_id, input_scale, input_signed, input_tensors, input_names):
+    def tidl_import_init(self, subgraph_id, input_zps, input_scale_invs, input_etypes,
+                         input_tensors, input_names, output_zps, output_scale_invs, output_etypes):
         r""" Initializing TIDL import
 
         Parameters
         ----------
         subgraph_id: int
             Id of the subgraph to be imported to TIDL
-        input_scale: list
-            Scaling factor to convert floating point input to 8-bit quantized input
-        input_signed: list
-            Signed (1) or unsigned (0) of input
+        input_zps: list
+            Zero-point of TVM input tensor
+        input_scale_invs: list
+            Inv scale of TVM input tensor
+        input_etypes: list
+            TIDL_ElementType of TVM input tensor
         input_tensors: list
             Input tensors to TIDL subgraph
         input_names: list
             Names of input tensors
+        output_zps: list
+            Zero-point of TVM output tensor
+        output_scale_invs: list
+            Inv scale of TVM output tensor
+        output_etypes: list
+            TIDL_ElementType of TVM output tensor
         Returns
         -------
         True if initialization succeeds or False if initialization fails
@@ -1800,15 +1851,20 @@ class TIDLImport:
             return False
 
         if self.tidl_platform == "J7":
-            descr = (TensorDescriptor * len(input_tensors))()
-            for i in range(len(input_tensors)):
-                descr[i].input_scale = input_scale[i]
-                descr[i].input_signed = input_signed[i]
+            descr = (TensorDescriptor * (len(input_zps) + len(output_zps)))()
+            for i in range(len(input_zps)):
+                descr[i].scale = input_scale_invs[i]
+                descr[i].zp = input_zps[i]
+                descr[i].element_type = input_etypes[i]
                 (descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][1:4]
                 descr[i].name = bytes(input_names[i], 'utf-8')
-            input_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
+            for i in range(len(output_zps)):
+                descr[len(input_zps) + i].scale = output_scale_invs[i]
+                descr[len(input_zps) + i].zp = output_zps[i]
+                descr[len(input_zps) + i].element_type = output_etypes[i]
+            inout_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
             import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
-            import_lib_init(subgraph_id, len(input_tensors), input_dscr_ptr, is_nchw,
+            import_lib_init(subgraph_id, len(input_zps), len(output_zps), inout_dscr_ptr, is_nchw,
                             self.tensor_bits, self.tidl_tools_path, self.temp_folder)
             return True
 
@@ -2031,7 +2087,7 @@ class TIDLImport:
         return status
 
     def import_relay_ir(self, mod, params, subgraph_tensors_list, relay_quantization,
-                        has_qnn_ops=False):
+                        relay_etypes, has_qnn_ops=False):
         r""" Relay IR import to TIDL
 
         Parameters
@@ -2043,6 +2099,7 @@ class TIDLImport:
         subgraph_tensors_list: list of dict (list length equals number of calibration data)
             Input/output tensors of subgraphs obtained from TVM graph execution
         relay_quantization: { name: (zp, scale) } dictionary for input/output tensors
+        relay_etypes: { name: TIDL_ElementType } dictionary for input/output tensors
 
         Returns
         -------
@@ -2097,6 +2154,8 @@ class TIDLImport:
                   obtain_tensor_quantization(input_names, relay_quantization)
             output_zp_list, output_scale_inv_list = \
                   obtain_tensor_quantization(output_names, relay_quantization)
+            input_etype_list = obtain_tensor_etype(input_names, relay_etypes)
+            output_etype_list = obtain_tensor_etype(output_names, relay_etypes)
             if not input_fp_list:
                 return import_fail
             if self.tidl_platform == "AM57" and len(input_fp_list[0]) > 1:
@@ -2109,8 +2168,9 @@ class TIDLImport:
 
             # Initialize TIDL import
             subgraph = mod[tidl_subgraph]
-            if not self.tidl_import_init(subgraph_id, input_scale, input_signed, input_fp_list[0],
-                                         input_names):
+            if not self.tidl_import_init(subgraph_id, input_zp_list, input_scale_inv_list,
+                                         input_etype_list, input_fp_list[0], input_names,
+                                         output_zp_list, output_scale_inv_list, output_etype_list):
                 return import_fail
 
             # Initialize subgraph info for nfo file
@@ -2175,7 +2235,7 @@ class TIDLImport:
 
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
-                                     input_quant_vec_list, input_signed, self.temp_folder,
+                                     input_quant_vec_list, input_etype_list, self.temp_folder,
                                      net_file, par_file, self.tidl_platform,
                                      self.tensor_bits, self.tidl_calib_flags,
                                      self.tidl_bias_calib_iters,
@@ -3216,12 +3276,12 @@ class TIDLCompiler:
                                          self.output_feature_16bit_names_list,
                                          self.params_16bit_names_list)
                 print("Generating subgraph boundary tensors for calibration...")
-                subgraph_tensors_list, relay_quantization = generate_subgraph_tensors(
+                subgraph_tensors_list, relay_quantization, relay_etypes = generate_subgraph_tensors(
                                  self.tidl_target, mod, params, graph_input_list, self.temp_folder,
                                  data_layout, has_qnn_ops)
                 print("Importing subgraph into TIDL...")
                 num_imported_sgs = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list,
-                                                               relay_quantization, has_qnn_ops)
+                                                     relay_quantization, relay_etypes, has_qnn_ops)
                 _ctypes.dlclose(import_lib._handle)
                 if num_imported_sgs >= 0:
                     print(f"TIDL import of {num_imported_sgs} Relay IR subgraphs succeeded.")
