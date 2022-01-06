@@ -23,9 +23,8 @@
 /*------------------------------------------------------------------------------*/
 #include "tidl_api.h"
 #include "itidl_ti.h"
+#include "itidl_rt.h"
 #include "ivision.h"
-
-#include "convert.h"
 
 #include <stddef.h>        // itidl_ti.h uses NULL w/o this #include
 #include <stdio.h>
@@ -81,10 +80,10 @@ static int32_t init_outbufs(TIDL_subgraph_instance *instance);
 static void    free_outbufs(TIDL_subgraph_instance *instance);
 static int32_t tidl_element_size(int32_t elementType);
 
-static int32_t copy_input_tensors_with_conv(TIDL_subgraph_instance *instance,
-                                            DLTensor *in_tensors[]);
-static int32_t copy_output_tensors_with_conv(TIDL_subgraph_instance *instance,
-                                             DLTensor *out_tensors[]);
+static int32_t connect_input_output_tensors(TIDL_subgraph_instance *instance,
+                                            DLTensor *in_tensors[],
+                                            DLTensor *out_tensors[]);
+static int32_t disconnect_input_output_tensors(TIDL_subgraph_instance *instance);
 static void create_TIDLRT_Tensor(const DLTensor *in_dl, sTIDLRT_Tensor_t *in_rt, int index,
                                  int is_nchw);
 static int32_t GetTIDLRTElementType(const DLDataType dtype);
@@ -286,8 +285,8 @@ EXTERN_C int32_t process_tidl_subgraph(void *instance_,
   //   TIDL_activate
   handle->fxns->ialg.algActivate((IALG_Handle)(instance->handle));
 
-  // Copy the input data into TIDL's input buffers.
-  copy_input_tensors_with_conv(instance, in_tensors);
+  // With TIDL DataConv layers, subgraph directly use TVM tensors' data buffers
+  connect_input_output_tensors(instance, in_tensors, out_tensors);
 
   // Call IALG process API to run the network. This is the TIDL interpreter.
   //   TIDL_process
@@ -300,8 +299,8 @@ EXTERN_C int32_t process_tidl_subgraph(void *instance_,
     printf("process_tidl_subgraph: algProcess failed\n");
   }
 
-  // Copy the output data from TIDL's output buffers.
-  copy_output_tensors_with_conv(instance, out_tensors);
+  // With TIDL DataConv layers, subgraph directly use TVM tensors' data buffers
+  disconnect_input_output_tensors(instance);
 
   // Call IALG deactivate API to release TIDL's ownership.
   //   TIDL_deactivate
@@ -399,16 +398,8 @@ static int32_t init_inbufs(TIDL_subgraph_instance *instance)
     /* Allocation extra in Host emulation mode to avoid read access violation */
     BufSize *= 2;
 #endif
-    BufDesc->bufPlanes[0].buf = (int8_t *)tidl_malloc(BufSize);
-    BufDesc->reserved[1] = BufSize;
-    if (BufDesc->bufPlanes[0].buf == NULL)
-    {
-      printf("init_inbufs %d: size %d, alloc failed\n", i, BufSize);
-      return IALG_EFAIL;
-    }
-    //printf("inbuf[%d]: %12d bytes\n", i, BufSize);
-    //TIDLTB_ASSERT_EXIT(BufDesc->bufPlanes[0].buf != NULL);
-    //memset(BufDesc->bufPlanes[0].buf,0,BufSize);
+    // TIDL DataConv: subgraph directly use TVM tensors' data buffers later
+    BufDesc->bufPlanes[0].buf = NULL;
   }
   return IALG_EOK;
 }
@@ -495,25 +486,8 @@ static int32_t init_outbufs(TIDL_subgraph_instance *instance)
        (IOParams->outNumChannels[i] + IOParams->outPadCh[i] + 1) *
        IOParams->outChannelPitch[i]*elementSizeBytes;
 
-    BufDesc->bufPlanes[0].buf = (int8_t *)tidl_malloc(outputMemRequired);
-    BufDesc->reserved[1] = outputMemRequired;
-    if (BufDesc->bufPlanes[0].buf == NULL)
-    {
-      printf("init_outbufs %d: size %d, alloc failed\n", i, outputMemRequired);
-      return IALG_EFAIL;
-    }
-    //TIDLTB_ASSERT_EXIT(BufDesc->bufPlanes[0].buf != NULL)
-    // printf("outbuf[%d]: %12d bytes\n", i, outputMemRequired*elementSizeBytes);
-
-#if 0
-    if((BufDesc->bufPlanes[0].width *
-        BufDesc->bufPlanes[0].height*elementSizeBytes) <  (16*1024))
-    {
-        memset(BufDesc->bufPlanes[0].buf,0,
-          BufDesc->bufPlanes[0].width *
-          BufDesc->bufPlanes[0].height*elementSizeBytes);
-    }
-#endif
+    // TIDL DataConv: subgraph directly use TVM tensors' data buffers later
+    BufDesc->bufPlanes[0].buf = NULL;
   }
   return IALG_EOK;
 }
@@ -541,32 +515,62 @@ static void free_outbufs(TIDL_subgraph_instance *instance)
   instance->outBufs = NULL;
 }
 
-//-------------------------------------------------------------------------
-// Copy input tensors to TIDL input buffers. Perform any necessary
-// layout and format conversion.
-static int32_t copy_input_tensors_with_conv(TIDL_subgraph_instance *instance,
-                                            DLTensor *in_tensors[])
+static int32_t connect_input_output_tensors(TIDL_subgraph_instance *instance,
+                                            DLTensor *in_tensors[],
+                                            DLTensor *out_tensors[])
 {
-  IVISION_BufDesc**  BufDescList = instance->inBufs->bufDesc;
-  sTIDL_IOBufDesc_t* IOParams = instance->IOParams;
+  IVISION_BufDesc**  inBufDescList = instance->inBufs->bufDesc;
+  IVISION_BufDesc**  outBufDescList = instance->outBufs->bufDesc;
   TIDL_InArgs*       inArgs = instance->inArgs;
+  TIDL_outArgs*      outArgs = instance->outArgs;
+  sTIDL_IOBufDesc_t* IOParams = instance->IOParams;
 
   for(int i = 0; i < IOParams->numInputBuf; i++)
   {
-    IVISION_BufDesc* BufDesc = BufDescList[i];
+    IVISION_BufDesc* inBufDesc = inBufDescList[i];
     inArgs->scale[i] = 1.0;
-    void* ptr = BufDesc->bufPlanes[0].buf;
+    inBufDesc->bufPlanes[0].buf = in_tensors[i]->data;
+  }
 
-    sTIDLRT_Tensor_t in;
-    //create_TIDLRT_Tensor(in_tensors[i], &in, i, 1 /* NCHW */);
-    //create_TIDLRT_Tensor(in_tensors[i], &in, i, 0 /* NHWC */);
-    create_TIDLRT_Tensor(in_tensors[i], &in, i, instance->is_nchw);
+  for(int i = 0; i < IOParams->numOutputBuf; i++)
+  {
+    IVISION_BufDesc* outBufDesc = outBufDescList[i];
 
-#if 0  // YUAN TODO  // for pre-quantized networks
-  in.zeroPoint = 128;
-  in.scale = 128.0f;
-#endif
-    vx_status status = cp_data_in_tidlrt_tensor(IOParams, &in, ptr, i);
+    /* Find tvm/tidlrt tensor that corresponds to this tidl output tensor */
+    /* After imported into TIDL layers, TIDL performs transormations and
+         topologically sorts all layers, always iterating from layer 0.
+         While tvm/tidl_rt input tensor <i> is still TIDL input tensor <i>,
+         tvm/tidl_rt output tensor <i> could become TIDL output tensor <j>.
+       TIDL outDataName is encoded as tidl_<subgraph_id>_o<tidlrt_id>,
+         from which we can extract the corresponding tvm output tensor index.
+    */
+    const char *out_name = (const char *) IOParams->outDataName[i];
+    int32_t pos = strlen(out_name) - 1;
+    while(out_name[pos] != 'o')  pos--;
+    int32_t j = atoi(&out_name[pos+1]);
+
+    outBufDesc->bufPlanes[0].buf = out_tensors[j]->data;
+  }
+
+  return 0;
+}
+
+static int32_t disconnect_input_output_tensors(TIDL_subgraph_instance *instance)
+{
+  IVISION_BufDesc**  inBufDescList = instance->inBufs->bufDesc;
+  IVISION_BufDesc**  outBufDescList = instance->outBufs->bufDesc;
+  sTIDL_IOBufDesc_t* IOParams = instance->IOParams;
+
+  for(int i = 0; i < IOParams->numInputBuf; i++)
+  {
+    IVISION_BufDesc* inBufDesc = inBufDescList[i];
+    inBufDesc->bufPlanes[0].buf = NULL;
+  }
+
+  for(int i = 0; i < IOParams->numOutputBuf; i++)
+  {
+    IVISION_BufDesc* outBufDesc = outBufDescList[i];
+    outBufDesc->bufPlanes[0].buf = NULL;
   }
 
   return 0;
@@ -624,11 +628,7 @@ static void create_TIDLRT_Tensor(const DLTensor *in_dl, sTIDLRT_Tensor_t *in_rt,
       in_rt->dimValues[missing_dims + s] = shape;
     }
 
-    // Skip pitch for now (assuming TVM tensor is continuous)
-    in_rt->pitch[2] = in_rt->dimValues[3];
-    in_rt->pitch[1] = in_rt->dimValues[2] * in_rt->dimValues[3];
-    in_rt->pitch[0] = in_rt->dimValues[1] * in_rt->dimValues[2] *
-                      in_rt->dimValues[3];
+    // Skip pitch for now (using TIDLRT_setTensorDefault(): -1)
   }
 
   /* -----------------------------------------------------------------
@@ -655,6 +655,8 @@ int32_t GetTIDLRTElementType(const DLDataType dtype) {
            return TIDLRT_Int16;
          case 32:
            return TIDLRT_Int32;
+         case 64:
+           return TIDLRT_Int64;
          default:
            printf("Invalid bit size (%d) for int\n", dtype.bits);
            return -1;
@@ -668,6 +670,8 @@ int32_t GetTIDLRTElementType(const DLDataType dtype) {
            return TIDLRT_Uint16;
          case 32:
            return TIDLRT_Uint32;
+         case 64:
+           return TIDLRT_Uint64;
          default:
            printf("Invalid bit size (%d) for int\n", dtype.bits);
            return -1;
@@ -686,36 +690,6 @@ int32_t GetTIDLRTElementType(const DLDataType dtype) {
       printf("Invalid type code\n");
       return -1;
   }
-}
-
-//-------------------------------------------------------------------------
-// Copy output tensors from TIDL output buffers. Perform any necessary
-// layout and format conversion.
-static int32_t copy_output_tensors_with_conv(TIDL_subgraph_instance *instance,
-                                             DLTensor *out_tensors[])
-{
-  IVISION_BufDesc**  BufDescList = instance->outBufs->bufDesc;
-  sTIDL_IOBufDesc_t* IOParams    = instance->IOParams;
-  TIDL_outArgs*      outArgs     = instance->outArgs;
-
-  for(int i = 0; i < IOParams->numOutputBuf; i++)
-  {
-    IVISION_BufDesc* BufDesc = BufDescList[i];
-    void* ptr = BufDesc->bufPlanes[0].buf;
-
-    sTIDLRT_Tensor_t out;
-    create_TIDLRT_Tensor(out_tensors[i], &out, i, instance->is_nchw);
-#if 0  // YUAN TODO  // for pre-quantized networks
-  //pascal out.zeroPoint = 36;
-  // out.scale = 4.962819195246499f;
-  out.zeroPoint = 206;
-  out.scale = 6.9486468598749696f;
-#endif
-
-    vx_status status = cp_data_out_tensor_tidlrt(IOParams, &out, ptr, i, outArgs->scale[i]);
-   }
-
-  return 0;
 }
 
 //-------------------------------------------------------------------------
