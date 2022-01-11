@@ -272,6 +272,12 @@ def SETransform(f, mod, ctx):
             if not coeffs or len(coeffs) < 2 or coeffs[-2:] != [1,0]:
                 #logging.debug(f"streamify fail, coeffs[-2:] are {coeffs[-2:]}")
                 return False
+            # extents[] should contain integer constants only, disqualify non-constant ones
+            # e.g. mxnet yolo3_mobilenet1.0_coco: extents=[6, nkeep[0], 1], coeffs=[1, 6, 0]
+            for cnt in extents:
+                if not isinstance(cnt, tvm.tir.IntImm):
+                    return False
+
             # Reverse the lists: inner-->outer
             coeffs = list(coeffs)[-2::-1]  # drop trailing 0
             extents = extents[::-1]
