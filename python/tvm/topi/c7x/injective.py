@@ -25,6 +25,7 @@ from tvm import tir
 from tvm.runtime import DataType
 from .. import utils
 
+logging = logging.getLogger("c7x_injective")
 
 #----------------------------------------------------------------
 # Experimental C7x-specific schedule for injective (elementwise) ops.
@@ -175,52 +176,54 @@ def double_buffer_with_dma(s: te.Schedule,
     if len(dims) > 1:
         cc = s.cache_write(C, "local")
         inner = s[cc].op.axis[-1]
-    #print("after local buffers")
-    #print_schedule(s)
+    logging.debug("after local buffers")
+    print_schedule(s)
 
     # Split on the axis indicated by find_split to reduce local buffer size
     if baxis != 0:
         if nblocks != dims[baxis-1]:
-            #print(f"split at {baxis} by {nblocks}")
+            logging.debug(f"split at {baxis} by {nblocks}")
             old = dims[baxis-1]
             sdim = [nblocks, int(old / nblocks)]
-            #print(f"split dim: {old} -> {sdim}")
+            logging.debug(f"split dim: {old} -> {sdim}")
             dims = dims[:baxis-1] + sdim + dims[baxis:]
             (outer, block) = s[C].split(s[C].op.axis[baxis-1], nparts=nblocks)
             if baxis == len(s[C].op.axis):
                 inner = block
         else:
-            #print(f"split at {baxis}")
+            logging.debug(f"split at {baxis}")
             (outer, block) = (s[C].op.axis[baxis-1], s[C].op.axis[baxis])
 
         outers = dims[:baxis]
         inners = dims[baxis:]
-        #print(f"after split: {outers} {inners}, blocksize={blocksize}")
-        #print("after split")
-        #print_schedule(s)
+        logging.debug(f"after split: {outers} {inners}, blocksize={blocksize}")
+        logging.debug("after split")
+        print_schedule(s)
 
         # sink local-buffer copies into outer loop
         for t in local_inputs:
             s[t].compute_at(s[C], outer)
         if cc != C:
             s[cc].compute_at(s[C], outer)
-        #print("after sink")
-        #print_schedule(s)
+        logging.debug("after sink")
+        print_schedule(s)
 
     # mark local<->ext copies as using dma.
     for t in local_inputs:
         # AutoInlineInjective can push compute into the copy loops - such loops
         # cannot be annotated with the dma pragma.
+        #dump(t)
         if is_copy(t):
             s[t].pragma(s[t].op.axis[0], "dma")
     if cc != C:
+        #dump(cc)
         # if no split above, block is outer loop
         s[C].pragma(block, "dma")
 
     return (s, cc, baxis, inner)
 
 def is_copy(tensor):
-    ''' Return True if any of the ops contributing to tensor has more than 2
+    ''' Return False if any of the ops contributing to tensor has more than 2
         inputs, indicating that it is not just a copy operation.
     '''
     if isinstance(tensor.op, tvm.te.ComputeOp):
@@ -228,9 +231,9 @@ def is_copy(tensor):
         if len(tensor.op.input_tensors) > 1:
             return False
 
-        for t in tensor.op.input_tensors:
-            if is_copy(t) == False:
-                return False
+    for t in tensor.op.input_tensors:
+        if is_copy(t) == False:
+            return False
 
     return True
 
@@ -272,12 +275,15 @@ def find_split(dims, elem_bytes, limit):
 # Debug code to dump TIR
 def dump(tensor, indent=''):
     ''' Traverse TIR and print operands, operations '''
-    print(f'{indent}tensor = {tensor.name}')
-    print(f'{indent}op = {tensor.op.name}, tag={tensor.op.tag}, inputs={len(tensor.op.input_tensors)}')
+    logging.debug(f'{indent}tensor = {tensor.name}')
+    logging.debug(f'{indent}op = {tensor.op.name}, tag={tensor.op.tag}, inputs={len(tensor.op.input_tensors)}')
     if isinstance(tensor.op, tvm.te.ComputeOp):
-      print(f'{indent}body = {tensor.op.body}, expr type={type(tensor.op.body[0])}')
+      logging.debug(f'{indent}body = {tensor.op.body}, expr type={type(tensor.op.body[0])}')
+
+    if len(tensor.op.input_tensors) > 0:
+        indent = indent + ' '
     for t in tensor.op.input_tensors:
-        dump(t, indent=indent+' ')
+        dump(t, indent)
 
 
 # Debug code to print and visualize the schedules
@@ -296,8 +302,8 @@ def show(s):
 
 
 def print_schedule(s):
-    print("schedule------")
+    logging.debug("schedule------")
     for st in s.stages:
-        print(f"stage: {st}")
+        logging.debug(f"stage: {st}")
         for iv in st.all_iter_vars:
-            print(f"   iter: {iv}")
+            logging.debug(f"   iter: {iv}")
