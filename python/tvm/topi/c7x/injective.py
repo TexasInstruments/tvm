@@ -76,6 +76,11 @@ def schedule_injective_from_existing(s: te.Schedule,
     if not s[C].op.axis:
         return s
 
+    # if C result type is bool, bits==1, we need rhs data type to determine block size
+    elem_bytes = int(DataType(C.dtype).bits / 8)
+    if elem_bytes == 0:
+        return s
+
     # Transform to use double buffering, local buffers and DMA
     s, cc, baxis, inner = double_buffer_with_dma(s, C)
 
@@ -88,7 +93,6 @@ def schedule_injective_from_existing(s: te.Schedule,
 
     # split by 16 for vectorization
     vector_length = 64
-    elem_bytes = int(DataType(C.dtype).bits / 8)
     (xyo, inner) = s[cc].split(inner, int(vector_length/elem_bytes))
     #print("after split")
     #print_schedule(s)
