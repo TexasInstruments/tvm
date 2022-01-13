@@ -35,7 +35,8 @@ CFLAGS += -I $(PDK_PATH)/packages
 SOURCES = bundle_static.c \
           tidl_api.c \
           tidl_api_mem.c \
-          tvm_tidl_dmautils.c
+          tvm_tidl_dmautils.c \
+          tvm_tidl_sort.c
 
 HEADERS := $(shell find . -name "*.h")
 OBJS  = $(patsubst %.c,$(BUILD_DIR)/%.obj,$(SOURCES))

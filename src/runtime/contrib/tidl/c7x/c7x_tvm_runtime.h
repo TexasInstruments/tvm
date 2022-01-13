@@ -94,6 +94,7 @@ extern "C" {
   extern void tvmcrt_exit(int ecode);
   extern int32_t TVM_lockInterrupts();
   extern void    TVM_unlockInterrupts(int32_t);
+  extern void tvm_tidl_argsort_nms(float *input, int *sort_num, int *output);
 }
 
 //---------------------------------------------------------------------------------

@@ -98,6 +98,8 @@ public:
 // A pre-pass to find "packed calls" which is how the host kernel
 // calls the device kernel. This is so we can emit declarations.
 // @tir.tvm_call_packed("fused_multiply_58_kernel0", A, B, C)
+// Skip tvm.contrib.sort.argsort_nms since it will be rewritten to
+//   calling tvm_tidl_argsort_nms from c7x_tvm_runtime.h
 class ScanPackedCalls : public StmtExprVisitor {
 public:
   std::set<const CallNode *>& calls_;
@@ -105,7 +107,9 @@ public:
   ScanPackedCalls(std::set<const CallNode*>& cs) : calls_(cs) {}
   void VisitExpr_(const CallNode* op) override {
     if (op->op.same_as(builtin::tvm_call_packed())) {
-      calls_.insert(op);
+      std::string fname = Downcast<StringImm>(op->args[0])->value;
+      if (fname != "tvm.contrib.sort.argsort_nms")
+        calls_.insert(op);
     }
   }
 };
@@ -685,6 +689,25 @@ void CodeGenC7x::PrintCallExtern(Type ret_type, String global_symbol,
   // dma copy call handled by EvaluateNode, so ignore here
   if (global_symbol == "c7x_dma_copy")
     ;
+  else if (global_symbol == "tvm.contrib.sort.argsort_nms") {
+    const CallNode *compute  = args[1].as<CallNode>();
+    const CallNode *sort_num = args[2].as<CallNode>();
+    const CallNode *output   = args[3].as<CallNode>();
+    const IntImmNode *axis   = args[4].as<IntImmNode>();
+    const IntImmNode *ascend = args[5].as<IntImmNode>();
+    ICHECK(compute != nullptr && sort_num != nullptr && output != nullptr);
+    ICHECK( compute->op.same_as(builtin::tvm_stack_make_array()) &&
+           sort_num->op.same_as(builtin::tvm_stack_make_array()) &&
+             output->op.same_as(builtin::tvm_stack_make_array()) );
+    ICHECK(axis != nullptr && axis->value == 1);
+    ICHECK(ascend != nullptr && ascend->value == 0);
+
+    os << "tvm_tidl_argsort_nms(";
+    this->PrintExpr(compute->args[0], os);   os << ", ";
+    this->PrintExpr(sort_num->args[0], os);  os << ", ";
+    this->PrintExpr(output->args[0], os);
+    os << ")";
+  }
   else {
     os << global_symbol << "(";
     for (size_t i = static_cast<size_t>(skip_first_arg); i < args.size(); ++i) {
@@ -693,7 +716,7 @@ void CodeGenC7x::PrintCallExtern(Type ret_type, String global_symbol,
 	os << ", ";
       }
     }
-  os << ")";
+    os << ")";
   }
 }
 
