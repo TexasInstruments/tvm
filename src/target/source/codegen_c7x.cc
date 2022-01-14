@@ -1101,7 +1101,7 @@ void CodeGenC7x::PrintDMASetup(const VarNode* dma_var, const CallNode* call) {
       stream << "Layout<";
       PrintType(prim_type->dtype, stream);
       for (int i = 1; i <= 4; ++i)
-	    stream << ", " << call->args[n+i];
+	    stream << ", " << Downcast<IntImm>(call->args[n+i]).get()->value;
       stream << ">> " << buffer_name << "(";
       // If this is a local buffer, call the allocator to initialize it
       if (is_local)
