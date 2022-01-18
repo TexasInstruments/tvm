@@ -33,7 +33,6 @@ CFLAGS += -I $(IVISION_PATH)
 CFLAGS += -I $(PDK_PATH)/packages
 
 SOURCES = bundle_static.c \
-          convert.c \
           tidl_api.c \
           tidl_api_mem.c \
           tvm_tidl_dmautils.c
