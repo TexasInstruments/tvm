@@ -20,7 +20,7 @@ include make.inc
 LIB_NAME = tidl_api.lib
 
 CRT_ROOT    ?= $(TVM_ROOT)/src/runtime/crt
-CRT_CONFIG  ?= $(TVM_ROOT)/apps/bundle_deploy/crt_config/
+CRT_CONFIG  ?= .
 DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
 BUILD_DIR   ?= build
 
