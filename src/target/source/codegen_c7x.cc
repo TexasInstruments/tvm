@@ -1100,6 +1100,10 @@ void CodeGenC7x::PrintDMASetup(const VarNode* dma_var, const CallNode* call) {
       stream << buffer_type << "<";
       stream << "Layout<";
       PrintType(prim_type->dtype, stream);
+      // If we do "stream << call->args[n+i], we are using tir's representation printer
+      //     (ReprPrint), which will print "(int64)1" for 64-bit IntImm of value 1, which
+      //     will cause cl7x compilation error.  So, we print out IntImm value for C7x code,
+      //     which will simply be "1" for the above case.
       for (int i = 1; i <= 4; ++i)
 	    stream << ", " << Downcast<IntImm>(call->args[n+i]).get()->value;
       stream << ">> " << buffer_name << "(";
