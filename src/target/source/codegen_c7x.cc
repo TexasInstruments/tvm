@@ -125,6 +125,10 @@ public:
   void VisitExpr_(const CallNode* op) override {
     if (is_call_builtin(op, "tir.c7x.stream_access"))
       info_.UpdateVecLen(op);
+
+    // Recurse to handle the case where there is more than one
+    // stream_access in an expression
+    StmtExprVisitor::VisitExpr_(op);
   }
 };
 
@@ -268,7 +272,10 @@ void CodeGenC7x::PreFunctionBody(const PrimFunc& f) {
   this->PrintIndent();
   stream << "AllocL2Context L2Context;\n";
   this->PrintIndent();
-  stream << "DMAContext DMAContext("<< num_dma_intrinsics_ << ");\n\n";
+
+  // Do not define a DMAContext if there are no DMA calls
+  if (num_dma_intrinsics_ > 0)
+    stream << "DMAContext DMAContext("<< num_dma_intrinsics_ << ");\n\n";
 }
 
 #if 0
@@ -924,6 +931,8 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
     //   float16 value = <rhs expression>
     //   __vpred pred = __SA0_VPRED(float16);
     //   __vstore_pred(pred, __SA0ADV(float16, ptr), value);
+    // Note: For scalar access __vstore_pred cannot be used. Convert the
+    // __vpred to a scalar using __create_scalar and use assignment.
     if (access.pred) {
       auto rhs_var = Var("value", t);
       auto pred_var = Var("pred", DataType::Handle());
@@ -942,9 +951,22 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
       stream << ");\n";
 
       this->PrintIndent();
-      stream << "__vstore_pred(" << GetVarID(pred_var.get()) << ", "
-                                 << sa_os.str() << ", "
-				 << GetVarID(rhs_var.get()) << ");\n";
+      if (t.lanes() == 1) // scalar variable, use scalar assignment
+      {
+        stream << "if (__create_scalar(" << GetVarID(pred_var.get()) << ")) { \n";
+        int if_scope = this->BeginScope();
+        this->PrintIndent();
+        stream << "*" << sa_os.str() << " = " << GetVarID(rhs_var.get()) << ";\n";
+        this->EndScope(if_scope);
+        this->PrintIndent();
+        stream << "}\n";
+      }
+      else
+      {
+          stream << "__vstore_pred(" << GetVarID(pred_var.get()) << ", "
+                                    << sa_os.str() << ", "
+				    << GetVarID(rhs_var.get()) << ");\n";
+      }
     }
     // no predication: just generate *__SA0ADV(float16, ptr) = rhs;
     else {
