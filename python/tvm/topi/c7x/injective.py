@@ -169,13 +169,15 @@ def double_buffer_with_dma(s: te.Schedule,
 
     # local buffers
     # Creates local copies of specified buffers
+    # Give each local copy a unique "local" + "<tag>" scope_name, so that
+    #     they do not get "shared"/"fused" by tir.StorageRewrite pass
     # Inserts loops to copy-in to local inputs and copy-out from local outputs
 
     local_inputs = []
 
     for t in op.input_tensors:
         if len(t.shape) > 1:
-            l = s.cache_read(t, "local", op)
+            l = s.cache_read(t, f"local{len(local_inputs)}", op)
             local_inputs.append(l)
     if len(dims) > 1:
         cc = s.cache_write(C, "local")
