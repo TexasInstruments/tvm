@@ -27,6 +27,16 @@ from .. import utils
 
 logging = logging.getLogger("c7x_injective")
 
+# Operations that dma (from c7x_tvm_runtime.h) does not apply.
+# Reason 1: input tensor is not completely used in the computation.
+#   e.g. T_strided_slice from input tensor (1, 1, 851700, 6) to (1, 1, 100, 6).
+#   Only first 600 elements are copied from input tensor to output tensor.
+#   C7x dma runtime uses input tensor dimension and loop nest bounds to
+#   configure the dma transfer, which will result 8517 transfers, while only 1
+#   is really needed.  Besides, T_strided_slice is a simple tensor to tensor copy
+#   with no computation and dma (with double buffering) brings no benefits.
+ops_do_not_dma = ['T_strided_slice' ]
+
 #----------------------------------------------------------------
 # Experimental C7x-specific schedule for injective (elementwise) ops.
 def schedule_injective(outs: Union[te.tensor.Tensor, List[te.tensor.Tensor]]) -> te.Schedule:
@@ -68,6 +78,10 @@ def schedule_injective_from_existing(s: te.Schedule,
 
     target = tvm.target.Target.current(allow_none=False)
     logging.debug(f"schedule_injective for c7x, target={target}")
+
+    # dma does not apply
+    if C.op.name in ops_do_not_dma:
+        return s
 
     #print("initial schedule")
     #print_schedule(s)

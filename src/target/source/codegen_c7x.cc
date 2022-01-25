@@ -271,11 +271,13 @@ void CodeGenC7x::PreFunctionBody(const PrimFunc& f) {
   // Initialize L2Context first, DMAContext needs it for L2 memory allocation
   this->PrintIndent();
   stream << "AllocL2Context L2Context;\n";
-  this->PrintIndent();
 
   // Do not define a DMAContext if there are no DMA calls
   if (num_dma_intrinsics_ > 0)
+  {
+    this->PrintIndent();
     stream << "DMAContext DMAContext("<< num_dma_intrinsics_ << ");\n\n";
+  }
 }
 
 #if 0
