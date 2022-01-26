@@ -106,6 +106,10 @@ def enable_c7x_mod(tidl_compiler, mod, mod_orig, params, num_tidl_subgraphs):
 def bin_to_c(infile, outfile, array_name):
     """
     Encode infile as char array in outfile, similar to "xxd -i" mode
+    Update: cl7x/acpia7x has problem with big char array initialization in C file (~600MB)
+    Workaround: Instead of use C array with (big) initialization, directly
+                encode the binary file data in assembly, as asm7x has no problem
+                with big assembly files
 
     Parameters
     ----------
@@ -120,18 +124,20 @@ def bin_to_c(infile, outfile, array_name):
         None
     -------
     """
-    with open(infile, "rb") as fi, open(outfile, "wt") as fo:
-        fo.write(f"const unsigned char {array_name}[] = {{")
+    num_bytes = 0
+    with open(infile, "rb") as fi, open(outfile+"_embed.asm", "wt") as fo:
+        fo.write(f"\t.sect \".const\"\n\t.clink")
+        fo.write(f"\n\t.global ||{array_name}||\n||{array_name}||:")
         byte = fi.read(1)
-        num_bytes = 0
         while byte:
-            if (num_bytes % 12 == 0):
-                fo.write(f"\n  0x{byte.hex()},")
+            if (num_bytes % 16 == 0):
+                fo.write(f"\n\t.byte {int.from_bytes(byte, byteorder='little', signed=True)}")
             else:
-                fo.write(f" 0x{byte.hex()},")
-            num_bytes += 1;
+                fo.write(f",{int.from_bytes(byte, byteorder='little', signed=True)}")
+            num_bytes += 1
             byte = fi.read(1)
-        fo.write("\n};\n")
+    with open(outfile, "wt") as fo:
+        fo.write(f"extern const unsigned char {array_name}[];\n")
         fo.write(f"const unsigned int {array_name + '_len'} = {num_bytes};\n")
 
 

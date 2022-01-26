@@ -27,7 +27,9 @@ CFLAGS += -I $(TVM_C7X_ROOT)
 
 SOURCES  = func_registry.c tvm_main.c
 SOURCES += $(wildcard model_*.c)
+ASM_SOURCES = $(wildcard *_embed.asm)
 OBJS     =$(patsubst %.c,%.obj,$(SOURCES))
+OBJS    +=$(patsubst %.asm,%.obj,$(ASM_SOURCES))
 
 all: $(EXE_NAME)
 
@@ -35,6 +37,9 @@ model_%.obj: model_%.c
 	$(QUIET)$(CC) $(CFLAGS) --cpp_default -c --output_file $@ $<
 
 %.obj: %.c
+	$(QUIET)$(CC) $(CFLAGS) -c --output_file $@ $<
+
+%.obj: %.asm
 	$(QUIET)$(CC) $(CFLAGS) -c --output_file $@ $<
 
 $(EXE_NAME): $(OBJS)
