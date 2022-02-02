@@ -2434,6 +2434,7 @@ class TIDLAnnotation:
             self._register_constrained_op("qnn.concatenate")
             self._register_constrained_op("qnn.dense")
             self._register_constrained_op("qnn.mul")
+            self._register_constrained_op("nn.pad")
 
         # Register operators that are J6 specific or have constraints only for J6
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
@@ -2504,7 +2505,6 @@ class TIDLAnnotation:
         # common patterns required by J7 or J6
         pattern_table_common = [
             ('tidl.squeeze_reshape', _squeeze_reshape_pattern(), _squeeze_reshape_checker),
-            ('tidl.pad_conv2d', _pad_conv2d_pattern(), _pad_conv2d_checker),
         ]
 
         # additional patterns required by J6
@@ -2729,22 +2729,8 @@ class TIDLAnnotation:
         ]
 
         # additional patterns required by J7
-        #pad can also precede avg_pool2d
-        def _pad_avg_pool_pattern():
-            pad_out = is_op('nn.pad')(wildcard())
-            avg_pool_out = is_op('nn.avg_pool2d')(pad_out)
-            return avg_pool_out
-        def _pad_avg_pool_checker(extract):
-            if self._user_denied('nn.pad', 'nn.avg_pool2d'):
-                return False
-            pad_op = extract.args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op)
-            pool_supported = self.allow_func('nn.avg_pool2d', extract)
-            return pool_supported and pad_supported
-
         pattern_table_j7 = [
             ('tidl.transpose_reshape', _transpose_reshape_pattern(), _transpose_reshape_checker),
-            ('tidl.pad_avgpool', _pad_avg_pool_pattern(), _pad_avg_pool_checker),
         ]
 
         if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
