@@ -35,7 +35,11 @@ logging = logging.getLogger("c7x_injective")
 #   configure the dma transfer, which will result 8517 transfers, while only 1
 #   is really needed.  Besides, T_strided_slice is a simple tensor to tensor copy
 #   with no computation and dma (with double buffering) brings no benefits.
-ops_do_not_dma = ['T_strided_slice' ]
+# - T_concat should not be implemented with DMA, it does not have performance benefits.
+#   We should write a separate schedule for T_concat, split the concat axis into several
+#   loops nests, each loop nest with one or two input tensors and use streaming engine
+#   for the input tensors. (TODO)
+ops_do_not_dma = ['T_strided_slice', 'T_concat' ]
 
 #----------------------------------------------------------------
 # Experimental C7x-specific schedule for injective (elementwise) ops.
@@ -79,9 +83,12 @@ def schedule_injective_from_existing(s: te.Schedule,
     target = tvm.target.Target.current(allow_none=False)
     logging.debug(f"schedule_injective for c7x, target={target}")
 
-    # dma does not apply
+    # dma does not apply, check input tensors as well
     if C.op.name in ops_do_not_dma:
         return s
+    for t in C.op.input_tensors:
+        if t.op.name in ops_do_not_dma:
+            return s
 
     #print("initial schedule")
     #print_schedule(s)
