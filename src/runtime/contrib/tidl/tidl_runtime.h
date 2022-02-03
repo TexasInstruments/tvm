@@ -34,20 +34,8 @@
 namespace tvm {
 namespace runtime {
 
-/*!
- * \brief Create a TIDLModule.
- * \param total_subgraphs Total number of subgraphs
- * \param num_inputs  Map of subgraph name to number of inputs
- * \param num_outputs Map of subgraph name to number of outputs
- * \return TIDLModule created from subgraphs.
- */
-Module TIDLJ6ModuleCreate(int total_subgraphs,
-                          const std::unordered_map<std::string, int>& num_inputs,
-                          const std::unordered_map<std::string, int>& num_outputs);
-
 // Class to pass information between the TIDL compiler and runtime module
-// classes. This is only used by J7 for now, but J6 could easily be refactored
-// to use the same approach.
+// classes.
 class TIDLSubgraphInfo {
  public:
   std::string net_data;

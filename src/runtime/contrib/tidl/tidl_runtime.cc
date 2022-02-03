@@ -90,161 +90,6 @@ struct timespec t0, t1;
 namespace tvm {
 namespace runtime {
 
-/*! \brief A module for TIDL runtime. */
-class TIDLJ6Module : public runtime::ModuleNode {
- public:
-
-  explicit TIDLJ6Module(int total_subgraphs,
-                      const std::unordered_map<std::string, int>& num_inputs,
-                      const std::unordered_map<std::string, int>& num_outputs) {
-    this->total_subgraphs_ = total_subgraphs;
-    this->num_inputs_ = num_inputs;
-    this->num_outputs_ = num_outputs;
-    this->tidl_handle = NULL;
-  }
-
-  typedef void (*tidl_subgraph_t)(int, int, int, int, int, float**, float**);
-
-  /*! 
-   * \brief Initialize TIDL runtime by loading subgraph execution function from 
-   * TIDL library. 
-   */
-  void TidlInit() {
-    if (!tidl_handle) {
-      // Load TIDL shared library
-      dlerror();
-      tidl_handle = dlopen("libtidl_api.so", RTLD_NOW | RTLD_GLOBAL);
-      const char* dlsym_error1 = dlerror();
-      if (dlsym_error1) {
-        LOG(FATAL) << "Cannot open libtidl_api.so! " << dlsym_error1 << '\n';
-      }
-      // Load TIDL subgraph execution function
-      dlerror();
-      tidl_subgraph = (tidl_subgraph_t)dlsym(tidl_handle, "TidlRunSubgraph");
-      const char* dlsym_error2 = dlerror();
-      if (dlsym_error2) {
-        LOG(FATAL) << "Cannot load symbol 'TidlRunSubgraph': " << dlsym_error2 << '\n';
-        dlclose(tidl_handle);
-      }
-    }
-  }
-
-  /*!
-   * \brief Provides a packed function for TVM runtime to execute,
-   *  when TVM runtime wants to execute a subgraph with "tidl_" tag.
-   * \param name Subgraph name which contains "tidl_" prefix if the subgraph is
-   *  to run on TIDL.
-   */
-  PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& sptr_to_self) final {
-    if (name.find("tidl_") == std::string::npos) {
-      return PackedFunc(nullptr);
-    }
-
-    if (name.find("tidl_get_custom_data_") != std::string::npos) {
-      return PackedFunc(nullptr);
-    }
-
-    TidlInit();
-
-    return PackedFunc([this, name](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-      std::string subgraph_name = (std::string)name;
-      // Get subgraph id which is after "tidl_" (5 characters)
-      int subgraph_id = std::stoi(subgraph_name.erase(0, 5));
-      // Get batch size of input data
-      void* arg0 = args[0];
-      DLTensor* tensor = reinterpret_cast<DLTensor*>(arg0);
-      const int batch_size = tensor->shape[0];
-      // Prepare input and output tensors for TIDL to execute on
-      int num_inputs = num_inputs_[name];
-      int num_outputs = num_outputs_[name];
-      std::vector<float*> inputs;
-      std::vector<float*> outputs;
-      for (int batch = 0; batch < batch_size; batch++) {
-        for (int i = 0; i < num_inputs; i++) {
-          inputs.push_back(GetTensorAddress(args[i], batch));
-        }
-
-        for (int i = 0; i < num_outputs; i++) {
-          outputs.push_back(GetTensorAddress(args[num_inputs + i], batch));
-        }
-      }
-      // Execute the subgraph on TIDL
-      tidl_subgraph(total_subgraphs_, subgraph_id, batch_size, num_inputs,
-                    num_outputs, &inputs[0], &outputs[0]);
-    });
-  }
-
-  const char* type_key() const { return "tidl"; }
-
-  float* GetTensorAddress(void* arg, int batch) {
-    DLTensor* tensor = reinterpret_cast<DLTensor*>(arg);
-    int tensor_size = 1;
-    for (int dim = 1; dim < tensor->ndim; dim++) {
-      tensor_size *= tensor->shape[dim];
-    }
-    float* tensor_ptr = reinterpret_cast<float*>(tensor->data);
-    return (&(tensor_ptr[batch * tensor_size]));
-  }
-
-  void ToJSON(std::ostringstream& os,
-              int total_subgraphs,
-              const std::unordered_map<std::string, int>& num_inputs_,
-              const std::unordered_map<std::string, int>& num_outputs_)
-  {
-    dmlc::JSONWriter writer(&os);
-    writer.BeginObject();
-    writer.WriteObjectKeyValue("total subgraphs", total_subgraphs);
-    writer.WriteObjectKeyValue("subgraph inputs", num_inputs_);
-    writer.WriteObjectKeyValue("subgraph outputs", num_outputs_);
-    writer.EndObject();
-  }
-
-  void SaveToFile(const std::string& file_name,
-                  const std::string& format) final {
-    std::string fmt = runtime::GetFileFormat(file_name, format);
-    CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
-
-    std::ostringstream os;
-    os << "J6";
-    ToJSON(os, total_subgraphs_, num_inputs_, num_outputs_);
-    SaveBinaryToFile(file_name, os.str());
-  }
-
-  void SaveToBinary(dmlc::Stream* stream) final {
-    std::ostringstream os;
-    os << "J6";
-    ToJSON(os, total_subgraphs_, num_inputs_, num_outputs_);
-    stream->Write(os.str());
-  }
-
-  static Module FromJSON(std::istringstream& graph_stream) {
-
-    int total_subgraphs;
-    std::unordered_map<std::string, int> num_inputs;
-    std::unordered_map<std::string, int> num_outputs;
-
-    dmlc::JSONReader reader(&graph_stream);
-    dmlc::JSONObjectReadHelper helper;
-    // Read total subgraphs
-    helper.DeclareField("total subgraphs", &total_subgraphs);
-    // Read num_inputs
-    helper.DeclareField("subgraph inputs", &num_inputs);
-    // Read num_outputs
-    helper.DeclareField("subgraph outputs",&num_outputs);
-    helper.ReadAllFields(&reader);
-
-    return TIDLJ6ModuleCreate(total_subgraphs, num_inputs, num_outputs);
-  }
-
-
- private:
-  int total_subgraphs_;
-  std::unordered_map<std::string, int> num_inputs_;
-  std::unordered_map<std::string, int> num_outputs_;
-  void* tidl_handle;
-  tidl_subgraph_t tidl_subgraph;
-};
-
 int32_t TIDLVprintf(const char * format, va_list arg)
 {
   printf("TIDLVprintf format=%s\n", format);
@@ -860,7 +705,7 @@ private:
 };
 
 
-// Loads a TIDL (J6 or J7) module from a file. As far as I know this function is
+// Loads a TIDL module from a file. As far as I know this function is
 // never called because the module is always embedded as a binary in the DSO
 // module.
 static Module LoadFromFile(const std::string& path) {
@@ -874,9 +719,7 @@ static Module LoadFromFile(const std::string& path) {
   std::istringstream graph_stream(graph_info);
   char keyword[3];
   graph_stream.get(keyword, 3);
-  if (!strcmp(keyword, "J6"))
-    return TIDLJ6Module::FromJSON(graph_stream);
-  else if (!strcmp(keyword, "J7"))
+  if (!strcmp(keyword, "J7"))
     return TIDLJ7Module::FromJSON(graph_stream);
   else if (!strcmp(keyword, "C7"))
     return TIDLJ7C7xModule::FromJSON(graph_stream);
@@ -886,20 +729,18 @@ static Module LoadFromFile(const std::string& path) {
   }
 }
 
-// Loads a TIDL (J6 or J7) module from a binary
+// Loads a TIDL module from a binary
 static Module LoadFromBinary(void* strm) {
   // Read the stream into a string. Seems like we should be able to avoid this ...
   dmlc::Stream* stream = static_cast<dmlc::Stream*>(strm);
   std::string graph_info;
   stream->Read(&graph_info);
 
-  // Create an input string stream and read the keyword to determine J6 or J7
+  // Create an input string stream and read the keyword to determine J7 or C7
   std::istringstream graph_stream(graph_info);
   char keyword[3];
   graph_stream.get(keyword, 3);
-  if (!strcmp(keyword, "J6"))
-    return TIDLJ6Module::FromJSON(graph_stream);
-  else if (!strcmp(keyword, "J7"))
+  if (!strcmp(keyword, "J7"))
     return TIDLJ7Module::FromJSON(graph_stream);
   else if (!strcmp(keyword, "C7"))
     return TIDLJ7C7xModule::FromJSON(graph_stream);
@@ -984,14 +825,6 @@ void C7xTVMGraphInfo::Load(dmlc::JSONReader* reader) {
   helper.ReadAllFields(reader);
 
   c7x_deploy_mod = Base64Decode(c7x_deploy_mod_base64);
-}
-
-// Factory method to create a J6 TIDL Module
-Module TIDLJ6ModuleCreate(int total_subgraphs,
-                          const std::unordered_map<std::string, int>& num_inputs,
-                          const std::unordered_map<std::string, int>& num_outputs) {
-  auto n = make_object<TIDLJ6Module>(total_subgraphs, num_inputs, num_outputs);
-  return Module(n);
 }
 
 // Factory method to create a J7 TIDL Module

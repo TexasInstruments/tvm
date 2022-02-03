@@ -1303,7 +1303,7 @@ def subgraph_cfg_gen(artifacts_folder, subgraph_id, data_layout,
 
 def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_etypes,
                          temp_folder,
-                         net_file, params_file, platform="AM57", tensor_bits=8,
+                         net_file, params_file, platform, tensor_bits=8,
                          tidl_calib_flags=0, tidl_bias_calib_iters=50,
                          output_feature_16bit_names_list='', params_16bit_names_list=''):
     """ Run TIDL calibation for the imported subgraph.
@@ -1476,7 +1476,7 @@ class TIDLImport:
         Number of bits for tidl tensors (and consequently params on J7)
     """
     def __init__(self, import_lib, calib_tool, tidl_tools_path, artifacts_folder,
-                 tidl_target="tidl", tidl_platform="AM57", data_layout="NCHW",
+                 tidl_target="tidl", tidl_platform="J7", data_layout="NCHW",
                  tensor_bits=8, tidl_calib_flags=0, tidl_bias_calib_iters=50,
                  output_feature_16bit_names_list='', params_16bit_names_list=''):
         self.import_lib = import_lib
@@ -1850,34 +1850,21 @@ class TIDLImport:
             print('data layout ' + self.data_layout + ' is not supported')
             return False
 
-        if self.tidl_platform == "J7":
-            descr = (TensorDescriptor * (len(input_zps) + len(output_zps)))()
-            for i in range(len(input_zps)):
-                descr[i].scale = input_scale_invs[i]
-                descr[i].zp = input_zps[i]
-                descr[i].element_type = input_etypes[i]
-                (descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][1:4]
-                descr[i].name = bytes(input_names[i], 'utf-8')
-            for i in range(len(output_zps)):
-                descr[len(input_zps) + i].scale = output_scale_invs[i]
-                descr[len(input_zps) + i].zp = output_zps[i]
-                descr[len(input_zps) + i].element_type = output_etypes[i]
-            inout_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
-            import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
-            import_lib_init(subgraph_id, len(input_zps), len(output_zps), inout_dscr_ptr, is_nchw,
-                            self.tensor_bits, self.tidl_tools_path, self.temp_folder)
-            return True
-
-        (channel, height, width) = input_shapes[0][1:4]
-        in_quant_factor = int(round(input_scale[0]*255))  # 255 is due to TIDL implementation
-        config_params = TIDLconfigParams(12, 50, in_quant_factor, input_signed[0],
-                                         channel, height, width)
-
-        # Invoking C library call to initialize TIDL import
-        import_lib_init = self.import_lib.tidlImportInit
-        import_lib_init.argtypes = (ctypes.POINTER(TIDLconfigParams), ctypes.c_char_p)
-        import_lib_init.restype = None
-        import_lib_init(config_params, layout)
+        descr = (TensorDescriptor * (len(input_zps) + len(output_zps)))()
+        for i in range(len(input_zps)):
+            descr[i].scale = input_scale_invs[i]
+            descr[i].zp = input_zps[i]
+            descr[i].element_type = input_etypes[i]
+            (descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][1:4]
+            descr[i].name = bytes(input_names[i], 'utf-8')
+        for i in range(len(output_zps)):
+            descr[len(input_zps) + i].scale = output_scale_invs[i]
+            descr[len(input_zps) + i].zp = output_zps[i]
+            descr[len(input_zps) + i].element_type = output_etypes[i]
+        inout_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
+        import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
+        import_lib_init(subgraph_id, len(input_zps), len(output_zps), inout_dscr_ptr, is_nchw,
+                        self.tensor_bits, self.tidl_tools_path, self.temp_folder)
 
         return True
 
@@ -1991,7 +1978,7 @@ class TIDLImport:
         if not status:
             return False
 
-        # (AM57) Common for all nodes:
+        # Common for all nodes:
         # fill tensor names, update consumer counts, link input/output tensors
         in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names,
                                          tidl_subgraph)
@@ -2038,13 +2025,8 @@ class TIDLImport:
                 nodes_for_this_data_layer = max_num_outputs_per_data_layer
                 this_is_the_last_one = False
 
-            if self.tidl_platform == "AM57":
-                import_lib_out_data = self.import_lib.tidlImportOutData
-                import_lib_out_data.argtype = ctypes.c_int
-                import_lib_out_data.restype = None
-            else:
-                import_lib_out_data = tvm.get_global_func(
-                                            "TIDL_relayImportOutDataLayer")
+            import_lib_out_data = tvm.get_global_func(
+                                        "TIDL_relayImportOutDataLayer")
             import_lib_out_data(nodes_for_this_data_layer)
 
             # prepare input/output nodes information for linking
@@ -2064,20 +2046,12 @@ class TIDLImport:
             in_out_nodes.out_nodes = ctypes.cast(out_tensors_char, ctypes.c_void_p)
             in_out_nodes.num_out_nodes = nodes_for_this_data_layer
 
-            if self.tidl_platform == "AM57":
-                import_lib_link_nodes = self.import_lib.tidlImportLinkNodes
-                import_lib_link_nodes.argtypes = (ctypes.POINTER(InOutNodes), ctypes.c_void_p)
-                import_lib_link_nodes.restype = ctypes.c_int
-                if import_lib_link_nodes(in_out_nodes, ctypes.POINTER(ctypes.c_int)()) == 0:
-                    status = False
-                    break
-            else:
-                import_lib_linknode = tvm.get_global_func(
-                                                "TIDL_relayImportLinkNode")
-                if import_lib_linknode(ctypes.cast(ctypes.byref(
-                                     in_out_nodes), ctypes.c_void_p)) != 0:
-                    status = False
-                    break
+            import_lib_linknode = tvm.get_global_func(
+                                            "TIDL_relayImportLinkNode")
+            if import_lib_linknode(ctypes.cast(ctypes.byref(
+                                 in_out_nodes), ctypes.c_void_p)) != 0:
+                status = False
+                break
 
             imported_nodes = imported_nodes + nodes_for_this_data_layer
             new_node_ind = new_node_ind + 1
@@ -2158,9 +2132,6 @@ class TIDLImport:
             output_etype_list = obtain_tensor_etype(output_names, relay_etypes)
             if not input_fp_list:
                 return import_fail
-            if self.tidl_platform == "AM57" and len(input_fp_list[0]) > 1:
-                print("Error - only 1 input tensor is supported for AM57x (J6)!")
-                return import_fail
 
             # Quantize input tensors
             input_quant_vec_list, input_scale, input_signed = \
@@ -2217,21 +2188,10 @@ class TIDLImport:
             par_file = os.path.join(self.artifacts_folder,
                                     'tidl_subgraph'+str(subgraph_id)+'_params.bin')
 
-            if self.tidl_platform == "AM57":
-                import_lib_optimize = self.import_lib.tidlImportOptimize
-                import_lib_optimize.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int)
-                import_lib_optimize.restype = ctypes.c_int
-                net_fname = net_file.encode('utf-8')
-                par_fname = par_file.encode('utf-8')
-
-                if import_lib_optimize(net_fname, par_fname, subgraph_id) == 0:
-                    print('TIDL import optimization failed')
-                    return import_fail
-            else:  # == "J7"
-                import_lib_optimize = tvm.get_global_func("TIDL_relayOptimizeNet")
-                if import_lib_optimize() != 0:
-                    print('TIDL import optimization failed')
-                    return import_fail
+            import_lib_optimize = tvm.get_global_func("TIDL_relayOptimizeNet")
+            if import_lib_optimize() != 0:
+                print('TIDL import optimization failed')
+                return import_fail
 
             # Calibrate TIDL for the imported subgraph
             status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
@@ -2243,37 +2203,12 @@ class TIDLImport:
                                      self.params_16bit_names_list)
 
             self.info_dict['subgraphs'].append(subgraph_info_dict)
-            if self.tidl_platform == "J7":
-                if status:
-                    mod[tidl_subgraph] = self.mark_tidl_layers(subgraph, subgraph_id,
-                                                               all_nodes_tidl)
-                    continue  # import next subgraph
-                else:
-                    return import_fail
-            if not status:
+            if status:
+                mod[tidl_subgraph] = self.mark_tidl_layers(subgraph, subgraph_id,
+                                                            all_nodes_tidl)
+                continue  # import next subgraph
+            else:
                 return import_fail
-
-            # AM57x (J6) only: Calculate scaling factor to convert output tensor to floating point
-            # Obtain output tensor from TVM graph execution
-            output_fp = output_fp_list[0]
-
-            # TODO: convert following lines into a function
-            if output_fp is None:
-                return import_fail
-            if len(output_fp) != len(out_data_q):
-                return import_fail
-            output_signed = []
-            output_scale = []
-            for tensor in output_fp:
-                # Find out if this output tensor is signed or unsigned
-                output_signed.append(int(np.amin(tensor) < 0))
-            for data_q in out_data_q:
-                # Change data Q to scale - 255 is TIDL implementation specific
-                output_scale.append(round(data_q/255.0, 5))
-
-            # Generate subgraph configuration file
-            subgraph_cfg_gen(self.artifacts_folder, subgraph_id, self.data_layout,
-                             input_scale[0], input_signed[0], output_scale, output_signed)
 
         with open(os.path.join(self.temp_folder, "relay.nfo"), "w") as of:
             json.dump(self.info_dict, of, indent=4)
@@ -2363,10 +2298,10 @@ class TIDLAnnotation:
         if tidl_annotations_registered:
             return
 
-        # Register J7/J6 common operators which are always supported
+        # Register common operators which are always supported
         self._register_supported_op("nn.relu")
 
-        # Register J7/J6 common operators which are supported with same constraints
+        # Register common operators which are supported with same constraints
         @tvm.ir.register_op_attr("reshape", "target.tidl")
         def reshape_allow_fn(expr):
             """Register standalone reshape if it is a flattening function """
@@ -2394,7 +2329,7 @@ class TIDLAnnotation:
             else:
                 return False
 
-        # Register J7/J6 common operators which are supported with different constraints
+        # Register common operators which are supported with different constraints
         self._register_constrained_op("argmax")
         self._register_constrained_op("nn.avg_pool2d")
         self._register_constrained_op("nn.batch_flatten")
@@ -2409,44 +2344,31 @@ class TIDLAnnotation:
         self._register_constrained_op("concatenate")
         self._register_constrained_op("mean")          # 'mean' mapped to avg_pooling layer
 
-        # Register J7 specific operators, or those supported standalone by J7 but not J6,
+        # Register J7 specific operators, or those supported standalone by J7,
         # or those for which there are no allow functions.
-        if self.tidl_platform == 'J7':
-            self._register_constrained_op("add")
-            self._register_constrained_op("nn.bias_add")
-            self._register_constrained_op("maximum")
-            self._register_constrained_op("minimum")
-            self._register_constrained_op("multiply")
-            self._register_constrained_op("divide")
-            self._register_constrained_op("split")
-            self._register_constrained_op("strided_slice")
-            self._register_constrained_op("image.resize")
-            # "clip" is supported with constraints in J7 but unsupported standalone in J6
-            self._register_constrained_op("clip")
-            self._register_supported_op("nn.leaky_relu")
-            self._register_supported_op("nn.prelu")
-            self._register_constrained_op("nn.upsampling")
-            self._register_constrained_op("nn.upsampling3d")
-            self._register_constrained_op("qnn.conv2d")
-            self._register_constrained_op("qnn.requantize")
-            self._register_constrained_op("qnn.add")
-            self._register_constrained_op("cast")
-            self._register_constrained_op("qnn.concatenate")
-            self._register_constrained_op("qnn.dense")
-            self._register_constrained_op("qnn.mul")
-            self._register_constrained_op("nn.pad")
-
-        # Register operators that are J6 specific or have constraints only for J6
-        if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
-            self._register_supported_op("nn.dropout")
-            self._register_constrained_op("max")           # 'max' mapped to max_pooling layer
-            @tvm.ir.register_op_attr("add", "target.tidl")
-            def add_allow_fn(expr):
-                attrs, args = expr.attrs, expr.args
-                if any([isinstance(arg, tvm.relay.expr.Constant) for arg in args]):
-                    # This is the same as "bias_add" which is not supported standalone.
-                    return False
-                return True
+        self._register_constrained_op("add")
+        self._register_constrained_op("nn.bias_add")
+        self._register_constrained_op("maximum")
+        self._register_constrained_op("minimum")
+        self._register_constrained_op("multiply")
+        self._register_constrained_op("divide")
+        self._register_constrained_op("split")
+        self._register_constrained_op("strided_slice")
+        self._register_constrained_op("image.resize")
+        # "clip" is supported with constraints in J7
+        self._register_constrained_op("clip")
+        self._register_supported_op("nn.leaky_relu")
+        self._register_supported_op("nn.prelu")
+        self._register_constrained_op("nn.upsampling")
+        self._register_constrained_op("nn.upsampling3d")
+        self._register_constrained_op("qnn.conv2d")
+        self._register_constrained_op("qnn.requantize")
+        self._register_constrained_op("qnn.add")
+        self._register_constrained_op("cast")
+        self._register_constrained_op("qnn.concatenate")
+        self._register_constrained_op("qnn.dense")
+        self._register_constrained_op("qnn.mul")
+        self._register_constrained_op("nn.pad")
 
         tidl_annotations_registered = True
 
@@ -2489,256 +2411,12 @@ class TIDLAnnotation:
             else:
                 return False
 
-        #pad has to precede conv2d, (conv2d, bias_add), or (conv2d, add)
-        def _pad_conv2d_pattern():
-            pad_out = is_op('nn.pad')(wildcard())
-            conv2d_out = is_op('nn.conv2d')(pad_out, is_constant())
-            return conv2d_out
-        def _pad_conv2d_checker(extract):
-            if self._user_denied('nn.pad', 'nn.conv2d'):
-                return False
-            pad_op = extract.args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op)
-            conv2d_supported = self.allow_func('nn.conv2d', extract)
-            return conv2d_supported and pad_supported
-
-        # common patterns required by J7 or J6
-        pattern_table_common = [
+        # common patterns
+        pattern_table = [
             ('tidl.squeeze_reshape', _squeeze_reshape_pattern(), _squeeze_reshape_checker),
-        ]
-
-        # additional patterns required by J6
-        #bias_add has be preceded by conv2d or (pad, conv2d)
-        def _conv2d_bias_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
-            return bias_out
-        def _conv2d_bias_checker(extract):
-            if self._user_denied('nn.conv2d', 'nn.bias_add'):
-                return False
-            op = extract.args[0]
-            return self.allow_func('nn.conv2d', op)
-        def _conv2d_add_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            add_out = is_op('add')(conv2d_out, is_constant())
-            return add_out
-        def _conv2d_add_checker(extract):
-            if self._user_denied('nn.conv2d', 'add'):
-                return False
-            op = extract.args[0]
-            return self.allow_func('nn.conv2d', op)
-
-        def _pad_conv2d_bias_pattern():
-            pad_conv2d_out = _pad_conv2d_pattern()
-            bias_out = is_op('nn.bias_add')(pad_conv2d_out, is_constant())
-            return bias_out
-        def _pad_conv2d_bias_checker(extract):
-            if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add'):
-                return False
-            pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op)
-            conv2d_bias_supported = _conv2d_bias_checker(extract)
-            return conv2d_bias_supported and pad_supported
-
-        def _pad_conv2d_add_pattern():
-            pad_conv2d_out = _pad_conv2d_pattern()
-            add_out = is_op('add')(pad_conv2d_out, is_constant())
-            return add_out
-        def _pad_conv2d_add_checker(extract):
-            if _user_denied('nn.pad', 'nn.conv2d', 'add'):
-               return False
-            pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op)
-            conv2d_add_supported = _conv2d_add_checker(extract)
-            return conv2d_add_supported and pad_supported
-
-        #bias_add has to be preceded by dense
-        def _dense_bias_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            bias_out = is_op('nn.bias_add')(dense_out, is_constant())
-            return bias_out
-        def _dense_bias_checker(extract):
-            if self._user_denied('nn.dense', 'nn.bias_add'):
-                return False
-            op = extract.args[0]
-            return self.allow_func('nn.dense', op)
-
-        def _dense_add_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            add_out = is_op('add')(dense_out, is_constant())
-            return add_out
-        def _dense_add_checker(extract):
-            if self._user_denied('nn.dense', 'add'):
-                return False
-            op = extract.args[0]
-            return self.allow_func('nn.dense', op)
-
-        #relu6 has to be preceded by conv2d or (conv2d, bias_add)
-        def _relu6_check_fun(attrs): # clip(0, 6) is not supported standalone
-            supported = (float(attrs.a_min) == 0.0) and (float(attrs.a_max) == 6.0)
-            return supported
-
-        def _conv2d_relu6_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            relu6_out = is_op('clip')(conv2d_out)
-            return relu6_out
-        def _conv2d_relu6_checker(extract):
-            if self._user_denied('nn.conv2d', 'clip'):
-                return False
-            relu6_supported = _relu6_check_fun(extract.attrs)
-            op = extract.args[0]
-            return self.allow_func('nn.conv2d', op) and relu6_supported
-
-        def _conv2d_bias_relu6_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            bias_out = is_op('nn.bias_add')(conv2d_out, is_constant())
-            relu6_out = is_op('clip')(bias_out)
-            return relu6_out
-        def _conv2d_bias_relu6_checker(extract):
-            if self._user_denied('nn.conv2d', 'nn.bias_add', 'clip'):
-                return False
-            relu6_supported = _relu6_check_fun(extract.attrs)
-            op = extract.args[0].args[0]
-            return self.allow_func('nn.conv2d', op) and relu6_supported
-
-        def _conv2d_add_relu6_pattern():
-            conv2d_out = is_op('nn.conv2d')(wildcard(), is_constant())
-            # 'add' must be 'bias_add' in (conv2d, add, relu6) pattern
-            bias_add_out = is_op('add')(conv2d_out, is_constant())
-            relu6_out = is_op('clip')(bias_add_out)
-            return relu6_out
-        def _conv2d_add_relu6_checker(extract):
-            if self._user_denied('nn.conv2', 'add', 'clip'):
-                return False
-            return _conv2d_bias_relu6_checker(extract)
-
-        #relu6 has to be preceded by element-wise add, batch_norm, or dense
-        def _add_relu6_pattern():
-            # add must be element-wise add
-            add_out = is_op('add')(wildcard(), wildcard())
-            relu6_out = is_op('clip')(add_out)
-            return relu6_out
-        def _add_relu6_checker(extract):
-            if self._user_denied('add', 'clip'):
-                return False
-            relu6_supported = _relu6_check_fun(extract.attrs)
-            return relu6_supported
-
-        def _bn_relu6_pattern():
-            bn_out = is_op('nn.batch_norm')(wildcard(), wildcard(), wildcard(), wildcard(),
-                                            wildcard())
-            tuple_get_item_node = is_tuple_get_item(bn_out, 0)
-            relu6_out = is_op('clip')(tuple_get_item_node)
-            return relu6_out
-        def _bn_relu6_checker(extract):
-            if self._user_denied('nn.batch_norm', 'clip'):
-                return False
-            relu6_supported = _relu6_check_fun(extract.attrs)
-            bn_op = extract.args[0].tuple_value
-            bn_supported = self.allow_func('nn.batch_norm', bn_op)
-            return bn_supported and relu6_supported
-
-        def _dense_relu6_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            relu6_out = is_op('clip')(dense_out)
-            return relu6_out
-        def _dense_relu6_checker(extract):
-            if self._user_denied('nn.dense', 'clip'):
-                return False
-            relu6_supported = _relu6_check_fun(extract.attrs)
-            op = extract.args[0]
-            return self.allow_func('nn.dense', op) and relu6_supported
-
-        #relu6 can also be preceded by (dense, bias_add): 
-        #  (dense, bias_add, relu6) -> (dense, relu6) -> dense
-        def _dense_bias_relu6_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            bias_out = is_op('nn.bias_add')(dense_out, is_constant())
-            relu6_out = is_op('clip')(bias_out)
-            return relu6_out
-        def _dense_bias_relu6_checker(extract):
-            if self._user_denied('nn.dense', 'nn.bias_add', 'clip'):
-                return False
-            dense_op = extract.args[0].args[0]
-            relu6_supported = _relu6_check_fun(extract.attrs)
-            dense_supported = self.allow_func('nn.dense', dense_op)
-            return relu6_supported and dense_supported
-
-        def _dense_add_relu6_pattern():
-            dense_out = is_op('nn.dense')(wildcard(), is_constant())
-            bias_add_out = is_op('add')(dense_out, is_constant())
-            relu6_out = is_op('clip')(bias_add_out)
-            return relu6_out
-        def _dense_add_relu6_checker(extract):
-            if self._user_denied('nn.dense', 'add', 'clip'):
-                return False
-            return _dense_bias_relu6_checker(extract)
-
-        def _pad_conv2d_relu6_pattern():
-            _pad_conv2d_out = _pad_conv2d_pattern()
-            relu6_out = is_op('clip')(_pad_conv2d_out)
-            return relu6_out
-        def _pad_conv2d_relu6_checker(extract):
-            if self._user_denied('nn.pad', 'nn.conv2d', 'clip'):
-                return False
-            pad_op = extract.args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op)
-            return pad_supported and _conv2d_relu6_checker(extract)
-
-        def _pad_conv2d_bias_relu6_pattern():
-            _pad_conv2d_bias_out = _pad_conv2d_bias_pattern()
-            relu6_out = is_op('clip')(_pad_conv2d_bias_out)
-            return relu6_out
-        def _pad_conv2d_bias_relu6_checker(extract):
-            if self._user_denied('nn.pad', 'nn.conv2d', 'nn.bias_add', 'clip'):
-                return False
-            pad_op = extract.args[0].args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op)
-            return pad_supported and _conv2d_bias_relu6_checker(extract)
-
-        def _pad_conv2d_add_relu6_pattern():
-            _pad_conv2d_add_out = _pad_conv2d_add_pattern()
-            relu6_out = is_op('clip')(_pad_conv2d_add_out)
-            return relu6_out
-        def _pad_conv2d_add_relu6_checker(extract):
-            if _user_denied('nn.pad', 'nn.conv2d', 'add', 'clip'):
-                return False
-            pad_op = extract.args[0].args[0].args[0]
-            pad_supported = self.allow_func('nn.pad', pad_op)
-            return pad_supported and _conv2d_add_relu6_checker(extract)
-
-        # additional patterns required by J6
-        pattern_table_j6 = [
-            ('tidl.pad_conv2d_bias_relu6', _pad_conv2d_bias_relu6_pattern(), _pad_conv2d_bias_relu6_checker),
-            ('tidl.pad_conv2d_add_relu6', _pad_conv2d_add_relu6_pattern(), _pad_conv2d_add_relu6_checker),
-            ('tidl.pad_conv2d_relu6', _pad_conv2d_relu6_pattern(), _pad_conv2d_relu6_checker),
-            ('tidl.conv2d_bias_relu6', _conv2d_bias_relu6_pattern(), _conv2d_bias_relu6_checker),
-            ('tidl.conv2d_add_relu6', _conv2d_add_relu6_pattern(), _conv2d_add_relu6_checker),
-            ('tidl.conv2d_relu6', _conv2d_relu6_pattern(), _conv2d_relu6_checker),
-            ('tidl.dense_bias_relu6', _dense_bias_relu6_pattern(), _dense_bias_relu6_checker),
-            ('tidl.dense_add_relu6', _dense_add_relu6_pattern(), _dense_add_relu6_checker),
-            ('tidl.dense_relu6', _dense_relu6_pattern(), _dense_relu6_checker),
-            ('tidl.add_relu6', _add_relu6_pattern(), _add_relu6_checker),
-            ('tidl.bn_relu6', _bn_relu6_pattern(), _bn_relu6_checker),
-            ('tidl.pad_conv2d_bias', _pad_conv2d_bias_pattern(), _pad_conv2d_bias_checker),
-            ('tidl.pad_conv2d_add', _pad_conv2d_add_pattern(), _pad_conv2d_add_checker),
-            ('tidl.conv2d_bias', _conv2d_bias_pattern(), _conv2d_bias_checker),
-            ('tidl.conv2d_add', _conv2d_add_pattern(), _conv2d_add_checker),
-            ('tidl.dense_bias', _dense_bias_pattern(), _dense_bias_checker),
-            ('tidl.dense_add', _dense_add_pattern(), _dense_add_checker),
-        ]
-
-        # additional patterns required by J7
-        pattern_table_j7 = [
             ('tidl.transpose_reshape', _transpose_reshape_pattern(), _transpose_reshape_checker),
         ]
 
-        if self.tidl_platform == 'AM57':  # J6 is known as 'AM57'
-            # conv2d_bias_relu6/conv2d_add_relu6 must precede conv2d_bias/conv2d_add in the table
-            # dense_bias_relu6/dense_add_relu6 must precede dense_bias/dense_add in the table
-            pattern_table = pattern_table_j6 + pattern_table_common
-        else:
-            pattern_table = pattern_table_j7 + pattern_table_common
         return relay.transform.MergeComposite(pattern_table)(mod)
 
     # Helper functions
@@ -2774,14 +2452,7 @@ class TIDLAnnotation:
         return _func_wrapper
 
     def allow_func(self, op_name, expr):
-        """ Allow function for operators with different constraints for J7 and J6 """
-        if self.tidl_platform == "J7":
-            return self.allow_fn_j7(op_name, expr)
-        else:
-            return self.allow_fn_j6(op_name, expr)
-
-    def allow_fn_j7(self, op_name, expr):
-        """ Allow function for J7: constraint checking is delegated to the import library """
+        """ Allow function: constraint checking is delegated to the import library """
 
         if self.import_lib is None:
             # For CI testing which doesn't have import library - still run TVM passes
@@ -2791,150 +2462,6 @@ class TIDLAnnotation:
         #print(f"Invoking TIDL Relay Import allow function for {op_name}")
         allow_fn = tvm.get_global_func("TIDL_relayAllowNode")
         return allow_fn(expr)
-
-    def allow_fn_j6(self, op_name, expr):
-        """ Allow function for J6: checking operator attributes against constraints """
-
-        def argmax_allow_fn(attrs, args):
-            keepdims = attrs.keepdims
-            exclude = attrs.exclude
-            axis = attrs.axis
-            data = args[0]
-            data_shape = data.checked_type.shape
-            supported = (int(data_shape[1]) <= 15 and keepdims == 1 and axis == 1 and exclude == 0)
-            return supported
-
-        def avg_pool_allow_fn(attrs, args):
-            pool_size = get_const_tuple(attrs.pool_size)
-            strides = get_const_tuple(attrs.strides)
-            supported = (pool_size[0] <= 9 and pool_size[1] <= 9 \
-                         and strides[0] <= 3 and strides[1] <= 2)
-            return supported
-
-        def batch_flatten_allow_fn(attrs, args):
-            data = args[0]
-            data_shape = data.checked_type.shape
-            if len(data_shape) == 4:
-                supported = (int(data_shape[2]) <= 65535 and int(data_shape[3]) <= 65535)
-            else:
-                supported = True
-            return supported
-
-        def batch_norm_allow_fn(attrs, args):
-            data1 = args[1]
-            if data1.checked_type.dtype != 'float32':
-                supported = False
-            elif attrs.axis != 1 and attrs.axis != 3:
-                supported = False
-            else:
-                supported = True
-            return supported
-
-        def get_conv2d_num_channels(kernel_layout, weight_shape):
-            """ Get number of input and output channels of conv2d """
-            if kernel_layout == 'OIHW':
-                (num_in_channels, num_out_channels) = (weight_shape[1], weight_shape[0])
-            elif kernel_layout == 'HWIO':
-                (num_in_channels, num_out_channels) = (weight_shape[2], weight_shape[3])
-            else: # 'HWOI'
-                (num_in_channels, num_out_channels) = (weight_shape[3], weight_shape[2])
-            return (num_in_channels, num_out_channels)
-
-        def conv2d_allow_fn(attrs, args):
-            weight = args[1]
-            if weight.checked_type.dtype != 'float32':
-                return False
-            if attrs.kernel_layout not in ('OIHW', 'HWIO', 'HWOI'):
-                return False
-
-            weight_shape = weight.data.shape
-            strides = get_const_tuple(attrs.strides)
-            dilation = get_const_tuple(attrs.dilation)
-            kernel_size = get_const_tuple(attrs.kernel_size)
-            (dh, dw) = dilation
-            (kh, kw) = kernel_size
-            (num_in_chs, num_out_chs) = get_conv2d_num_channels(attrs.kernel_layout, weight_shape)
-            channel_supported = (num_in_chs <= 2048 and num_out_chs <= 2048)
-            stride_supported = (strides[0] <= 2 and strides[1] <= 2)
-            dilation_supported = (dh in (1, 2, 4)) and (dw in (1, 2, 4))
-            kernel_supported = (((kh-1)*dh+1) <= 9) and (((kw-1)*dw+1) <= 9)
-            groups_supported = (attrs.groups <= 1024)
-            supported = channel_supported and stride_supported and dilation_supported \
-                        and kernel_supported and groups_supported
-            return supported
-
-        def conv2d_transpose_allow_fn(attrs, args):
-            if attrs.kernel_layout not in ('OIHW', 'HWIO', 'HWOI'):
-                return False
-            weight = args[1]
-            weight_shape = weight.data.shape
-            strides = get_const_tuple(attrs.strides)
-            (num_in_chs, num_out_chs) = get_conv2d_num_channels(attrs.kernel_layout, weight_shape)
-            supported = (num_in_chs == num_out_chs) and (num_in_chs == attrs.groups) \
-                        and (strides[1] == 2)
-            return supported
-
-        def dense_allow_fn(attrs, args):
-            weight = args[1]
-            weight_shape = weight.data.shape
-            (w_in, w_out) = (weight_shape[1], weight_shape[0])
-            supported = (w_in <= 65536) and (w_out <= 16384) and (w_in * w_out <= 67108864)
-            return supported
-
-        def global_avg_pool_allow_fn(attrs, args):
-            shape = list(map(int, args[0].checked_type.shape))
-            layout = attrs.layout
-            if layout == "NCHW":
-                (height, width) = (shape[2], shape[3])
-            else: # "NHWC"
-                (height, width) = (shape[1], shape[2])
-            supported = height * width <= 4096
-            return supported
-
-        def max_pool_allow_fn(attrs, args):
-            pool_size = get_const_tuple(attrs.pool_size)
-            strides = get_const_tuple(attrs.strides)
-            supported = (pool_size[0] <= 9) and (pool_size[1] <= 9) and (strides[0] <= 3) \
-                        and (strides[1] <= 2)
-            return supported
-
-        def softmax_allow_fn(attrs, args):
-            return (attrs.axis == -1)  # only support 1-D array softmax
-
-        def concatenate_allow_fn(attrs, args):
-            # Only support concatenate across channel
-            return (attrs.axis == 1) or (attrs.axis == 3)
-
-        def max_allow_fn(attrs, args):
-            axis = attrs.axis
-            supported = (attrs.exclude == False) and isinstance(axis, tvm.ir.container.Array) and \
-                        (len(axis) == 2) and ((int(axis[0]) == 1 and int(axis[1]) == 2) or \
-                                              (int(axis[0]) == 2 and int(axis[1]) == 3))
-            return supported
-
-        def mean_allow_fn(attrs, args):
-            return max_allow_fn(attrs, args)  # same constraints as "max"
-
-        def pad_allow_fn(attrs, args):
-            return (float(attrs.pad_value) == 0.0 and attrs.pad_mode == 'constant')
-
-        allow_funcs = {"argmax": argmax_allow_fn,
-                       "max": max_allow_fn,
-                       "mean": mean_allow_fn,
-                       "nn.avg_pool2d": avg_pool_allow_fn,
-                       "nn.batch_flatten": batch_flatten_allow_fn,
-                       "nn.batch_norm": batch_norm_allow_fn,
-                       "nn.conv2d": conv2d_allow_fn,
-                       "nn.conv2d_transpose": conv2d_transpose_allow_fn,
-                       "nn.dense": dense_allow_fn,
-                       "nn.global_avg_pool2d": global_avg_pool_allow_fn,
-                       "nn.max_pool2d": max_pool_allow_fn,
-                       "nn.softmax": softmax_allow_fn,
-                       "concatenate": concatenate_allow_fn,
-                       "nn.pad": pad_allow_fn,
-                       }
-        #print("allowing " + op_name)
-        return allow_funcs[op_name](expr.attrs, expr.args)
 
 class TIDLCompiler:
     """TIDL compiler module.
@@ -3031,30 +2558,7 @@ class TIDLCompiler:
     def __init__(self, platform="J7", version="7.3", max_num_layers=225, max_total_memory_mb=448, **kwargs):
         self.tidl_platform = platform
         self.version = version
-        if platform == "AM57": # and float(verion) >= 6.3:
-            # Set default values for AM57 6.3
-            self.tidl_target = "tidl"
-            self.num_tidl_subgraphs = 1
-            self.artifacts_folder = None
-            self.tidl_calib_flags = 0
-            self.tidl_bias_calib_iters = 50
-            self.tidl_tools_path = None
-            self.tensor_bits = 8
-            self.deny_list = []
-            self.debug_level = None
-            # Read arguments provided through regular args
-            self.max_num_layers = max_num_layers
-            self.max_total_memory_mb = max_total_memory_mb
-            # Read arguments provided through **kwargs
-            for key in ('num_tidl_subgraphs', 'artifacts_folder', 'tidl_tools_path', 'deny_list'):
-                if key in kwargs:
-                    setattr(self, key, kwargs[key])
-            self.tidl_calib_tool = os.path.join(self.tidl_tools_path,
-                                                "eve_test_dl_algo_ref.out")
-            self.tidl_import_lib = os.path.join(self.tidl_tools_path,
-                                                "tidl_relayImport.so")
-            self.max_num_subgraphs = self.num_tidl_subgraphs;
-        elif platform == "J7": # and float(version) >= 7.3:
+        if platform == "J7": # and float(version) >= 7.3:
             # Set default values for J7, PSDK 7.0 or newer
             self.tidl_target = "tidl"
             self.tidl_tools_path = None
@@ -3109,7 +2613,7 @@ class TIDLCompiler:
                                      (8 if (calib_options['channel_wise_quantization'] == 1) else 0)
                                     )
         else:
-            sys.exit("Unsupported TIDL platform or version!")
+            sys.exit("Unsupported TIDL platform: " + platform)
         assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
         self.temp_folder = os.path.join(self.artifacts_folder, 'tempDir/')
         if self.debug_level:
@@ -3165,13 +2669,12 @@ class TIDLCompiler:
         # Open TIDL import library
         if os.path.exists(self.tidl_import_lib):
             import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
-            if self.tidl_platform == "J7":
-                tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
-                is_nchw = data_layout == "NCHW"
-                quant_style = 3 if (self.quantization_scale_type == 1) else 2
-                hires = 1 if (self.high_resolution_optimization == 1) else 0
-                tidl_relay_init(is_nchw, self.tensor_bits, quant_style, hires,
-                                self.pre_batchnorm_fold, self.ti_internal_nc_flag)
+            tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
+            is_nchw = data_layout == "NCHW"
+            quant_style = 3 if (self.quantization_scale_type == 1) else 2
+            hires = 1 if (self.high_resolution_optimization == 1) else 0
+            tidl_relay_init(is_nchw, self.tensor_bits, quant_style, hires,
+                            self.pre_batchnorm_fold, self.ti_internal_nc_flag)
         else:
             import_lib = None # Continue with graph annotation and partition for CI testing
 
@@ -3215,13 +2718,8 @@ class TIDLCompiler:
         mod = relay.transform.PartitionGraph()(mod)
         with open(os.path.join(self.temp_folder, "relay_graph.partitioned.txt"), "w") as relay_txt:
             print(mod.astext(show_meta_data=False), file=relay_txt)
-        if self.tidl_platform == "AM57":
-            mod = prune_subgraphs_with_multiple_inputs(mod, compiler=self.tidl_target)
-            mod = reduce_subgraph_size(mod, max_num_layers=self.max_num_layers,
-                                       max_total_memory_mb=self.max_total_memory_mb)
-        if self.tidl_platform == "J7":
-            mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
-                                                                compiler=self.tidl_target)
+        mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
+                                                            compiler=self.tidl_target)
 
         mod = unpack_composites(mod)
         mod = relay.transform.InferType()(mod)
