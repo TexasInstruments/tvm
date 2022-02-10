@@ -27,7 +27,6 @@
 
 #include <tvm/arith/analyzer.h>
 #include <tvm/ir/module.h>
-#include <tvm/runtime/container.h>
 #include <tvm/target/codegen.h>
 #include <tvm/tir/analysis.h>
 #include <tvm/tir/expr.h>
@@ -152,6 +151,7 @@ class CodeGenLLVM : public ExprFunctor<llvm::Value*(const PrimExpr&)>,
   // stmt
   void VisitStmt_(const StoreNode* op) override;
   void VisitStmt_(const ForNode* op) override;
+  void VisitStmt_(const WhileNode* op) override;
   void VisitStmt_(const IfThenElseNode* op) override;
   void VisitStmt_(const AllocateNode* op) override;
   void VisitStmt_(const AttrStmtNode* op) override;

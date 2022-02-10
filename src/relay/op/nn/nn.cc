@@ -61,10 +61,10 @@ bool BiasAddRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
   if (axis < 0) {
     axis = data->shape.size() + axis;
   }
-  if (axis >= static_cast<int>(data->shape.size())) {
+  if (axis >= static_cast<int>(data->shape.size()) || axis < 0) {
     reporter->GetDiagCtx().EmitFatal(Diagnostic::Error(reporter->GetSpan())
                                      << "The axis in bias_add must be in range for the shape; "
-                                     << "attempted to access index " << axis << " of "
+                                     << "attempted to access index " << param->axis << " of "
                                      << PrettyPrint(data->shape));
     return false;
   }
@@ -274,17 +274,17 @@ bool PReluRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
 }
 
 template <typename T>
-Array<Array<Layout>> PReluInferCorrectLayout(const Attrs& attrs,
-                                             const Array<Layout>& new_in_layouts,
-                                             const Array<Layout>& old_in_layouts,
-                                             const Array<tvm::relay::Type>& old_in_types) {
+InferCorrectLayoutOutput PReluInferCorrectLayout(const Attrs& attrs,
+                                                 const Array<Layout>& new_in_layouts,
+                                                 const Array<Layout>& old_in_layouts,
+                                                 const Array<tvm::relay::Type>& old_in_types) {
   ICHECK_EQ(old_in_layouts.size(), 2U);
   ICHECK_EQ(old_in_types.size(), 2U);
   Layout data_layout = old_in_layouts[0];
   if (new_in_layouts.defined()) {
     ICHECK_EQ(new_in_layouts.size(), 2U);
   }
-  return Array<Array<Layout>>{{data_layout, Layout("C")}, {data_layout}};
+  return InferCorrectLayoutOutput({data_layout, Layout("C")}, {data_layout}, attrs);
 }
 
 // Positional relay function to create prelu operator used by frontend FFI.
@@ -590,6 +590,7 @@ The whole array is rescaled by ``1/(1-p)`` to keep the expected sum of the input
     .set_num_inputs(1)
     .add_argument("data", "Tensor", "Input to which dropout will be applied.")
     .set_support_level(1)
+    .set_attr<TOpPattern>("TOpPattern", kOpaque)
     .set_attr<FInferCorrectLayout>("FInferCorrectLayout", ElemwiseArbitraryLayout)
     .add_type_rel("Dropout", DropoutRel)
     .set_attr<TOpIsStateful>("TOpIsStateful", true);
@@ -597,11 +598,13 @@ The whole array is rescaled by ``1/(1-p)`` to keep the expected sum of the input
 // batch_norm
 TVM_REGISTER_NODE_TYPE(BatchNormAttrs);
 
-Array<Array<Layout>> BatchNormInferCorrectLayout(const Attrs& attrs,
-                                                 const Array<Layout>& new_in_layouts,
-                                                 const Array<Layout>& old_in_layouts,
-                                                 const Array<tvm::relay::Type>& old_in_types) {
-  BatchNormAttrs* param = const_cast<BatchNormAttrs*>(attrs.as<BatchNormAttrs>());
+InferCorrectLayoutOutput BatchNormInferCorrectLayout(const Attrs& attrs,
+                                                     const Array<Layout>& new_in_layouts,
+                                                     const Array<Layout>& old_in_layouts,
+                                                     const Array<tvm::relay::Type>& old_in_types) {
+  const auto* attrs_ptr = attrs.as<BatchNormAttrs>();
+  ICHECK(attrs_ptr);
+  ObjectPtr<BatchNormAttrs> param = make_object<BatchNormAttrs>(*attrs_ptr);
 
   Array<Array<IndexExpr>> old_in_shapes;
   for (auto old_in_t : old_in_types) {
@@ -626,9 +629,8 @@ Array<Array<Layout>> BatchNormInferCorrectLayout(const Attrs& attrs,
   }
   // BN has 5 inputs, 3 outputs. The last 4 inputs and last 2 outputs have "C" layout.
   Layout c_layout = Layout("C");
-
-  return Array<Array<Layout>>{{ret, c_layout, c_layout, c_layout, c_layout},
-                              {ret, c_layout, c_layout}};
+  return InferCorrectLayoutOutput({ret, c_layout, c_layout, c_layout, c_layout},
+                                  {ret, c_layout, c_layout}, Attrs(param));
 }
 
 bool BatchNormRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
@@ -942,14 +944,19 @@ bool BatchMatmulRel(const Array<Type>& types, int num_inputs, const Attrs& attrs
     oshape.Set(2, y_shape[1]);
   }
 
+  DataType out_dtype = param->out_dtype;
+  if (out_dtype.bits() == 0) {
+    out_dtype = x->dtype;
+  }
   // assign output type
-  reporter->Assign(types[2], TensorType(oshape, x->dtype));
+  reporter->Assign(types[2], TensorType(oshape, out_dtype));
   return true;
 }
 
 // Positional relay function to create batch_matmul operator used by frontend FFI.
-Expr MakeBatchMatmul(Expr x, Expr y) {
+Expr MakeBatchMatmul(Expr x, Expr y, DataType out_dtype) {
   auto attrs = make_object<BatchMatmulAttrs>();
+  attrs->out_dtype = out_dtype;
   static const Op& op = Op::Get("nn.batch_matmul");
   return Call(op, {x, y}, Attrs(attrs), {});
 }

@@ -29,7 +29,7 @@ import tvm
 
 from tvm import relay
 from tvm import transform
-
+from tvm._ffi import registry
 
 # pylint: disable=invalid-name
 logger = logging.getLogger("TVMC")
@@ -59,6 +59,7 @@ def convert_graph_layout(mod, desired_layout):
     # conv2d as heavily-sensitive operators.
     desired_layouts = {
         "nn.conv2d": [desired_layout, "default"],
+        "nn.conv2d_transpose": [desired_layout, "default"],
         "qnn.conv2d": [desired_layout, "default"],
     }
 
@@ -96,11 +97,11 @@ def validate_targets(parse_targets):
         )
 
     tvm_targets = [t for t in targets if t in tvm_target_kinds]
-    if len(tvm_targets) > 1:
+    if len(tvm_targets) > 2:
         verbose_tvm_targets = ", ".join(tvm_targets)
         raise TVMCException(
-            f"Only one of the following targets can be used at a time. "
-            "Found: {verbose_tvm_targets}."
+            "Only two of the following targets can be used at a time. "
+            f"Found: {verbose_tvm_targets}."
         )
 
 
@@ -131,9 +132,19 @@ def tokenize_target(target):
         a list of parsed tokens extracted from the target string
     """
 
+    # Regex to tokenize the "--target" value. It is split into five parts
+    # to match with:
+    #  1. target and option names e.g. llvm, -mattr=, -mcpu=
+    #  2. option values, all together, without quotes e.g. -mattr=+foo,+opt
+    #  3. option values, when single quotes are used e.g. -mattr='+foo, +opt'
+    #  4. option values, when double quotes are used e.g. -mattr="+foo ,+opt"
+    #  5. commas that separate different targets e.g. "my-target, llvm"
     target_pattern = (
         r"(\-{0,2}[\w\-]+\=?"
-        r"(?:[\w\+\-]+(?:,[\w\+\-])*|[\'][\w\+\-,\s]+[\']|[\"][\w\+\-,\s]+[\"])*|,)"
+        r"(?:[\w\+\-\.]+(?:,[\w\+\-\.])*"
+        r"|[\'][\w\+\-,\s\.]+[\']"
+        r"|[\"][\w\+\-,\s\.]+[\"])*"
+        r"|,)"
     )
 
     return re.findall(target_pattern, target)
@@ -188,6 +199,7 @@ def parse_target(target):
     """
     codegens = []
 
+    tvm_target_kinds = tvm.target.Target.list_kinds()
     parsed_tokens = tokenize_target(target)
 
     split_codegens = []
@@ -211,6 +223,7 @@ def parse_target(target):
     for codegen_def in split_codegens:
         # the first is expected to be the name
         name = codegen_def[0]
+        is_tvm_target = name in tvm_target_kinds
         raw_target = " ".join(codegen_def)
         all_opts = codegen_def[1:] if len(codegen_def) > 1 else []
         opts = {}
@@ -223,12 +236,19 @@ def parse_target(target):
                 else:
                     opt = opt[1:] if opt.startswith("-") else opt
                     opt_name, opt_value = opt.split("=", maxsplit=1)
+
+                    # remove quotes from the value: quotes are only parsed if they match,
+                    # so it is safe to assume that if the string starts with quote, it ends
+                    # with quote.
+                    opt_value = opt_value[1:-1] if opt_value[0] in ('"', "'") else opt_value
             except ValueError:
                 raise ValueError(f"Error when parsing '{opt}'")
 
             opts[opt_name] = opt_value
 
-        codegens.append({"name": name, "opts": opts, "raw": raw_target})
+        codegens.append(
+            {"name": name, "opts": opts, "raw": raw_target, "is_tvm_target": is_tvm_target}
+        )
 
     return codegens
 
@@ -265,7 +285,7 @@ def target_from_cli(target):
     """
     extra_targets = []
 
-    if os.path.exists(target):
+    if os.path.isfile(target):
         with open(target) as target_file:
             logger.debug("target input is a path: %s", target)
             target = "".join(target_file.readlines())
@@ -279,10 +299,21 @@ def target_from_cli(target):
             raise TVMCException(f"Error parsing target string '{target}'.\nThe error was: {ex}")
 
         validate_targets(parsed_targets)
-        target = parsed_targets[-1]["raw"]
-        extra_targets = parsed_targets[:-1] if len(parsed_targets) > 1 else []
+        tvm_targets = [t for t in parsed_targets if t["is_tvm_target"]]
 
-    return tvm.target.Target(target), extra_targets
+        # Validated target strings have 1 or 2 tvm targets, otherwise
+        # `validate_targets` above will fail.
+        if len(tvm_targets) == 1:
+            target = tvm_targets[0]["raw"]
+            target_host = None
+        else:
+            assert len(tvm_targets) == 2
+            target = tvm_targets[0]["raw"]
+            target_host = tvm_targets[1]["raw"]
+
+        extra_targets = [t for t in parsed_targets if not t["is_tvm_target"]]
+
+    return tvm.target.Target(target, host=target_host), extra_targets
 
 
 def tracker_host_port_from_cli(rpc_tracker_str):
@@ -316,6 +347,37 @@ def tracker_host_port_from_cli(rpc_tracker_str):
         logger.info("RPC tracker port: %s", rpc_port)
 
     return rpc_hostname, rpc_port
+
+
+def parse_pass_list_str(input_string):
+    """Parse an input string for existing passes
+
+    Parameters
+    ----------
+    input_string: str
+        Possibly comma-separated string with the names of passes
+
+    Returns
+    -------
+    list: a list of existing passes.
+    """
+    _prefix = "relay._transform."
+    pass_list = input_string.split(",")
+    missing_list = [
+        p.strip()
+        for p in pass_list
+        if len(p.strip()) > 0 and tvm.get_global_func(_prefix + p.strip(), True) is None
+    ]
+    if len(missing_list) > 0:
+        available_list = [
+            n[len(_prefix) :] for n in registry.list_global_func_names() if n.startswith(_prefix)
+        ]
+        raise argparse.ArgumentTypeError(
+            "Following passes are not registered within tvm: {}. Available: {}.".format(
+                ", ".join(missing_list), ", ".join(sorted(available_list))
+            )
+        )
+    return pass_list
 
 
 def parse_shape_string(inputs_string):
@@ -353,3 +415,103 @@ def parse_shape_string(inputs_string):
         shape_dict[name] = shape
 
     return shape_dict
+
+
+def get_pass_config_value(name, value, config_type):
+    """Get a PassContext configuration value, based on its config data type.
+
+    Parameters
+    ----------
+    name: str
+        config identifier name.
+    value: str
+        value assigned to the config, provided via command line.
+    config_type: str
+        data type defined to the config, as string.
+
+    Returns
+    -------
+    parsed_value: bool, int or str
+        a representation of the input value, converted to the type
+        specified by config_type.
+    """
+
+    if config_type == "IntImm":
+        # "Bool" configurations in the PassContext are recognized as
+        # IntImm, so deal with this case here
+        mapping_values = {
+            "false": False,
+            "true": True,
+        }
+
+        if value.isdigit():
+            parsed_value = int(value)
+        else:
+            # if not an int, accept only values on the mapping table, case insensitive
+            parsed_value = mapping_values.get(value.lower(), None)
+
+        if parsed_value is None:
+            raise TVMCException(f"Invalid value '{value}' for configuration '{name}'. ")
+
+    if config_type == "runtime.String":
+        parsed_value = value
+
+    return parsed_value
+
+
+def parse_configs(input_configs):
+    """Parse configuration values set via command line.
+
+    Parameters
+    ----------
+    input_configs: list of str
+        list of configurations provided via command line.
+
+    Returns
+    -------
+    pass_context_configs: dict
+        a dict containing key-value configs to be used in the PassContext.
+    """
+    if not input_configs:
+        return {}
+
+    all_configs = tvm.ir.transform.PassContext.list_configs()
+    supported_config_types = ("IntImm", "runtime.String")
+    supported_configs = [
+        name for name in all_configs.keys() if all_configs[name]["type"] in supported_config_types
+    ]
+
+    pass_context_configs = {}
+
+    for config in input_configs:
+        if not config:
+            raise TVMCException(
+                f"Invalid format for configuration '{config}', use <config>=<value>"
+            )
+
+        # Each config is expected to be provided as "name=value"
+        try:
+            name, value = config.split("=")
+            name = name.strip()
+            value = value.strip()
+        except ValueError:
+            raise TVMCException(
+                f"Invalid format for configuration '{config}', use <config>=<value>"
+            )
+
+        if name not in all_configs:
+            raise TVMCException(
+                f"Configuration '{name}' is not defined in TVM. "
+                f"These are the existing configurations: {', '.join(all_configs)}"
+            )
+
+        if name not in supported_configs:
+            raise TVMCException(
+                f"Configuration '{name}' uses a data type not supported by TVMC. "
+                f"The following configurations are supported: {', '.join(supported_configs)}"
+            )
+
+        parsed_value = get_pass_config_value(name, value, all_configs[name]["type"])
+        pass_context_configs[name] = parsed_value
+
+    return pass_context_configs

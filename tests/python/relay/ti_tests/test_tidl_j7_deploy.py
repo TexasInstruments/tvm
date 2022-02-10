@@ -46,7 +46,7 @@ if args.dlr:
     from dlr import DLRModel
 else:
     import tvm
-    from tvm.contrib import graph_runtime as runtime
+    from tvm.contrib import graph_executor as runtime
 
 ######################################################################
 # Load a test image

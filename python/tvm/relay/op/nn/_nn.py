@@ -142,6 +142,11 @@ def alter_op_layout_sparse_dense(attrs, inputs, tinfos, out_type):
     return topi.nn.sparse_dense_alter_layout(attrs, inputs, tinfos, out_type)
 
 
+# sparse_add
+reg.register_strategy("nn.sparse_add", strategy.sparse_add_strategy)
+reg.register_pattern("nn.sparse_add", reg.OpPattern.OPAQUE)
+
+
 @reg.register_compute("nn.internal.sparse_dense_padded")
 def compute_sparse_dense_padded(attrs, inputs, out_type):
     """Compute definition of sparse_dense_padded"""
@@ -161,6 +166,17 @@ def compute_sparse_transpose(attrs, inputs, out_type):
 
 reg.register_schedule("nn.sparse_transpose", strategy.schedule_sparse_transpose)
 reg.register_pattern("nn.sparse_transpose", reg.OpPattern.OUT_ELEMWISE_FUSABLE)
+
+
+# sparse_conv2d
+@reg.register_compute("nn.sparse_conv2d")
+def compute_sparse_conv2d(attrs, inputs, out_type):
+    """Compute definition of sparse_conv2d"""
+    return [topi.nn.sparse_conv2d(inputs[0], inputs[1], inputs[2], inputs[3], attrs["layout"])]
+
+
+reg.register_strategy("nn.sparse_conv2d", strategy.sparse_conv2d_strategy)
+reg.register_pattern("nn.sparse_conv2d", reg.OpPattern.OUT_ELEMWISE_FUSABLE)
 
 
 # conv1d
@@ -497,6 +513,16 @@ reg.register_pattern("nn.max_pool2d_grad", OpPattern.OUT_ELEMWISE_FUSABLE)
 # avg_pool2d_grad
 reg.register_schedule("nn.avg_pool2d_grad", strategy.schedule_pool_grad)
 reg.register_pattern("nn.avg_pool2d_grad", OpPattern.OUT_ELEMWISE_FUSABLE)
+
+
+# adaptive_max_pool1d
+reg.register_schedule("nn.adaptive_max_pool1d", strategy.schedule_adaptive_pool)
+reg.register_pattern("nn.adaptive_max_pool1d", OpPattern.OUT_ELEMWISE_FUSABLE)
+
+
+# adaptive_avg_pool1d
+reg.register_schedule("nn.adaptive_avg_pool1d", strategy.schedule_adaptive_pool)
+reg.register_pattern("nn.adaptive_avg_pool1d", OpPattern.OUT_ELEMWISE_FUSABLE)
 
 
 # global_max_pool2d

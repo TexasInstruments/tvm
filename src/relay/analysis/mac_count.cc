@@ -170,8 +170,8 @@ class MacCounter : private ExprVisitor {
  public:
   MacCounter() { count_ = 0; }
   static int64_t GetTotalMacNumber(const Expr& expr) {
-    LOG(INFO) << "This pass only counts MACs in direct conv2d (nn & qnn), "
-              << "conv2d_transpose, dense, and batch_matmul ops";
+    //LOG(INFO) << "This pass only counts MACs in direct conv2d (nn & qnn), "
+    //          << "conv2d_transpose, dense, and batch_matmul ops";
     MacCounter counter;
     counter(expr);
     return counter.count_;

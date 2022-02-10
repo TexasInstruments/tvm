@@ -26,12 +26,13 @@ Each statement node have subfields that can be visited from python side.
     assert isinstance(st, tvm.tir.stmt.Store)
     assert(st.buffer_var == a)
 """
-from typing import List, Optional, Mapping
 from enum import IntEnum
-import tvm._ffi
+from typing import List, Mapping, Optional, Union
 
-from tvm.runtime import Object
-from tvm.ir import Span, PrimExpr, Range
+import tvm._ffi
+from tvm.ir import PrimExpr, Range, Span
+from tvm.runtime import Object, const
+
 from . import _ffi_api
 from .buffer import Buffer
 from .expr import IterVar
@@ -155,6 +156,31 @@ class For(Stmt):
             body,
             thread_binding,
             annotations,
+            span,
+        )
+
+
+@tvm._ffi.register_object("tir.While")
+class While(Stmt):
+    """While node.
+
+    Parameters
+    ----------
+    condition : PrimExpr
+        The termination condition.
+
+    body : Stmt
+        The body statement.
+
+    span : Optional[Span]
+        The location of this itervar in the source code.
+    """
+
+    def __init__(self, condition, body, span=None):
+        self.__init_handle_by_constructor__(
+            _ffi_api.While,
+            condition,
+            body,
             span,
         )
 
@@ -564,7 +590,7 @@ class BlockRealize(Stmt):
     iter_values : List[PrimExpr]
         The binding values of the block var.
 
-    predicate : PrimExpr
+    predicate : Union[PrimExpr, bool]
         The predicate of the block.
 
     block : Block
@@ -582,12 +608,18 @@ class BlockRealize(Stmt):
     def __init__(
         self,
         iter_values: List[PrimExpr],
-        predicate: PrimExpr,
+        predicate: Union[PrimExpr, bool],
         block: Block,
         span: Optional[Span] = None,
     ):
+        if isinstance(predicate, bool):
+            predicate = const(predicate, "bool")
         self.__init_handle_by_constructor__(
-            _ffi_api.BlockRealize, iter_values, predicate, block, span
+            _ffi_api.BlockRealize,
+            iter_values,
+            predicate,
+            block,
+            span,
         )
 
 

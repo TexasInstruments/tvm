@@ -43,7 +43,7 @@ from .sparse_reshape import *
 from .scatter_add import *
 from .argwhere import *
 from .interpolate import *
-from .cumsum import *
+from .scan import *
 from .einsum import *
 from .unique import *
 from .mlas_op import *
@@ -62,6 +62,7 @@ from . import image
 from . import sparse
 from . import hls
 from . import random
+from . import c7x
 
 # error reporting
 from .utils import InvalidShapeError

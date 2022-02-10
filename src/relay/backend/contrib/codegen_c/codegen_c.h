@@ -27,7 +27,6 @@
 #include <tvm/relay/expr.h>
 #include <tvm/relay/function.h>
 #include <tvm/relay/op.h>
-#include <tvm/runtime/container.h>
 
 #include <sstream>
 #include <string>
@@ -343,6 +342,8 @@ class CodegenCBase {
     std::string dtype;
     if (runtime::TypeMatch(ttype->dtype, kDLFloat, 32)) {
       dtype = "float";
+    } else if (runtime::TypeMatch(ttype->dtype, kDLFloat, 16)) {
+      dtype = "half";
     } else if (runtime::TypeMatch(ttype->dtype, kDLInt, 32)) {
       dtype = "int";
     } else if (runtime::TypeMatch(ttype->dtype, kDLInt, 64)) {

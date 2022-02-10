@@ -30,6 +30,7 @@ SEMVER = '#[version = "0.0.5"]\n'
 
 def astext(program, unify_free_vars=False):
     text = program.astext()
+
     print(text)
     if isinstance(program, Expr):
         roundtrip_program = tvm.parser.parse_expr(text)
@@ -45,6 +46,17 @@ def show(text):
     if DEBUG_PRINT:
         print("---------------------------")
         print(text)
+
+
+def test_large_graph():
+    x = relay.var("x", shape=(3, 2))
+    y = relay.var("y")
+    one = relay.const(10e10, dtype="float32")
+    z = relay.add(x, one)
+    for i in range(int(1e6)):
+        z = relay.add(z, one)
+    f = relay.Function([x, y], z)
+    show(astext(f))
 
 
 def test_func():
@@ -179,11 +191,6 @@ def test_squeezenet():
     for version in ["1.0", "1.1"]:
         net, _ = tvm.relay.testing.squeezenet.get_workload(batch_size=1, version=version)
         astext(net)
-
-
-def test_vgg():
-    net, _ = tvm.relay.testing.vgg.get_workload(batch_size=1)
-    astext(net)
 
 
 def test_densenet():

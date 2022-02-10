@@ -800,10 +800,34 @@ def gradient(expr, mod=None, mode="higher_order"):
       The transformed expression.
     """
     if mode == "first_order":
-        return _ffi_api.first_order_gradient(expr, mod)
+        warnings.warn(
+            "using transform.gradient for first-order AD is deprecated, please use the"
+            "FirstOrderGradient module pass",
+            DeprecationWarning,
+        )
+        if mod is not None:
+            raise RuntimeError(
+                "to run first-order AD on a module, please use the FirstOrderGradient module pass."
+            )
+        return FirstOrderGradient()(tvm.IRModule.from_expr(expr))["main"]
     if mode == "higher_order":
         return _ffi_api.gradient(expr, mod)
     raise Exception("unknown mode")
+
+
+def FirstOrderGradient():
+    """
+    Transforms all global functions in the module to return the original result, paired with the
+    gradients of the inputs. This pass transforms each global function independently and does not
+    support interprocedural AD. Additionally, this pass does not support any control-flow or
+    references, and should only be used on pure data-flow graphs.
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered FirstOrderGradient pass.
+    """
+    return _ffi_api.FirstOrderGradient()
 
 
 def Defunctionalization(func, mod):
@@ -1068,6 +1092,29 @@ def DenseToSparse(weight_name, weight_shape):
     return _ffi_api.DenseToSparse(weight_name, weight_shape)
 
 
+def Conv2dToSparse(weight_name, weight_shape, layout):
+    """
+    Rewrite qualified ```nn.conv2d operation``` to ```nn.sparse_conv2d```
+
+    Parameters
+    ----------
+    weight_name: Array[String]
+      Names of weights which qualified sparse contrains
+
+    weight_shape: Array[Array[IntImm]]
+      Weights shape in BSR format.
+
+    layout : str
+        layout of data
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered DenseToSparse pass.
+    """
+    return _ffi_api.Conv2dToSparse(weight_name, weight_shape, layout)
+
+
 def SimplifyFCTranspose(target_weight_name):
     """
     Rewrite ```y = nn.dense(x, transpose(w, [1, 0]))``` to ```y = nn.dense(x, wt)```
@@ -1099,6 +1146,19 @@ def SimplifyExpr():
     return _ffi_api.SimplifyExpr()
 
 
+def FoldExplicitPadding():
+    """
+    FoldExplicitPadding finds explict padding before an op that can support
+    implicit padding and fuses them.
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered ImplicitPadding pass.
+    """
+    return _ffi_api.FoldExplicitPadding()
+
+
 def AnnotateSpans():
     """
     Annotate a program with span information by first generating its textual
@@ -1111,3 +1171,31 @@ def AnnotateSpans():
         The regsistered AnnotateSpans pass.
     """
     return _ffi_api.AnnotateSpans()
+
+
+def FakeQuantizationToInteger():
+    # pylint: disable=anomalous-backslash-in-string
+    """
+    Find regions of the graph of the form
+
+    x    w
+    |    |
+    dq   dq
+     \   /
+      op1
+       |
+      op2
+       |
+       q
+
+    where q == qnn.quantize and dq = qnn.dequantize
+    and rewrite them into integer versions of op1 and op2
+
+    Rules for rewriting indivdual ops are in fake_quantization_to_integer.py
+
+    Returns
+    -------
+    ret : tvm.transform.Pass
+        The registered SimplifyExpr pass.
+    """
+    return _ffi_api.FakeQuantizationToInteger()

@@ -99,6 +99,14 @@ void TensorRTBuilder::AddOutput(const JSONGraphNodeEntry& node, uint32_t entry_i
   ICHECK(it != node_output_map_.end()) << "Output was not found.";
   auto out_tensor = it->second[node.index_].tensor;
   std::string name = "tensorrt_output_" + std::to_string(network_output_names_.size());
+  // If the network is already marked as an input or output, make a copy to avoid TRT crash.
+  if (out_tensor->isNetworkOutput()) {
+    LOG(WARNING) << name << " is a duplicate output.";
+    out_tensor = network_->addIdentity(*out_tensor)->getOutput(0);
+  } else if (out_tensor->isNetworkInput()) {
+    LOG(WARNING) << name << " is both an input and an output.";
+    out_tensor = network_->addIdentity(*out_tensor)->getOutput(0);
+  }
   out_tensor->setName(name.c_str());
   network_->markOutput(*out_tensor);
   network_output_names_.push_back(name);
@@ -155,10 +163,19 @@ TensorRTEngineAndContext TensorRTBuilder::BuildEngine() {
     auto profile = builder_->createOptimizationProfile();
     for (int i = 0; i < network_->getNbInputs(); ++i) {
       auto name = network_->getInput(i)->getName();
-      auto dims = network_->getInput(i)->getDimensions();
-      profile->setDimensions(name, nvinfer1::OptProfileSelector::kMIN, dims);
+      const uint32_t entry_id = entry_id_map_[name];
+      std::vector<int64_t> shape(data_entry_[entry_id]->shape,
+                                 data_entry_[entry_id]->shape + data_entry_[entry_id]->ndim);
+      auto dims = VectorToTrtDims(shape);
+
       profile->setDimensions(name, nvinfer1::OptProfileSelector::kOPT, dims);
       profile->setDimensions(name, nvinfer1::OptProfileSelector::kMAX, dims);
+      // Set minimum batch size to 1 when dynamic batching is used.
+      if (network_->getInput(i)->getDimensions().nbDims >= 1 &&
+          network_->getInput(i)->getDimensions().d[0] == -1) {
+        dims.d[0] = 1;
+      }
+      profile->setDimensions(name, nvinfer1::OptProfileSelector::kMIN, dims);
     }
     config_->addOptimizationProfile(profile);
   }
@@ -175,7 +192,7 @@ TensorRTEngineAndContext TensorRTBuilder::BuildEngine() {
 
 nvinfer1::Weights TensorRTBuilder::GetDLTensorAsWeights(const DLTensor* dptr,
                                                         DLDeviceType src_device) {
-  ICHECK_EQ(dptr->ctx.device_type, src_device);
+  ICHECK_EQ(dptr->device.device_type, src_device);
   ICHECK(static_cast<int>(dptr->dtype.code) == kDLFloat ||
          static_cast<int>(dptr->dtype.code) == kDLInt);
   const auto trt_dtype = static_cast<int>(dptr->dtype.code) == kDLFloat

@@ -1,4 +1,14 @@
-{"vid_hex": "0483",
- "pid_hex": "374b",
- "test_cmd": ["pytest", "tests/micro/qemu/test_zephyr.py", "--microtvm-platforms=stm32f746xx"]
+{
+    "stm32f746xx": {
+        "vid_hex": "0483",
+        "pid_hex": "374b"
+        },
+    "nrf5340dk": {
+        "vid_hex": "1366",
+        "pid_hex": "1055"
+        },
+    "mps2_an521": {
+        "vid_hex": "",
+        "pid_hex": ""
+        }
 }

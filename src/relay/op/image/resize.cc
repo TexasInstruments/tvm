@@ -33,6 +33,31 @@ namespace relay {
 
 TVM_REGISTER_NODE_TYPE(ResizeAttrs);
 
+template <typename T>
+InferCorrectLayoutOutput ResizeInferCorrectLayout(const Attrs& attrs,
+                                                  const Array<Layout>& new_in_layouts,
+                                                  const Array<Layout>& old_in_layouts,
+                                                  const Array<tvm::relay::Type>& old_in_types) {
+  const auto* attrs_ptr = attrs.as<T>();
+  CHECK(attrs_ptr);
+  ObjectPtr<T> params = make_object<T>(*attrs_ptr);
+
+  if (new_in_layouts.defined()) {
+    ICHECK_EQ(new_in_layouts.size(), 1);
+
+    Layout raw_layout(params->layout);
+    Layout new_layout = new_in_layouts[0];
+    Layout old_layout = old_in_layouts[0];
+    if (!new_layout.Equals(old_layout) && raw_layout.Equals(old_layout) &&
+        new_layout->axes.size() == old_layout->axes.size()) {
+      // Follow input layout
+      params->layout = new_layout.name();
+    }
+  }
+
+  return InferCorrectLayoutOutput({params->layout}, {params->layout}, Attrs(params));
+}
+
 bool ResizeRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
                const TypeReporter& reporter) {
   ICHECK_EQ(types.size(), 2);
@@ -66,12 +91,16 @@ bool ResizeRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
 // Positional relay function to create image operator
 // used by frontend FFI.
 Expr MakeResize(Expr data, Array<IndexExpr> size, String layout, String method,
-                String coordinate_transformation_mode, DataType out_dtype) {
+                String coordinate_transformation_mode, String rounding_method, double bicubic_alpha,
+                int bicubic_exclude, DataType out_dtype) {
   auto attrs = make_object<ResizeAttrs>();
   attrs->size = std::move(size);
   attrs->layout = std::move(layout);
   attrs->method = std::move(method);
   attrs->coordinate_transformation_mode = coordinate_transformation_mode;
+  attrs->rounding_method = rounding_method;
+  attrs->bicubic_alpha = bicubic_alpha;
+  attrs->bicubic_exclude = bicubic_exclude;
   attrs->out_dtype = out_dtype;
   static const Op& op = Op::Get("image.resize");
   return Call(op, {data}, Attrs(attrs), {});

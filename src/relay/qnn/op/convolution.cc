@@ -88,21 +88,25 @@ bool QnnConv2DRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
   return Conv2DRel<Conv2DAttrs>(tensor_types, 3, attrs, reporter);
 }
 
-Array<Array<Layout>> QnnConvInferCorrectLayout(const Attrs& attrs,
-                                               const Array<Layout>& new_in_layouts,
-                                               const Array<Layout>& old_in_layouts,
-                                               const Array<tvm::relay::Type>& old_in_types) {
+InferCorrectLayoutOutput QnnConvInferCorrectLayout(const Attrs& attrs,
+                                                   const Array<Layout>& new_in_layouts,
+                                                   const Array<Layout>& old_in_layouts,
+                                                   const Array<tvm::relay::Type>& old_in_types) {
   // Use Relay Conv2D Infer correct layout.
-  auto layouts =
+  auto conv_new_layouts =
       ConvInferCorrectLayout<Conv2DAttrs>(attrs, new_in_layouts, old_in_layouts, old_in_types);
 
   // Fill the layouts of remaining input tensors - scales and zero points. The layouts of these
   // tensors can be treated as channel layout.
   Layout channel_layout = Layout("C");
-  Array<Layout> input_layouts = {layouts[0][0],  layouts[0][1],  channel_layout,
-                                 channel_layout, channel_layout, channel_layout};
-  Array<Layout> output_layouts = layouts[1];
-  return {input_layouts, output_layouts};
+  Array<Layout> input_layouts = {conv_new_layouts->input_layouts[0],
+                                 conv_new_layouts->input_layouts[1],
+                                 channel_layout,
+                                 channel_layout,
+                                 channel_layout,
+                                 channel_layout};
+  Array<Layout> output_layouts = conv_new_layouts->output_layouts;
+  return InferCorrectLayoutOutput(input_layouts, output_layouts, attrs);
 }
 
 bool is_depthwise(const Conv2DAttrs* param) {
@@ -234,8 +238,7 @@ Expr Conv2DPadInput(const Expr& data, const Expr& input_zero_point, const Conv2D
     } else {
       LOG(FATAL) << "qnn.conv2d does not support " << param->data_layout << " layout";
     }
-    auto pad_value = GetScalarFromConstant<int>(input_zero_point);
-    padded_data = Pad(data, pad_width, pad_value, "constant");
+    padded_data = Pad(data, pad_width, input_zero_point, "constant");
   }
   return padded_data;
 }
@@ -271,19 +274,19 @@ Expr DepthwiseConv2DSecondTerm(const Expr& padded_data, const Expr& kernel_zero_
     auto scaled_hw_t2 =
         Multiply(casted_t2, MakeConstantScalar(DataType::Int(32), kernel_h * kernel_w));
     Array<IndexExpr> padding({0, 0});
-    reduced_t2 =
-        AvgPool2D(scaled_hw_t2, param->kernel_size, param->strides, padding, param->data_layout,
-                  false,   // ceil_mode
-                  false);  // count_include_pad
+    reduced_t2 = AvgPool2D(scaled_hw_t2, param->kernel_size, param->strides, param->dilation,
+                           padding, param->data_layout,
+                           false,   // ceil_mode
+                           false);  // count_include_pad
   } else {
     int stride1 = get_const_int(param->strides[0]);
     int stride2 = get_const_int(param->strides[1]);
     if (stride1 * stride2 != 1) {
       Array<IndexExpr> padding({0, 0});
-      reduced_t2 =
-          AvgPool2D(reduced_t2, param->kernel_size, param->strides, padding, param->data_layout,
-                    false,   // ceil_mode
-                    false);  // count_include_pad
+      reduced_t2 = AvgPool2D(reduced_t2, param->kernel_size, param->strides, param->dilation,
+                             padding, param->data_layout,
+                             false,   // ceil_mode
+                             false);  // count_include_pad
     }
   }
 
@@ -436,18 +439,18 @@ Expr Conv2DSecondTerm(const Expr& padded_data, const Expr& kernel_zero_point,
   if (kernel_h * kernel_w != 1) {
     reduced_c_t2 =
         Multiply(reduced_c_t2, MakeConstantScalar(DataType::Int(32), kernel_h * kernel_w));
-    reduced_t2 =
-        AvgPool2D(reduced_c_t2, param->kernel_size, param->strides, padding, param->data_layout,
-                  false,   // ceil_mode
-                  false);  // count_include_pad
+    reduced_t2 = AvgPool2D(reduced_c_t2, param->kernel_size, param->strides, param->dilation,
+                           padding, param->data_layout,
+                           false,   // ceil_mode
+                           false);  // count_include_pad
   } else {
     int stride1 = get_const_int(param->strides[0]);
     int stride2 = get_const_int(param->strides[1]);
     if (stride1 * stride2 != 1) {
-      reduced_t2 =
-          AvgPool2D(reduced_c_t2, param->kernel_size, param->strides, padding, param->data_layout,
-                    false,   // ceil_mode
-                    false);  // count_include_pad
+      reduced_t2 = AvgPool2D(reduced_c_t2, param->kernel_size, param->strides, param->dilation,
+                             padding, param->data_layout,
+                             false,   // ceil_mode
+                             false);  // count_include_pad
     }
   }
 

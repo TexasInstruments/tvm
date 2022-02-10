@@ -34,20 +34,8 @@
 namespace tvm {
 namespace runtime {
 
-/*!
- * \brief Create a TIDLModule.
- * \param total_subgraphs Total number of subgraphs
- * \param num_inputs  Map of subgraph name to number of inputs
- * \param num_outputs Map of subgraph name to number of outputs
- * \return TIDLModule created from subgraphs.
- */
-Module TIDLJ6ModuleCreate(int total_subgraphs,
-                          const std::unordered_map<std::string, int>& num_inputs,
-                          const std::unordered_map<std::string, int>& num_outputs);
-
 // Class to pass information between the TIDL compiler and runtime module
-// classes. This is only used by J7 for now, but J6 could easily be refactored
-// to use the same approach.
+// classes.
 class TIDLSubgraphInfo {
  public:
   std::string net_data;
@@ -65,7 +53,24 @@ class TIDLSubgraphInfo {
   void Load(dmlc::JSONReader* reader);
 };
 
+// Class to pass information between the TIDL compiler and runtime module
+// classes for offloading whole graph to C7x TVM runtime.
+class C7xTVMGraphInfo {
+ public:
+  std::string c7x_deploy_mod;
+  std::vector<std::string> input_names;
+  std::vector<int32_t> tensor_sizes;
+
+  std::size_t NumInputs() const { return input_names.size(); }
+  std::size_t NumOutputs() const { return tensor_sizes.size() - input_names.size(); }
+
+  void Save(dmlc::JSONWriter* writer) const;
+  void Load(dmlc::JSONReader* reader);
+};
+
 Module TIDLJ7ModuleCreate(std::unordered_map<std::string, TIDLSubgraphInfo> infos);
+
+Module TIDLJ7C7xModuleCreate(std::unordered_map<std::string, C7xTVMGraphInfo> infos);
 
 }  // namespace runtime
 }  // namespace tvm

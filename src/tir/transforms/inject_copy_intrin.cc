@@ -46,9 +46,15 @@ class CopyIntrinInjector : public StmtMutator {
       const VarNode* buf = op->node.as<VarNode>();
       storage_scope_[buf] = op->value.as<StringImmNode>()->value;
     } else if (op->attr_key == pragma_key_) {
+      // TI Begin
+      // If the copy loop pattern does not conform to the pattern required for copy intrinsics,
+      // return the original copy loop body.
       Stmt ret;
-      ICHECK(MatchCopyPattern(op->body, &ret)) << "Cannot match copy pattern of " << op->body;
-      return ret;
+      if (MatchCopyPattern(op->body, &ret) == false)
+        return op->body;
+      else
+        return ret;
+      // TI End
     }
     return StmtMutator::VisitStmt_(op);
   }
@@ -154,7 +160,12 @@ class CopyIntrinInjector : public StmtMutator {
                         load->buffer_var->name_hint, GetStorageScope(load->buffer_var.get()), 0, 0,
                         kDefault);
     *out = flower_copy_fromto_(src, dst, pad_before, pad_after, pad_value);
-    ICHECK(out->defined()) << "flower function did not return correct stmt";
+    // TI Begin
+    // If the flower function does not create the correct statement, return false
+    if (!out->defined())
+      return false;
+    // TI End
+
     return true;
   }
   // Get storage scope

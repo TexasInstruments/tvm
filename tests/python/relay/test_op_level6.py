@@ -26,6 +26,7 @@ import tvm.testing
 @tvm.testing.uses_gpu
 def test_sort():
     def verify_sort(shape, axis, is_ascend, is_dyn=False):
+
         if is_dyn:
             x = relay.var("x", relay.TensorType([relay.Any()] * len(shape), "float32"))
         else:
@@ -42,12 +43,12 @@ def test_sort():
             backends = ["vm", "debug"]
         else:
             backends = ["graph", "debug"]
-        for target, ctx in tvm.testing.enabled_targets():
+        for target, dev in tvm.testing.enabled_targets():
             for kind in backends:
                 mod = tvm.ir.IRModule.from_expr(func)
-                intrp = relay.create_executor(kind, mod=mod, ctx=ctx, target=target)
+                intrp = relay.create_executor(kind, mod=mod, device=dev, target=target)
                 op_res = intrp.evaluate()(x_data)
-                tvm.testing.assert_allclose(op_res.asnumpy(), ref_res, rtol=1e-5)
+                tvm.testing.assert_allclose(op_res.numpy(), ref_res, rtol=1e-5)
 
     for is_dyn in [False, True]:
         verify_sort((2, 3, 4), axis=0, is_ascend=False, is_dyn=is_dyn)
@@ -76,20 +77,22 @@ def test_argsort():
             backends = ["vm", "debug"]
         else:
             backends = ["graph", "debug"]
-        for target, ctx in tvm.testing.enabled_targets():
+        for target, dev in tvm.testing.enabled_targets():
             for kind in backends:
                 mod = tvm.ir.IRModule.from_expr(func)
-                intrp = relay.create_executor(kind, mod=mod, ctx=ctx, target=target)
+                intrp = relay.create_executor(kind, mod=mod, device=dev, target=target)
                 op_res = intrp.evaluate()(x_data)
-                tvm.testing.assert_allclose(op_res.asnumpy(), ref_res.astype(dtype), rtol=1e-5)
+                tvm.testing.assert_allclose(op_res.numpy(), ref_res.astype(dtype), rtol=1e-5)
 
     for is_dyn in [False, True]:
         for dtype in ["int32", "int64", "float32", "float64"]:
             verify_argsort((2, 3, 4), axis=0, is_ascend=False, dtype=dtype, is_dyn=is_dyn)
             verify_argsort((1, 4, 6), axis=1, is_ascend=True, dtype=dtype, is_dyn=is_dyn)
-            verify_argsort((3, 5, 6), axis=-1, is_ascend=False, dtype=dtype, is_dyn=is_dyn)
-            verify_argsort((3, 2000, 6), axis=1, is_ascend=False, dtype=dtype, is_dyn=is_dyn)
-            verify_argsort((1, 122640), axis=1, is_ascend=False, dtype=dtype, is_dyn=is_dyn)
+        dtype = "int32"
+        verify_argsort((3, 5, 6), axis=-1, is_ascend=False, dtype=dtype, is_dyn=is_dyn)
+        verify_argsort((3, 6000, 6), axis=1, is_ascend=False, dtype=dtype, is_dyn=is_dyn)
+        verify_argsort((1000, 1, 1), axis=0, is_ascend=False, dtype=dtype, is_dyn=is_dyn)
+        verify_argsort((1, 122640), axis=1, is_ascend=False, dtype=dtype, is_dyn=is_dyn)
 
 
 @tvm.testing.uses_gpu
@@ -119,17 +122,17 @@ def test_topk():
                 np_values[i, :] = np_data[i, np_indices[i, :]]
         np_indices = np_indices.astype(dtype)
 
-        for target, ctx in tvm.testing.enabled_targets():
+        for target, dev in tvm.testing.enabled_targets():
             for kind in ["graph", "debug"]:
-                intrp = relay.create_executor(kind, ctx=ctx, target=target)
+                intrp = relay.create_executor(kind, device=dev, target=target)
                 op_res = intrp.evaluate(func)(np_data)
                 if ret_type == "both":
-                    tvm.testing.assert_allclose(op_res[0].asnumpy(), np_values)
-                    tvm.testing.assert_allclose(op_res[1].asnumpy(), np_indices)
+                    tvm.testing.assert_allclose(op_res[0].numpy(), np_values)
+                    tvm.testing.assert_allclose(op_res[1].numpy(), np_indices)
                 elif ret_type == "values":
-                    tvm.testing.assert_allclose(op_res.asnumpy(), np_values)
+                    tvm.testing.assert_allclose(op_res.numpy(), np_values)
                 else:
-                    tvm.testing.assert_allclose(op_res.asnumpy(), np_indices)
+                    tvm.testing.assert_allclose(op_res.numpy(), np_indices)
 
     np.random.seed(0)
     for k in [0, 1, 5]:

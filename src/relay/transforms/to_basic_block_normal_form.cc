@@ -26,7 +26,7 @@
 #include <tvm/relay/analysis.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/transform.h>
-#include <tvm/support/logging.h>
+#include <tvm/runtime/logging.h>
 
 #include "../../support/arena.h"
 #include "../analysis/dependency_graph.h"
@@ -49,7 +49,9 @@ Expr ToBasicBlockNormalFormAux(const Expr& e) {
 }
 
 IRModule ToBasicBlockNormalForm(const IRModule& mod) {
-  DLOG(INFO) << "ToBBlock:" << std::endl << mod;
+  //Begin TI: change "<< mod" to "<< PrettyPrint(mod)"
+  DLOG(INFO) << "ToBBlock:" << std::endl << PrettyPrint(mod);
+  //End TI
 
   tvm::Map<GlobalVar, Function> updates;
   auto funcs = mod->functions;
@@ -66,7 +68,9 @@ IRModule ToBasicBlockNormalForm(const IRModule& mod) {
     mod->Add(pair.first, pair.second, true);
   }
 
-  DLOG(INFO) << "ToBBlock: transformed" << std::endl << mod;
+  //Begin TI: change "<< mod" to "<< PrettyPrint(mod)"
+  DLOG(INFO) << "ToBBlock: transformed" << std::endl << PrettyPrint(mod);
+  //End TI
 
   return mod;
 }

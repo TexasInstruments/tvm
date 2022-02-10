@@ -35,7 +35,6 @@
 #include <tvm/relay/expr.h>
 #include <tvm/relay/expr_functor.h>
 #include <tvm/relay/transform.h>
-#include <tvm/runtime/container.h>
 
 #include <unordered_map>
 #include <unordered_set>
@@ -114,12 +113,19 @@ struct RegionFuncMetadata {
 class Partitioner : public MixedModeMutator {
  public:
   explicit Partitioner(const IRModule& module) : module_(module) {
+    std::set<std::string> func_names;
     for (auto f : module->functions) {
       GlobalVar f_var = f.first;
       BaseFunc f_func = f.second;
+      std::string f_name = f_var.as<GlobalVarNode>()->name_hint;
+      while (func_names.find(f_name) != func_names.end()) {
+        f_name += "_a";
+      }
+      func_names.insert(f_name);
 
       // Creating regionset per function in the module.
-      auto region_set = AnnotatedRegionSet::Create(f_func, CompilerBeginOp(), CompilerEndOp());
+      auto region_set =
+          AnnotatedRegionSet::Create(f_func, CompilerBeginOp(), CompilerEndOp(), f_name);
       regions_sets_[region_set] = f_func;
     }
   }
@@ -302,7 +308,7 @@ class Partitioner : public MixedModeMutator {
     }
 
     std::string target = end_node->attrs.as<CompilerAttrs>()->compiler;
-    std::string name = target + "_" + std::to_string(region->GetID());
+    std::string name = target + "_" + region->GetName() + "_" + std::to_string(region->GetID());
 
     // Constant propagation
     if (!params_bind.empty()) {
@@ -428,7 +434,7 @@ IRModule RemoveDefaultAnnotations(IRModule module) {
  *  could be a tuple output. Such tuple outputs needs to be flattened
  *  otherwise the function would create tuples of tuples. Moreover, tuple
  *  of tuples are valid relay, however they are not currently supported by
- *  graph runtime or relay VM.
+ *  graph executor or relay VM.
  */
 
 // New annotations would be required to be added for each flattened output

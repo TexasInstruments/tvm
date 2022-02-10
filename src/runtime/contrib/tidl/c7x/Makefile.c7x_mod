@@ -1,0 +1,58 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+cur_mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
+include $(dir $(cur_mkfile_path))/make.inc
+
+EXE_NAME = c7x_deploy_tvm.out
+
+DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
+
+CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
+CFLAGS += -I $(TVM_C7X_ROOT)
+
+SOURCES  = func_registry.c tvm_main.c
+SOURCES += $(wildcard model_*.c)
+ASM_SOURCES = $(wildcard *_embed.asm)
+OBJS     =$(patsubst %.c,%.obj,$(SOURCES))
+OBJS    +=$(patsubst %.asm,%.obj,$(ASM_SOURCES))
+
+all: $(EXE_NAME)
+
+model_%.obj: model_%.c
+	$(QUIET)$(CC) $(CFLAGS) --cpp_default -c --output_file $@ $<
+
+%.obj: %.c
+	$(QUIET)$(CC) $(CFLAGS) -c --output_file $@ $<
+
+%.obj: %.asm
+	$(QUIET)$(CC) $(CFLAGS) -c --output_file $@ $<
+
+$(EXE_NAME): $(OBJS)
+	$(QUIET)$(CC) $(CFLAGS) $(OBJS) \
+                  $(TVM_C7X_ROOT)/dsp_syms.out.obj \
+            -z -l $(TVM_C7X_ROOT)/tidl_api.lib \
+               -l $(TVM_C7X_ROOT)/tvm_crt.lib \
+               -l $(TVM_C7X_ROOT)/c7x_tvm.cmd \
+            -o $@ -m $@.map
+	$(QUIET)$(STRIP) $@
+
+clean:
+	$(QUIET)$(RMDIR) $(OBJS) $(EXE_NAME)
+
+.PHONY: all
+.DEFAULT_GOAL: all

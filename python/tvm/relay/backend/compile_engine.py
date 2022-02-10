@@ -33,6 +33,8 @@ from . import _backend
 logger = logging.getLogger("compile_engine")
 autotvm_logger = logging.getLogger("autotvm")
 
+_first_warning = True
+
 
 @tvm._ffi.register_object("relay.LoweredOutput")
 class LoweredOutput(Object):
@@ -229,7 +231,6 @@ def select_implementation(op, attrs, inputs, out_type, target, use_autotvm=True)
         if best_cfg is None or best_cfg.cost > cfg.cost:
             best_autotvm_impl = impl
             best_cfg = cfg
-    autotvm.GLOBAL_SCOPE.silent = old_silent
 
     if best_autotvm_impl:
         # The best autotvm implementation definitely doesn't use fallback config
@@ -244,8 +245,8 @@ def select_implementation(op, attrs, inputs, out_type, target, use_autotvm=True)
     # Use the implementation with highest plevel
     if workloads[best_plevel_impl] is not None:
         msg = (
-            "Cannot find config for target=%s, workload=%s. A fallback configuration "
-            "is used, which may bring great performance regression."
+            "Cannot find tuning records for:\n    target=%s\n    key=%s\n"
+            "TVM will apply a default schedule which may negatively impact performance."
             % (target, workloads[best_plevel_impl])
         )
         if (
@@ -253,7 +254,19 @@ def select_implementation(op, attrs, inputs, out_type, target, use_autotvm=True)
             and msg not in autotvm.task.DispatchContext.warning_messages
         ):
             autotvm.task.DispatchContext.warning_messages.add(msg)
-            autotvm_logger.warning(msg)
+            global _first_warning
+            if _first_warning:
+                _first_warning = False
+                info_msg = (
+                    "One or more operators have not been tuned. Please tune your model "
+                    "for better performance. Use DEBUG logging level to see more details."
+                )
+                autotvm_logger.warning(info_msg)
+            autotvm_logger.debug(msg)
+
+    # Restore here to suppress the "Cannot find config ..." messages
+    autotvm.GLOBAL_SCOPE.silent = old_silent
+
     logger.info(
         "Using %s for %s based on highest priority (%s)",
         best_plevel_impl.name,
@@ -386,6 +399,18 @@ class CompileEngine(Object):
         assert len(res) % 2 == 0
         return [(res[2 * i], res[2 * i + 1]) for i in range(len(res) // 2)]
 
+    def shape_func_items(self):
+        """List items in the shape_func_cache.
+
+        Returns
+        -------
+        item_list : List[Tuple[CCacheKey, CCacheValue]]
+            The list of shape_func_items.
+        """
+        res = _backend._CompileEngineListShapeFuncItems(self)
+        assert len(res) % 2 == 0
+        return [(res[2 * i], res[2 * i + 1]) for i in range(len(res) // 2)]
+
     def get_current_ccache_key(self):
         return _backend._CompileEngineGetCurrentCCacheKey(self)
 
@@ -405,7 +430,28 @@ class CompileEngine(Object):
             res += "target={}\n".format(k.target)
             res += "use_count={}\n".format(v.use_count)
             res += "func_name={}\n".format(v.cached_func.func_name)
+            res += "----relay function----\n"
             res += k.source_func.astext() + "\n"
+            res += "----tir function----- \n"
+            res += "inputs={}\n".format(v.cached_func.inputs)
+            res += "outputs={}\n".format(v.cached_func.outputs)
+            res += "function: \n"
+            res += v.cached_func.funcs.astext() + "\n"
+        res += "===================================\n"
+        shape_func_items = self.shape_func_items()
+        res += "%d shape_func_items cached\n" % len(shape_func_items)
+        for k, v in shape_func_items:
+            res += "------------------------------------\n"
+            res += "target={}\n".format(k.target)
+            res += "use_count={}\n".format(v.use_count)
+            res += "func_name={}\n".format(v.cached_func.func_name)
+            res += "----relay function----\n"
+            res += k.source_func.astext() + "\n"
+            res += "----tir function----- \n"
+            res += "inputs={}\n".format(v.cached_func.inputs)
+            res += "outputs={}\n".format(v.cached_func.outputs)
+            res += "function: \n"
+            res += v.cached_func.funcs.astext() + "\n"
         res += "===================================\n"
         return res
 

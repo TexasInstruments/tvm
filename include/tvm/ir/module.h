@@ -28,8 +28,10 @@
 #include <tvm/ir/expr.h>
 #include <tvm/ir/function.h>
 #include <tvm/ir/type.h>
-#include <tvm/node/container.h>
 #include <tvm/parser/source_map.h>
+#include <tvm/runtime/container/array.h>
+#include <tvm/runtime/container/map.h>
+#include <tvm/runtime/container/string.h>
 
 #include <string>
 #include <unordered_map>

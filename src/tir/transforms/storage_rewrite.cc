@@ -192,6 +192,8 @@ class LinearAccessPatternFinder final : public StmtExprVisitor {
 
   void VisitStmt_(const ForNode* op) final { VisitNewScope(op); }
 
+  void VisitStmt_(const WhileNode* op) final { VisitNewScope(op); }
+
   void VisitStmt_(const AssertStmtNode* op) final { VisitNewScope(op); }
 
   // linearized access sequence.
@@ -244,6 +246,8 @@ class InplaceOpVerifier : public StmtExprVisitor {
       VisitStmt_(static_cast<const ForNode*>(stmt));
     } else if (stmt->IsInstance<IfThenElseNode>()) {
       VisitStmt_(static_cast<const IfThenElseNode*>(stmt));
+    } else if (stmt->IsInstance<WhileNode>()) {
+      VisitStmt_(static_cast<const WhileNode*>(stmt));
     } else if (stmt->IsInstance<StoreNode>()) {
       VisitStmt_(static_cast<const StoreNode*>(stmt));
     } else {
@@ -350,16 +354,7 @@ class StoragePlanRewriter : public StmtExprMutator {
     // start rewrite
     stmt = operator()(std::move(stmt));
     if (attach_map_.count(nullptr)) {
-      std::vector<Stmt> nest;
-      for (StorageEntry* e : attach_map_.at(nullptr)) {
-        // ICHECK_EQ(e->scope.rank, 0);
-        if (e->new_alloc.defined()) {
-          nest.emplace_back(AttrStmt(e->alloc_var, attr::storage_scope,
-                                     StringImm(e->scope.to_string()), Evaluate(0)));
-          nest.push_back(e->new_alloc);
-        }
-      }
-      stmt = MergeNest(nest, stmt);
+      return MakeAttach(attach_map_.at(nullptr), stmt);
     }
     return stmt;
   }
@@ -437,6 +432,7 @@ class StoragePlanRewriter : public StmtExprMutator {
       return StmtExprMutator::VisitStmt_(op);
     }
   }
+
   Stmt VisitStmt_(const ForNode* op) final {
     ICHECK(op->kind != ForKind::kVectorized) << "VectorizeLoop before LiftStorageAlloc";
     // remake all the allocation at the attach scope.
@@ -556,16 +552,23 @@ class StoragePlanRewriter : public StmtExprMutator {
         }
 
         if (e->allocs.size() == 1) {
-          // simply use the original allocation.
-          PrimExpr sz = foldl([](PrimExpr a, PrimExpr b, Span span) { return mul(a, b, span); },
-                              make_const(DataType::Int(32), 1), e->allocs[0]->extents);
+          // Begin TI
+          // simply use the original allocation and the corresponding dimensions
           e->new_alloc =
-              Allocate(e->alloc_var, alloc_type, {sz}, e->allocs[0]->condition, Evaluate(0));
+              Allocate(e->alloc_var, alloc_type, e->allocs[0]->extents, e->allocs[0]->condition, Evaluate(0));
+          // End TI
           if (e->scope.tag.length() != 0) {
             MemoryInfo info = GetMemoryInfo(e->scope.to_string());
             uint64_t total_elem = e->const_nbits / e->elem_type.bits();
-            ICHECK_LE(total_elem * e->elem_type.bits(), info->max_num_bits)
-                << "Allocation exceed bound of memory tag " << e->scope.to_string();
+            // Begin TI
+            // TI: Different tags in scope_name "local<tag>" are used to prevent sharing/fusing
+            //     different DMA local buffers, no memory info are defined for these scope_names
+            if (info.defined())
+            {
+            // End TI
+              ICHECK_LE(total_elem * e->elem_type.bits(), info->max_num_bits)
+                  << "Allocation exceed bound of memory tag " << e->scope.to_string();
+            }
           }
         } else {
           // Build a merged allocation

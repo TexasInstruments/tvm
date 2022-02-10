@@ -18,7 +18,7 @@
 if(USE_TIDL STREQUAL "ON")
   message(STATUS "Build with contrib.tidl, path=" ${USE_TIDL_RT_PATH})
   if (USE_TIDL_RT_PATH STREQUAL "none")
-    message("TIDL RT path not set, J7 runtime support will not be available")
+    message(FATAL_ERROR "USE_TIDL_RT_PATH not set, J7 runtime support will not be available")
   else()
     include_directories(${USE_TIDL_RT_PATH}/inc)
   endif()
@@ -28,5 +28,14 @@ if(USE_TIDL STREQUAL "ON")
 
   file(GLOB TIDL_CONTRIB_SRC src/runtime/contrib/tidl/*.cc)
   list(APPEND RUNTIME_SRCS ${TIDL_CONTRIB_SRC})
+
+  # Only build c7x in tvm project (compilation), not in dlr project (runtime)
+  # c7x is used in TVM compilation only.  Do not include it in neo-ai-dlr build.
+  # neo-ai-dlr CMakeLists.txt simply include top-level TVM CMakeLists.txt,
+  # so we do a check here on the project name.  This is to simplify neo-ai-dlr
+  # build, so that it does not require USE_TIDL_PSDKR_PATH.
+  if (CMAKE_PROJECT_NAME STREQUAL "tvm")
+    add_subdirectory("src/runtime/contrib/tidl/c7x")
+  endif()
 endif()
 

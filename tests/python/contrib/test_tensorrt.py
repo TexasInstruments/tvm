@@ -22,9 +22,9 @@ import itertools
 import tvm
 import tvm.relay.testing
 
-from tvm import relay
+from tvm import relay, runtime
 from tvm.relay.op.contrib import tensorrt
-from tvm.contrib import graph_runtime, utils
+from tvm.contrib import graph_executor, utils
 from tvm.runtime.vm import VirtualMachine
 from tvm.relay import Any, GlobalVar, transform
 from tvm.relay.expr_functor import ExprVisitor
@@ -35,7 +35,7 @@ from tvm.relay.op.contrib import tensorrt
 
 def skip_codegen_test():
     """Skip test if TensorRT and CUDA codegen are not present"""
-    if not tvm.runtime.enabled("cuda") or not tvm.gpu(0).exist:
+    if not tvm.runtime.enabled("cuda") or not tvm.cuda(0).exist:
         print("Skip because CUDA is not enabled.")
         return True
     if not tvm.get_global_func("relay.ext.tensorrt", True):
@@ -45,7 +45,7 @@ def skip_codegen_test():
 
 
 def skip_runtime_test():
-    if not tvm.runtime.enabled("cuda") or not tvm.gpu(0).exist:
+    if not tvm.runtime.enabled("cuda") or not tvm.cuda(0).exist:
         print("Skip because CUDA is not enabled.")
         return True
     if not tensorrt.is_tensorrt_runtime_enabled():
@@ -56,7 +56,7 @@ def skip_runtime_test():
 
 def vmobj_to_list(o):
     if isinstance(o, tvm.nd.NDArray):
-        return [o.asnumpy()]
+        return [o.numpy()]
     elif isinstance(o, tvm.runtime.container.ADT) or isinstance(o, list):
         return [vmobj_to_list(f) for f in o]
     else:
@@ -69,6 +69,14 @@ def assert_result_dict_holds(result_dict):
         res2 = vmobj_to_list(result_dict[k2])
         for r1, r2 in zip(res1, res2):
             tvm.testing.assert_allclose(r1, r2, rtol=1e-3, atol=1e-3)
+
+
+def set_func_attr(func, compile_name, symbol_name):
+    func = func.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+    func = func.with_attr("Inline", tvm.tir.IntImm("int32", 1))
+    func = func.with_attr("Compiler", compile_name)
+    func = func.with_attr("global_symbol", symbol_name)
+    return func
 
 
 def run_and_verify_func(config, target="cuda"):
@@ -89,7 +97,7 @@ def run_and_verify_func(config, target="cuda"):
         for k, v in input_shapes.items()
         if k not in is_param
     }
-    ctx = tvm.context(target)
+    dev = tvm.device(target)
 
     result_dict = dict()
     for mode in ["graph", "vm"]:
@@ -102,10 +110,10 @@ def run_and_verify_func(config, target="cuda"):
                 with tvm.transform.PassContext(
                     opt_level=3, config={"relay.ext.tensorrt.options": config}
                 ):
-                    exec = relay.create_executor(mode, mod=mod, ctx=ctx, target=target)
+                    exec = relay.create_executor(mode, mod=mod, device=dev, target=target)
             else:
                 with tvm.transform.PassContext(opt_level=3):
-                    exec = relay.create_executor(mode, mod=mod, ctx=ctx, target=target)
+                    exec = relay.create_executor(mode, mod=mod, device=dev, target=target)
             if not skip_runtime_test():
                 result_dict[result_key] = exec.evaluate()(**input_dict, **params)
 
@@ -135,10 +143,10 @@ def run_and_verify_model(model):
             with tvm.transform.PassContext(
                 opt_level=3, config={"relay.ext.tensorrt.options": config}
             ):
-                exec = relay.create_executor(mode, mod=mod, ctx=tvm.gpu(0), target="cuda")
+                exec = relay.create_executor(mode, mod=mod, device=tvm.cuda(0), target="cuda")
         else:
             with tvm.transform.PassContext(opt_level=3):
-                exec = relay.create_executor(mode, mod=mod, ctx=tvm.gpu(0), target="cuda")
+                exec = relay.create_executor(mode, mod=mod, device=tvm.cuda(0), target="cuda")
 
         res = exec.evaluate()(i_data, **params) if not skip_runtime_test() else None
         return res
@@ -190,10 +198,14 @@ def test_tensorrt_simple():
                 with tvm.transform.PassContext(
                     opt_level=3, config={"relay.ext.tensorrt.options": config}
                 ):
-                    relay_exec = relay.create_executor(mode, mod=mod, ctx=tvm.gpu(0), target="cuda")
+                    relay_exec = relay.create_executor(
+                        mode, mod=mod, device=tvm.cuda(0), target="cuda"
+                    )
             else:
                 with tvm.transform.PassContext(opt_level=3):
-                    relay_exec = relay.create_executor(mode, mod=mod, ctx=tvm.gpu(0), target="cuda")
+                    relay_exec = relay.create_executor(
+                        mode, mod=mod, device=tvm.cuda(0), target="cuda"
+                    )
             if not skip_runtime_test():
                 result_dict[result_key] = relay_exec.evaluate()(x_data, y_data, z_data)
 
@@ -235,12 +247,12 @@ def test_tensorrt_not_compatible():
     mod, config = tensorrt.partition_for_tensorrt(mod)
     for mode in ["graph", "vm"]:
         with tvm.transform.PassContext(opt_level=3, config={"relay.ext.tensorrt.options": config}):
-            exec = relay.create_executor(mode, mod=mod, ctx=tvm.gpu(0), target="cuda")
+            exec = relay.create_executor(mode, mod=mod, device=tvm.cuda(0), target="cuda")
             if not skip_runtime_test():
                 results = exec.evaluate()(x_data)
 
 
-def test_tensorrt_serialize_graph_runtime():
+def test_tensorrt_serialize_graph_executor():
     if skip_codegen_test():
         return
     import mxnet as mx
@@ -257,11 +269,11 @@ def test_tensorrt_serialize_graph_runtime():
     def compile_graph(mod, params):
         with tvm.transform.PassContext(opt_level=3, config={"relay.ext.tensorrt.options": config}):
             graph, lib, params = relay.build(mod, params=params, target="cuda")
-            params = relay.save_param_dict(params)
+            params = runtime.save_param_dict(params)
         return graph, lib, params
 
     def run_graph(graph, lib, params):
-        mod_ = graph_runtime.create(graph, lib, ctx=tvm.gpu(0))
+        mod_ = graph_executor.create(graph, lib, device=tvm.cuda(0))
         mod_.load_params(params)
         mod_.run(data=i_data)
         res = mod_.get_output(0)
@@ -284,7 +296,7 @@ def test_tensorrt_serialize_graph_runtime():
         lib = tvm.runtime.load_module(tmpdir.relpath("compiled.so"))
         return graph, lib, params
 
-    # Test serialization with graph runtime
+    # Test serialization with graph executor
     graph, lib, graph_params = compile_graph(mod, params)
     save_graph(graph, lib, graph_params)
     loaded_graph, loaded_lib, loaded_params = load_graph()
@@ -318,7 +330,7 @@ def test_tensorrt_serialize_vm():
 
     def run_vm(code, lib):
         vm_exec = tvm.runtime.vm.Executable.load_exec(code, lib)
-        vm = VirtualMachine(vm_exec, tvm.gpu(0))
+        vm = VirtualMachine(vm_exec, tvm.cuda(0))
         result = vm.invoke("main", data=i_data)
         return result
 
@@ -604,6 +616,19 @@ def test_concatenate():
     run_and_verify_func(get_graph([(1, 2, 6, 6), (1, 3, 6, 6)], axis=1))
 
 
+def test_split():
+    def get_graph(x_shape, indices_or_sections, axis):
+        x = relay.var("x", shape=(x_shape), dtype="float32")
+        out = relay.split(x, indices_or_sections=indices_or_sections, axis=axis)
+        f = relay.Function([x], out.astuple())
+        return f, {"x": x_shape}, []
+
+    run_and_verify_func(get_graph((1, 16), indices_or_sections=2, axis=1))
+    run_and_verify_func(get_graph((1, 16), indices_or_sections=4, axis=1))
+    run_and_verify_func(get_graph((1, 16), indices_or_sections=[8], axis=1))
+    run_and_verify_func(get_graph((1, 16), indices_or_sections=[2, 3, 6, 10, 14], axis=1))
+
+
 def test_conv2d_transpose():
     def get_graph(
         x_shape=(1, 32, 8, 8),
@@ -705,7 +730,9 @@ def test_dynamic_reshape():
                 assert are_ops_on_trt(mod, op_list=["reshape"]) == should_offload_to_trt
             if not skip_runtime_test():
                 with relay.build_config(opt_level=3):
-                    relay_exec = relay.create_executor("vm", mod=mod, ctx=tvm.cpu(0), target="llvm")
+                    relay_exec = relay.create_executor(
+                        "vm", mod=mod, device=tvm.cpu(0), target="llvm"
+                    )
 
                 for i, x_data in enumerate(x_data_list):
                     result_arr[i][use_trt] = relay_exec.evaluate()(x_data)
@@ -1151,13 +1178,6 @@ def test_dynamic_offload():
     kernel = relay.var("kernel", shape=(k_shape), dtype="float32")
 
     def get_expected():
-        def set_func_attr(func, compile_name, symbol_name):
-            func = func.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
-            func = func.with_attr("Inline", tvm.tir.IntImm("int32", 1))
-            func = func.with_attr("Compiler", compile_name)
-            func = func.with_attr("global_symbol", symbol_name)
-            return func
-
         # Create a nested TRT function that matches the expected output
         mod = tvm.IRModule()
         var1 = relay.var("tensorrt_0_i0", shape=(data_shape), dtype="float32")
@@ -1213,7 +1233,7 @@ def test_tensorrt_dynamic_batch():
 
         if not skip_runtime_test():
             with relay.build_config(opt_level=3):
-                relay_exec = relay.create_executor("vm", mod=mod, ctx=tvm.cpu(0), target="llvm")
+                relay_exec = relay.create_executor("vm", mod=mod, device=tvm.cpu(0), target="llvm")
 
             for i, batch_size in enumerate(batches_to_test):
                 result_arr[i][use_trt] = relay_exec.evaluate()(x_data[:batch_size, ...])
@@ -1231,33 +1251,35 @@ def test_tensorrt_dynamic_batch_conv():
     x_data = np.ones([max(batches_to_test)] + list(x_shape)[1:]).astype("float32")
     k_shape = (16, 32, 3, 3)
     params = {"kernel": np.random.uniform(-1, 1, k_shape).astype("float32")}
-    result_arr = [{"cuda": {}, "llvm": {}} for _ in range(len(batches_to_test))]
-    for use_trt in [True, False]:
-        x = relay.var("x", shape=x_shape, dtype="float32")
-        kernel = relay.var("kernel", shape=k_shape, dtype="float32")
-        out = relay.nn.conv2d(x, kernel, channels=16, kernel_size=(3, 3), groups=1)
-        f = relay.Function([x, kernel], out)
-        mod = tvm.IRModule()
-        mod["main"] = f
-        if use_trt:
-            mod, _ = tensorrt.partition_for_tensorrt(mod, params)
-
+    for use_implicit_batch in [True, False]:
+        result_arr = [{"cuda": {}, "llvm": {}} for _ in range(len(batches_to_test))]
+        for use_trt in [True, False]:
+            x = relay.var("x", shape=x_shape, dtype="float32")
+            kernel = relay.var("kernel", shape=k_shape, dtype="float32")
+            out = relay.nn.conv2d(x, kernel, channels=16, kernel_size=(3, 3), groups=1)
+            f = relay.Function([x, kernel], out)
+            mod = tvm.IRModule()
+            mod["main"] = f
+            if use_trt:
+                mod, config = tensorrt.partition_for_tensorrt(
+                    mod, params, use_implicit_batch=use_implicit_batch
+                )
+            if not skip_runtime_test():
+                for target in ["llvm", "cuda"]:
+                    with tvm.transform.PassContext(
+                        opt_level=3, config={"relay.ext.tensorrt.options": config}
+                    ):
+                        relay_exec = relay.create_executor(
+                            "vm", mod=mod, device=tvm.device(target), target=target
+                        )
+                    for i, batch_size in enumerate(batches_to_test):
+                        result_arr[i][target][use_trt] = relay_exec.evaluate()(
+                            x_data[:batch_size, ...], **params
+                        )
         if not skip_runtime_test():
-            for target in ["llvm", "cuda"]:
-                with relay.build_config(opt_level=3):
-                    relay_exec = relay.create_executor(
-                        "vm", mod=mod, ctx=tvm.cpu(0), target="llvm"
-                    )
-
-                for i, batch_size in enumerate(batches_to_test):
-                    result_arr[i][target][use_trt] = relay_exec.evaluate()(
-                        x_data[:batch_size, ...], **params
-                    )
-
-    if not skip_runtime_test():
-        for i in range(len(batches_to_test)):
-            for target in ["llvm", "cuda"]:
-                assert_result_dict_holds(result_arr[i][target])
+            for i in range(len(batches_to_test)):
+                for target in ["llvm", "cuda"]:
+                    assert_result_dict_holds(result_arr[i][target])
 
 
 def test_maskrcnn_resnet50() -> None:
@@ -1348,15 +1370,15 @@ def test_maskrcnn_resnet50() -> None:
     if skip_runtime_test():
         return
 
-    ctx = tvm.cpu()
-    vm = tvm.runtime.vm.VirtualMachine(vm_trt_exec, ctx)
+    dev = tvm.cpu()
+    vm = tvm.runtime.vm.VirtualMachine(vm_trt_exec, dev)
     vm.set_input("main", **{"input0": np_sample_input})
     tvm_res = vm.run()
 
     # Descending sort by scores and get the high confidence indices. In this example 9 is chosen,
     # because this image has 9 boxes over 0.9 confidence
     num_high_confidence_boxes = 9
-    tvm_indices = np.argsort(-1 * tvm_res[1].asnumpy())[:num_high_confidence_boxes]
+    tvm_indices = np.argsort(-1 * tvm_res[1].numpy())[:num_high_confidence_boxes]
 
     with torch.no_grad():
         out = traced_module(torch.Tensor(np_sample_input))
@@ -1372,11 +1394,38 @@ def test_maskrcnn_resnet50() -> None:
     # 0.1 pixel difference of a box in a 300X300 image wont make any change.
     for i, tol_val in zip(range(4), tol):
         np.testing.assert_allclose(
-            tvm_res[i].asnumpy()[tvm_indices],
+            tvm_res[i].numpy()[tvm_indices],
             out[i].numpy()[pt_indices],
             rtol=tol_val,
             atol=tol_val,
         )
+
+
+def test_empty_subgraph():
+    if skip_codegen_test():
+        return
+    x_shape = (1, 3, 5)
+    mod = tvm.IRModule()
+    # Empty tensorrt subgraph.
+    var1 = relay.var("tensorrt_0_i0", shape=(x_shape), dtype="float32")
+    f1 = GlobalVar("tensorrt_0")
+    func = relay.Function([var1], var1)
+    func = set_func_attr(func, "tensorrt", "tensorrt_0")
+    mod[f1] = func
+    mod = relay.transform.InferType()(mod)
+
+    # Create the main function
+    x = relay.var("x", shape=x_shape, dtype="float32")
+    out = f1(relay.nn.relu(x))
+    f = relay.Function([x], out)
+    mod["main"] = f
+
+    x_data = np.random.uniform(-1, 1, x_shape).astype("float32")
+    for mode in ["graph", "vm"]:
+        with tvm.transform.PassContext(opt_level=3):
+            exec = relay.create_executor(mode, mod=mod, device=tvm.cuda(0), target="cuda")
+            if not skip_runtime_test():
+                results = exec.evaluate()(x_data)
 
 
 if __name__ == "__main__":
