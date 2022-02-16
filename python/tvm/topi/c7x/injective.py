@@ -41,6 +41,39 @@ logging = logging.getLogger("c7x_injective")
 #   for the input tensors. (TODO)
 ops_do_not_dma = ['T_strided_slice', 'T_concat' ]
 
+# Do not DMA cases
+# 1. specific operators that DMA does not bring performance benefits, they might
+#    benefit from different schedules, e.g. T_concat
+# 2. specific operators that only parts of input tensors are loaded and yet we use
+#    the whole tensor shape to configure how many blocks will be transferred,
+#    e.g. T_strided_slice
+# 3. There is only 1 block or the blocking axis is outside the whole loop nest,
+#    is it worthwhile to DMA each input as one block, and DMA the output as one block?
+#    Should we simply skip DMA since there will not be double buffering?
+#
+# DMA configurations for output and input: out[f(i,j,k)], in[g(i,j,k)]
+#    DetectLinearEquation analyzes f(i,j,k) and g(i,j,k) to compute the coeff for each loop var,
+#    e.g. f(i,j,k) = strides[0] * i + strides[1] * j + strides[2] * k + strides[3]
+# 1. original loop nest range (ri, rj, rk) where each ri,rj,rk is a (min, ext) pair
+# 2. assuming loop nested is blocked on j loop into (ri, orj, irj, rk))
+#    blocked loop nest range  (irj, rk)
+# 3. Total block size for output: (f(i,j,k) over (ri, rj, rk)), this should be the same
+#    as output Var's size
+# 4. Local block size for output over (irj, rk), this is computed as "src_shape/dst_shape"
+#    with "src_strides/dst_strides" in CopyIntrinInjector() pass.  At some point
+#    (before or after CopyIntrinInjector pass), it is also reflected in the local block
+#    Var's shape, which is used in DMA config.
+# 5. Total block size for input: (g(i,j,k) over (ri, rj, rk)), this may or may NOT be the
+#    same as input Var's size, as we see in T_strided_slice's case
+#    How do we catch this case:
+#    - (Schedule) From tensor size, compute expected blocksize, store in pragma
+#    - (InjectCopyIntrin) Check if TVM analyzed blocksize matches expected blocksize.
+#                         Do not turn the loop nest into c7x_dma_copy intrinsic if no match
+#    - (DMAPass) Is it possible to compute the actual portion of input tensor being used
+#                and use those information to configure the DMA(global_dims, local_dims)? (TODO)
+# 6. Local block size for input over (irj, rk), similarly to output, it is reflected correctly
+#    in the local block Var's shape, which is used in DMA config.
+
 #----------------------------------------------------------------
 # Experimental C7x-specific schedule for injective (elementwise) ops.
 def schedule_injective(outs: Union[te.tensor.Tensor, List[te.tensor.Tensor]]) -> te.Schedule:
@@ -83,12 +116,9 @@ def schedule_injective_from_existing(s: te.Schedule,
     target = tvm.target.Target.current(allow_none=False)
     logging.debug(f"schedule_injective for c7x, target={target}")
 
-    # dma does not apply, check input tensors as well
+    # dma does not apply
     if C.op.name in ops_do_not_dma:
         return s
-    for t in C.op.input_tensors:
-        if t.op.name in ops_do_not_dma:
-            return s
 
     #print("initial schedule")
     #print_schedule(s)
@@ -153,6 +183,12 @@ def double_buffer_with_dma(s: te.Schedule,
     inner: Innermost axis of the stage
     """
 
+    def tensor_size(t: te.tensor.Tensor) -> int:
+        size = 1
+        for dim_size in t.shape:
+            size *= utils.get_const_int(dim_size)
+        return size
+
     cc = C
 
     # TODO: allow these to vary by target configuration
@@ -185,7 +221,8 @@ def double_buffer_with_dma(s: te.Schedule,
     baxis, nblocks, blocksize = find_split(dims, elem_bytes, max_block)
 
     # If there is no split point (e.g. split results in odd iterations), return
-    if blocksize == 0:
+    # If the whole loop nest does not need split, do not dma, return
+    if blocksize == 0 or baxis == 0:
         return (s, cc, baxis, inner)
 
     # local buffers
@@ -197,9 +234,10 @@ def double_buffer_with_dma(s: te.Schedule,
     local_inputs = []
 
     for t in op.input_tensors:
+        is_placeholder = isinstance(t.op, tvm.te.PlaceholderOp)
         if len(t.shape) > 1:
             l = s.cache_read(t, f"local{len(local_inputs)}", op)
-            local_inputs.append(l)
+            local_inputs.append((l, is_placeholder))
     if len(dims) > 1:
         cc = s.cache_write(C, "local")
         inner = s[cc].op.axis[-1]
@@ -228,7 +266,7 @@ def double_buffer_with_dma(s: te.Schedule,
         print_schedule(s)
 
         # sink local-buffer copies into outer loop
-        for t in local_inputs:
+        for t, _ in local_inputs:
             s[t].compute_at(s[C], outer)
         if cc != C:
             s[cc].compute_at(s[C], outer)
@@ -236,33 +274,18 @@ def double_buffer_with_dma(s: te.Schedule,
         print_schedule(s)
 
     # mark local<->ext copies as using dma.
-    for t in local_inputs:
+    for t, is_placeholder in local_inputs:
         # AutoInlineInjective can push compute into the copy loops - such loops
         # cannot be annotated with the dma pragma.
         #dump(t)
-        if is_copy(t):
-            s[t].pragma(s[t].op.axis[0], "dma")
+        if is_placeholder and tensor_size(t) % nblocks == 0:
+            s[t].pragma(s[t].op.axis[0], "dma", tensor_size(t)//nblocks)
     if cc != C:
         #dump(cc)
         # if no split above, block is outer loop
-        s[C].pragma(block, "dma")
+        s[C].pragma(block, "dma", tensor_size(C)//nblocks)
 
     return (s, cc, baxis, inner)
-
-def is_copy(tensor):
-    ''' Return False if any of the ops contributing to tensor has more than 2
-        inputs, indicating that it is not just a copy operation.
-    '''
-    if isinstance(tensor.op, tvm.te.ComputeOp):
-        # If there is more than one input, this is not a copy operation
-        if len(tensor.op.input_tensors) > 1:
-            return False
-
-    for t in tensor.op.input_tensors:
-        if is_copy(t) == False:
-            return False
-
-    return True
 
 def find_split(dims, elem_bytes, limit):
     ''' Given dimensions and max block size, find even split such
