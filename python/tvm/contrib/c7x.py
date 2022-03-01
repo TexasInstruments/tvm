@@ -486,13 +486,15 @@ def SETransform(f, mod, ctx):
             return True
         def get_config_call(self):
             ''' Return a config call to produce the curent configuration '''
-            # pad to 4 axes
-            if self.ndims() < 4:
-               self.icnts = self.icnts + ([1] * (4-self.ndims()))
-               self.dims = self.dims + ([0] * (4-self.ndims()))
+            # pad to 6 axes
+            # Updating to support 6 ICNTS and 5 DIMS for SE/SA
+            # DIM0 is always set to 1
+            if self.ndims() < 6:
+               self.icnts = self.icnts + ([1] * (6-self.ndims()))
+               self.dims = self.dims + ([0] * (6-self.ndims()))
             config_call = tvm.tir.call_extern("handle", "c7x_stream_config", 
                                 self.kind, self.dtype,
-                                *self.icnts[0:4], *self.dims[1:4])
+                                *self.icnts[0:6], *self.dims[1:6])
             return config_call
         def __str__(self):
             return f"SEConfig: kind={self.kind} dtype={self.dtype} "+\

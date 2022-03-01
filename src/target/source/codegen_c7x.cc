@@ -1431,11 +1431,11 @@ void CodeGenC7x::PrintStreamConfig(const VarNode* config_var) {
   stream << desc.kind << "Config<";
   PrintType(desc.dtype, stream);
   stream << ", " << desc.veclen;
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < 6; ++i) { // generate six params since ICNT5 is max for SE/SA
     stream << ", ";
     this->PrintExpr(desc.icnts[i], stream);
   }
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < 5; ++i) { // generate five params since DIM0=1 by default and DIM5 is max for SE/SA
     stream << ", ";
     this->PrintExpr(desc.dims[i], stream);
   }

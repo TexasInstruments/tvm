@@ -57,18 +57,18 @@ public:
     dtype(runtime::String2DLDataType(Downcast<StringImm>(CC->args[2])->value)),
     veclen(0) {
     int argnum = 3;
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 6; ++i) // generate six params since ICNT5 is max for SE/SA
       icnts[i] = CC->args[argnum++];
-    for (int i = 0; i < 3; ++i)
-      dims[i] = CC->args[argnum++];
+    for (int i = 0; i < 5; ++i)
+      dims[i] = CC->args[argnum++]; // generate five params since DIM0=1 by default and DIM5 is max for SE/SA
   }
 public:
   const VarNode* config_var;
   std::string kind;      // SE or SA
   DataType dtype;
   int veclen;
-  PrimExpr icnts[4];
-  PrimExpr dims[3];
+  PrimExpr icnts[6]; // support for ICNT0 to ICNT5
+  PrimExpr dims[5];  // support for DIM1 to DIM5
   // debug
   void dump() const {
     printf("StreamDesc: config=%s kind=%s dtype=... "

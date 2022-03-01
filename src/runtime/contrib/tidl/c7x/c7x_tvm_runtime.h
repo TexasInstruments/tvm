@@ -18,11 +18,11 @@
  */
 
 //
-// This API provides an abstraction layer that the C7x-specific TVM 
+// This API provides an abstraction layer that the C7x-specific TVM
 // code generator can use to target C7x-specific features.
-// 
+//
 // DMA API
-//   The concept is to use a C++ class to capture the layout of both the 
+//   The concept is to use a C++ class to capture the layout of both the
 //   external and local buffers, and automatically set up the DMA based
 //   on the layouts. The model includes blocking (splitting up the transfer
 //   into multiple blocks) and double buffering (using a pair of buffers so
@@ -68,10 +68,10 @@ typedef enum{
     TVMTIDL_DMAUTILSAUTOINC3D_SYNC_4D = 3
   }tvmtidlDmaUtilsAutoInc3d_SyncType;
 
-uint8_t* tvm_tidl_l2_scratch_alloc(int32_t size) 
-  { return (uint8_t*)malloc(size); } 
+uint8_t* tvm_tidl_l2_scratch_alloc(int32_t size)
+  { return (uint8_t*)malloc(size); }
 void tvm_tidl_l2_scratch_reset() {}
-uint8_t* tvm_tidl_dmautils_init(int32_t num_channels, uint8_t *pTrMem_chs[]) 
+uint8_t* tvm_tidl_dmautils_init(int32_t num_channels, uint8_t *pTrMem_chs[])
   { return nullptr; }
 int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
      int32_t ch, uint8_t *pTrMem_chs[],
@@ -79,7 +79,7 @@ int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
      uint16_t sicnt0, uint16_t sicnt1, uint16_t sicnt2, uint16_t sicnt3,
                        int32_t sdim1,   int32_t sdim2,   int32_t sdim3,
      uint16_t dicnt0, uint16_t dicnt1, uint16_t dicnt2, uint16_t dicnt3,
-                       int32_t ddim1,   int32_t ddim2,   int32_t ddim3) 
+                       int32_t ddim1,   int32_t ddim2,   int32_t ddim3)
   { return 0; }
 int32_t tvm_tidl_dmautils_deinit(uint8_t *dmaUtilsContext,
      int32_t num_channels, uint8_t *pTrMem_chs[])
@@ -98,7 +98,7 @@ extern "C" {
 }
 
 //---------------------------------------------------------------------------------
-// DMAContext stores state information for the DMA Utils package, used 
+// DMAContext stores state information for the DMA Utils package, used
 // as a handle bewteen the C++ model and the Utils package
 class DMAContext
 {
@@ -113,24 +113,24 @@ public:
     if (nchannels > 0)
       tvm_tidl_dmautils_deinit(dmaUtilsContext, nchannels, pTrMem_chs);
   }
-  int allocate_channel() 
+  int allocate_channel()
   {
     if (next_avail_channel >= nchannels)
       return -1;
     return next_avail_channel++;
   }
-  uint8_t **get_pTrMem() { return pTrMem_chs; } 
-  uint8_t *get_dmaUtilsContext() { return dmaUtilsContext; } 
+  uint8_t **get_pTrMem() { return pTrMem_chs; }
+  uint8_t *get_dmaUtilsContext() { return dmaUtilsContext; }
 private:
   uint8_t *pTrMem_chs[10];
   int next_avail_channel = 0;
   int nchannels = 0;
-  uint8_t *dmaUtilsContext = nullptr; 
+  uint8_t *dmaUtilsContext = nullptr;
 };
 
 //---------------------------------------------------------------------------------
 // Allocator for L2 Memory. Declare one of these objects within the
-// scope of L2 allocation. 
+// scope of L2 allocation.
 class AllocL2Context
 {
   public:
@@ -200,10 +200,10 @@ public:
    static const int Dim1 = D1;
    static const int Dim0 = D0;
    static const int size = ElemSize * D0 * D1 * D2 * D3;
-   static void dump() 
+   static void dump()
    {
      #if DEBUG
-     printf("Layout: [%d][%d][%d][%d] ElemSize=%d\n", 
+     printf("Layout: [%d][%d][%d][%d] ElemSize=%d\n",
             D3, D2, D1, D0, ElemSize);
      #endif
    }
@@ -215,7 +215,7 @@ public:
 // buffers.
 // BufferBase is the base class common to both types.
 template<typename BufferType>
-class BufferBase 
+class BufferBase
 {
 public:
   using Type = BufferType;
@@ -246,19 +246,19 @@ class Buffer : public BufferBase<Buffer<Layout_>>
 // Double buffer. The state member indicates the ping/pong status.
 template<typename Layout_>
 class DoubleBuffer : public BufferBase<DoubleBuffer<Layout_>>
-{ 
+{
   public:
   using Layout = Layout_;
   using Base = BufferBase<DoubleBuffer<Layout>>;
   using Base::Base;
   static const bool isDB = true;
   static const int size = 2 * Layout::size;
-  void* get() 
+  void* get()
   {
-    return (state == 0) ? Base::ptr 
+    return (state == 0) ? Base::ptr
                         : (void *)((char *)Base::ptr + Layout::size);
   }
-  void sync() { state ^= 1; } 
+  void sync() { state ^= 1; }
   private:
   int state = 0;
 };
@@ -270,22 +270,22 @@ class APSim;  // forward declaration
 // accesses in a multidimensional array, a la streaming engine or DMA.
 class AccessPattern
 {
-  // APAxis represents the accesses along a single axis. The access proceeds 
-  // 'count' times, with addresses increasing by 'stride' bytes after each 
+  // APAxis represents the accesses along a single axis. The access proceeds
+  // 'count' times, with addresses increasing by 'stride' bytes after each
   // access.  If the stride is 0 the axis rewinds each time. The 'extent' is
   // simply the length in bytes of the whole axis.
   struct APAxis
   {
     APAxis() : count(1), stride(0), extent(0) {}
-    APAxis(uint32_t c, uint32_t s) : 
+    APAxis(uint32_t c, uint32_t s) :
       count(c), stride(s), extent((uint64_t)c*s) {}
-    APAxis(const APAxis& src) : 
+    APAxis(const APAxis& src) :
       count(src.count), stride(src.stride), extent(src.extent) {}
     uint32_t count;    // number of items (element, row, block, etc)
     uint32_t stride;   // offset in bytes to next item
     uint64_t extent;   // total advance on this axis
   };
-  
+
 public:
   static const int maxaxes = 5;
   APAxis axes[maxaxes];
@@ -296,14 +296,14 @@ public:
   APSim *sim = nullptr;
 
 public:
-  AccessPattern() {} 
+  AccessPattern() {}
 
   // Construct default access pattern, given a layout. This results in a simple
   // linear access pattern. Generally this will flatten to a single dimension
   // unless some of the dimensions are too big to represent.
   template<typename Layout>
   AccessPattern(const Layout* layout)
-  { 
+  {
      add_dim(Layout::Dim0, Layout::ElemSize);
      add_dim(Layout::Dim1, Layout::Dim0 * Layout::ElemSize);
      add_dim(Layout::Dim2, Layout::Dim1 * Layout::Dim0 * Layout::ElemSize);
@@ -311,7 +311,7 @@ public:
                            Layout::Dim0 * Layout::ElemSize);
   }
 
-  // Add an additional dimension to the AP. Dimensions should be added 
+  // Add an additional dimension to the AP. Dimensions should be added
   // from inner to outer.
   void add_dim(uint32_t count, uint32_t stride)
   {
@@ -321,11 +321,11 @@ public:
       count *= stride;
       stride = 1;
     }
-    // If new dimension's stride matches previous dimension's extent, and 
-    // the count does not overflow, flatten the new dimension into the 
+    // If new dimension's stride matches previous dimension's extent, and
+    // the count does not overflow, flatten the new dimension into the
     // previous one.
-    if (naxes > 0 && (naxes-1) != sync_axis && 
-        stride == axes[naxes-1].extent && 
+    if (naxes > 0 && (naxes-1) != sync_axis &&
+        stride == axes[naxes-1].extent &&
 	count * axes[naxes-1].count <= USHRT_MAX)
     {
       axes[naxes-1].count *= count;
@@ -368,10 +368,10 @@ class APSim
 public:
   APSim(const AccessPattern& AP) : AP(AP) { reset(); }
   void reset() { i0=i1=i2=i3=0; }
-  int currpos() 
+  int currpos()
   {
-    return i3*AP.axes[3].stride + 
-           i2*AP.axes[2].stride + 
+    return i3*AP.axes[3].stride +
+           i2*AP.axes[2].stride +
            i1*AP.axes[1].stride +
            i0*AP.axes[0].stride;
   }
@@ -385,11 +385,11 @@ public:
       // advance i0
       if (i0++ < AP.axes[0].count)
 	nbytes += AP.axes[0].stride;
-      else 
+      else
       {
         // advance i1
 	if (AP.sync_axis == 0) sync = true;
-	i0 = 0; 
+	i0 = 0;
         if (++i1 >= AP.axes[1].count)
 	{
 	  // advance i2
@@ -404,7 +404,7 @@ public:
 	      sync = true;
 	  }
 	}
-      }	  
+      }
       if (sync) return nbytes;
     }
   }
@@ -412,10 +412,10 @@ public:
 
 //---------------------------------------------------------------------------------
 // DMA represents an agent to transfer data from a SrcBuffer to a DstBuffer.
-// The buffer types are used to set up access patterns for both buffers, 
+// The buffer types are used to set up access patterns for both buffers,
 // which in turn are used to setup the DMA hardware itself.
 // This can happen at init time since the setup is based strictly on the
-// types. 
+// types.
 template <typename SrcBuffer, typename DstBuffer>
 class DMA
 {
@@ -458,7 +458,7 @@ public:
    // this construction, actual buffer instances need to be supplied
    // separately (via 'bind')
    DMA(DMAContext &ctx, const char* n="") :
-     context(ctx), mode(Invalid), channel(ctx.allocate_channel()), name(n) 
+     context(ctx), mode(Invalid), channel(ctx.allocate_channel()), name(n)
    {
      // Determine access patterns based on types
      initAP();
@@ -473,7 +473,7 @@ public:
    }
 
    // Setup access patterns for src and dst based on layouts
-   // TODO: Could use compile-time specializations here (enable-if 
+   // TODO: Could use compile-time specializations here (enable-if
    // instead of 'if')
    void initAP()
    {
@@ -486,8 +486,8 @@ public:
        mode = Direct;
        // Use simple raster access pattern.
        // Cast null to buffer type so AP constructor can infer type
-       srcAP = AccessPattern(static_cast<const SrcLayout *>(nullptr)); 
-       dstAP = AccessPattern(static_cast<const DstLayout *>(nullptr)); 
+       srcAP = AccessPattern(static_cast<const SrcLayout *>(nullptr));
+       dstAP = AccessPattern(static_cast<const DstLayout *>(nullptr));
      }
 
      // Different size buffers. The assumption is the larger(external) buffer
@@ -514,8 +514,8 @@ public:
      #endif
    }
 
-   // Initialize access patterns (APs) for block-by-block DMA between an 
-   // external buffer and a local one. The local buffer's layout must be a 
+   // Initialize access patterns (APs) for block-by-block DMA between an
+   // external buffer and a local one. The local buffer's layout must be a
    // subset of the external one. That is, dimensions must agree until the
    // local's last dimension, which must evenly divide.
    template<typename ExtType, typename LocalType>
@@ -524,18 +524,18 @@ public:
      using ExtLayout   = typename ExtType::Layout;
      using LocalLayout = typename LocalType::Layout;
      // xaxes=external  laxes=local
-     int xaxes[4] = { ExtLayout::Dim0, ExtLayout::Dim1, 
+     int xaxes[4] = { ExtLayout::Dim0, ExtLayout::Dim1,
 		      ExtLayout::Dim2, ExtLayout::Dim3 };
-     int laxes[4] = { LocalLayout::Dim0, LocalLayout::Dim1, 
+     int laxes[4] = { LocalLayout::Dim0, LocalLayout::Dim1,
 		      LocalLayout::Dim2, LocalLayout::Dim3 };
 
      // printf("init_APs: ext:"); ExtLayout::dump();
      // printf("          loc:"); LocalLayout::dump();
 
-     // Scan dimensions looking for the split axis 
+     // Scan dimensions looking for the split axis
      for(int i = 0; i < 4; ++i)
      {
-       uint32_t stride = (i == 0) ? ExtLayout::ElemSize 
+       uint32_t stride = (i == 0) ? ExtLayout::ElemSize
 				  : extAP.current_extent();
        if (laxes[i] == xaxes[i])
        {
@@ -547,7 +547,7 @@ public:
        }
        // Make sure the smaller axis evenly divides the larger one, and
        // that the local buffer has no more dimensions
-       else if (xaxes[i] % laxes[i] != 0 || 
+       else if (xaxes[i] % laxes[i] != 0 ||
                 laxes[i] * locAP.current_extent() != LocalLayout::size)
 	 return (mode = Invalid);
 
@@ -567,7 +567,7 @@ public:
        // this axis.
        extAP.add_sync();
        locAP.add_sync();
-       // printf("----\n"); 
+       // printf("----\n");
 
        dma_blocks = nblocks;
        extAP.add_dim(nblocks, block_size);
@@ -597,7 +597,7 @@ public:
      return mode;
    }
 
-   // Attach actual buffer instances to this DMA object. 
+   // Attach actual buffer instances to this DMA object.
    void bind(SrcBuffer& s, DstBuffer& d)
    {
      src = &s;
@@ -617,30 +617,30 @@ public:
      }
 
      tvm_tidl_configure_channel(
-       context.get_dmaUtilsContext(), channel, context.get_pTrMem(), 
+       context.get_dmaUtilsContext(), channel, context.get_pTrMem(),
        (uint8_t*)src->get(), (uint8_t*)dst->get(), sync,
-       srcAP.axes[0].count, 
-       srcAP.axes[1].count, 
-       srcAP.axes[2].count, 
+       srcAP.axes[0].count,
+       srcAP.axes[1].count,
+       srcAP.axes[2].count,
        srcAP.axes[3].count,
-       srcAP.axes[1].stride, 
-       srcAP.axes[2].stride, 
+       srcAP.axes[1].stride,
+       srcAP.axes[2].stride,
        srcAP.axes[3].stride,
-       dstAP.axes[0].count, 
-       dstAP.axes[1].count, 
-       dstAP.axes[2].count, 
+       dstAP.axes[0].count,
+       dstAP.axes[1].count,
+       dstAP.axes[2].count,
        dstAP.axes[3].count,
-       dstAP.axes[1].stride, 
-       dstAP.axes[2].stride, 
+       dstAP.axes[1].stride,
+       dstAP.axes[2].stride,
        dstAP.axes[3].stride
-     );  
+     );
    }
 
    // Trigger transfer of next block
    void trigger()
    {
      #if DEBUG && MODEL_DMA
-     printf("trigger %s[%d]: %d --> %d, channel=%d\n", 
+     printf("trigger %s[%d]: %d --> %d, channel=%d\n",
             name, seq, srcAP.sim->currpos(), dstAP.sim->currpos(), channel);
      #endif
      tvm_tidl_dmautils_trigger(context.get_dmaUtilsContext(), channel);
@@ -669,7 +669,7 @@ public:
    // no-double-buffering, double-buffer-dst, and double-buffer-src.
    // The selection is made at compile time based on the buffer types
    // via enable-if.
-   template <typename SB, typename DB, 
+   template <typename SB, typename DB,
              std::enable_if_t<!SB::isDB && !DB::isDB, bool> = true>
    void copy_helper()
    {
@@ -679,9 +679,9 @@ public:
      wait();
    }
 
-   // Specialization for double-buffered "copy-in": copy 1 block from 
+   // Specialization for double-buffered "copy-in": copy 1 block from
    // external src to double-buffered local dst
-   template <typename SB, typename DB, 
+   template <typename SB, typename DB,
              std::enable_if_t<!SB::isDB && DB::isDB, bool> = true>
    void copy_helper()
    {
@@ -692,7 +692,7 @@ public:
      if (seq == 0)
      {
         dst->sync();
-	trigger(); 
+	trigger();
      }
      // wait for current block
      wait();
@@ -702,9 +702,9 @@ public:
        trigger();
    }
 
-   // Specialization for double-buffered "copy-out": copy 1 block from 
+   // Specialization for double-buffered "copy-out": copy 1 block from
    // double-buffered local src to external dst
-   template <typename SB, typename DB, 
+   template <typename SB, typename DB,
              std::enable_if_t<SB::isDB && !DB::isDB, bool> = true>
    void copy_helper()
    {
@@ -722,8 +722,8 @@ public:
        wait();
    }
 
-   void *src_ptr() { return src->get(); } 
-   void *dst_ptr() { return dst->get(); } 
+   void *src_ptr() { return src->get(); }
+   void *dst_ptr() { return dst->get(); }
 
    const char *mode_name(Mode mode)
    {
@@ -743,9 +743,9 @@ public:
    {
      #if DEBUG
       printf("\nDMA config:\n");
-      printf("src layout: "); 
+      printf("src layout: ");
       SrcLayout::dump();
-      printf("dst layout: "); 
+      printf("dst layout: ");
       DstLayout::dump();
       printf("mode=%s nblocks=%d\n", mode_name(mode), dma_blocks);
       printf("src AccessPattern\n");
@@ -758,7 +758,7 @@ public:
 
 // DMA factory function -- enables type inference for construction
 template <typename SrcBuffer, typename DstBuffer>
-DMA<SrcBuffer, DstBuffer> 
+DMA<SrcBuffer, DstBuffer>
 create_DMA(DMAContext &ctx, SrcBuffer& s, DstBuffer& d, const char* n="")
 {
   return DMA<SrcBuffer, DstBuffer>(ctx, s, d, n);
@@ -814,10 +814,10 @@ template <> struct SA_veclen_flag<32>
 template <> struct SA_veclen_flag<64>
    { static const __SA_VECLEN val = __SA_VECLEN_64ELEMS; };
 
-// SE Configuration
-template <typename Type, int Veclen, 
-          unsigned icnt0, unsigned icnt1, unsigned icnt2, unsigned icnt3, 
-	  unsigned dim1, unsigned dim2, unsigned dim3>
+// SE Configuration: Full dimmensionality support for C7x {ICNT0:ICNT5} and {DIM1:DIM5}
+template <typename Type, int Veclen,
+  unsigned icnt0, unsigned icnt1, unsigned icnt2, unsigned icnt3, unsigned icnt4,
+  unsigned icnt5, unsigned dim1, unsigned dim2, unsigned dim3, unsigned dim4, unsigned dim5>
 class SEConfig
 {
 public:
@@ -825,38 +825,47 @@ public:
   {
     se_params.ELETYPE  = SE_element_type_flag<sizeof(Type)>::val;
     se_params.VECLEN   = SE_veclen_flag<Veclen>::val;
-    se_params.DIMFMT   = __SE_DIMFMT_4D;
+    se_params.DIMFMT   = __SE_DIMFMT_6D; // assigning to 6D always has no h/w overhead
     se_params.ICNT0    = icnt0;
     se_params.ICNT1    = icnt1;
     se_params.ICNT2    = icnt2;
     se_params.ICNT3    = icnt3;
+    se_params.ICNT4    = icnt4;
+    se_params.ICNT5    = icnt5;
     se_params.DIM1     = dim1;
     se_params.DIM2     = dim2;
     se_params.DIM3     = dim3;
+    se_params.DIM4     = dim4;
+    se_params.DIM5     = dim5;
   }
   __SE_TEMPLATE_v1 params() const { return se_params; }
 private:
   __SE_TEMPLATE_v1 se_params;
 };
 
-// SA Configuration
-template <typename Type, int Veclen, 
-          unsigned icnt0, unsigned icnt1, unsigned icnt2, unsigned icnt3, 
-	  unsigned dim1, unsigned dim2, unsigned dim3>
+// SA Configuration: Full dimmensionality support for C7x {ICNT0:ICNT5} and {DIM1:DIM5}
+template <typename Type, int Veclen,
+          unsigned icnt0, unsigned icnt1, unsigned icnt2, unsigned icnt3,
+          unsigned icnt4, unsigned icnt5,  unsigned dim1, unsigned dim2, unsigned dim3,
+          unsigned dim4, unsigned dim5>
 class SAConfig
 {
 public:
   SAConfig() : sa_params(__gen_SA_TEMPLATE_v1())
   {
     sa_params.VECLEN   = SA_veclen_flag<Veclen>::val;
-    sa_params.DIMFMT   = __SA_DIMFMT_4D;
+    sa_params.DIMFMT   = __SA_DIMFMT_6D; // assigning to 6D always has no h/w overhead
     sa_params.ICNT0    = icnt0;
     sa_params.ICNT1    = icnt1;
     sa_params.ICNT2    = icnt2;
     sa_params.ICNT3    = icnt3;
+    sa_params.ICNT4    = icnt4;
+    sa_params.ICNT5    = icnt5;
     sa_params.DIM1     = dim1;
     sa_params.DIM2     = dim2;
     sa_params.DIM3     = dim3;
+    sa_params.DIM4     = dim4;
+    sa_params.DIM5     = dim5;
   }
   __SA_TEMPLATE_v1 params() const { return sa_params; }
 private:
