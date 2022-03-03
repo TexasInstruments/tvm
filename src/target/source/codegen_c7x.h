@@ -164,6 +164,7 @@ class CodeGenC7x final : public CodeGenC {
   void PrintType(const Type& type, std::ostream& os);  // NOLINT(*)
   void PrintFuncPrefix() final;                        // NOLINT(*)
   void PrintFinalReturn() final;                       // NOLINT(*)
+  void PrintTrailer();
 
   // expression visitors
   void VisitExpr_(const VarNode* op, std::ostream& os) override;        // NOLINT(*)
@@ -260,6 +261,13 @@ class CodeGenC7x final : public CodeGenC {
   bool in_vector_cond;
   /* \brief current count of vector SE in vector condition of SelectNode */
   int  se_in_vec_cond_count;
+  /* \brief Maximum global allocation across functions. Size is assigned to a global in generated code */
+  size_t max_global_alloc_sz_in_bytes_;
+  /* \brief Per function variable, set to true if there are any local allocations in the function */
+  bool local_allocations_present_;
+  /* \brief Per function variable, set to true if there are any global allocations in the function */
+  bool global_allocations_present_;
+
 
   /* \brief Save variables created during codegen - this prevents them from being deallocated.
    *        This is required because these variables are not part of the IR itself.

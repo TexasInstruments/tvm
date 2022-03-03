@@ -161,12 +161,166 @@ public:
   }
 };
 
+class ScanMemory : public StmtExprVisitor {
+  public:
+  struct MemoryStats
+  {
+    size_t local_alloc_size;
+    size_t global_alloc_size;
+  };
+
+  MemoryStats stats_ = { 0, 0};
+
+  ScanMemory(const std::set<const VarNode *>& dma_buffers,
+             bool& local_allocations_present,
+             bool& global_allocations_present,
+             size_t& max_global_alloc_in_bytes) : dma_buffers_(dma_buffers),
+                                                  local_allocations_present_(local_allocations_present),
+                                                  global_allocations_present_(global_allocations_present),
+                                                  max_global_alloc_sz_in_bytes_(max_global_alloc_in_bytes) {
+    stats_.local_alloc_size = stats_.global_alloc_size = 0;
+  }
+
+  ~ScanMemory() {
+    if (stats_.global_alloc_size > max_global_alloc_sz_in_bytes_)
+      max_global_alloc_sz_in_bytes_ = stats_.global_alloc_size;
+    if (stats_.local_alloc_size > 0)
+      local_allocations_present_ = true;
+    if (stats_.global_alloc_size > 0)
+      global_allocations_present_ = true;
+  }
+
+  // Save off storage scope attribute. Needed for IsLocal()
+  void VisitStmt_(const AttrStmtNode* op) override {
+    if (op->attr_key == tir::attr::storage_scope) {
+      const VarNode* v = op->node.as<VarNode>();
+      ICHECK(v);
+      alloc_storage_scope_[v] = op->value.as<StringImmNode>()->value;
+    }
+    VisitStmt(op->body);
+  }
+
+  void VisitExpr_(const CallNode* op) override {
+    if (!is_call_extern(op, "c7x_dma_setup"))
+    {
+      StmtExprVisitor::VisitExpr_(op);
+      return;
+    }
+
+    // Calculate the size of the local buffer. Returns 0 the buffer is not a local buffer.
+    auto calc_buffer_size =
+      [&](const VarNode* buffer_ptr, int n) -> size_t {
+
+        if (!IsLocal(buffer_ptr))
+          return 0;
+
+        const PointerTypeNode *ptr_type;
+        const PrimTypeNode *prim_type = nullptr;
+        if ((ptr_type = buffer_ptr->type_annotation.as<PointerTypeNode>()))
+          prim_type = ptr_type->element_type.as<PrimTypeNode>();
+        ICHECK(prim_type);
+
+        // Compute size using the appropriate arguments to c7x_dma_setup
+        size_t size = prim_type->dtype.bytes();
+        for (int i = 1; i <= 4; ++i)
+          size *= Downcast<IntImm>(op->args[n+i]).get()->value;
+
+        // Account for double buffering
+        size *= 2;
+
+        // Account for alignment
+        return aligned_size(size);
+    };
+
+    // Signature is:
+    // @tir.call_extern("c7x_dma_setup", src_var, dim3, dim2, dim1, dim0,
+    //                                   dst_var, dim3, dim2, dim1, dim0)
+    const VarNode* src = Downcast<Var>(op->args[1]).get();
+    const VarNode* dst = Downcast<Var>(op->args[6]).get();
+    size_t src_size = calc_buffer_size(src, 1);
+    size_t dst_size = calc_buffer_size(dst, 6);
+
+    DLOG(INFO) << "ScanMemory:c7x_dma_setup: " << src->name_hint << " : " << src_size << std::endl;
+    DLOG(INFO) << "ScanMemory:c7x_dma_setup: " << dst->name_hint << " : " << dst_size << std::endl;
+
+    stats_.local_alloc_size += src_size;
+    stats_.local_alloc_size += dst_size;
+
+    StmtExprVisitor::VisitExpr_(op);
+  }
+
+  void VisitStmt_(const AllocateNode* op) override {
+    ICHECK(!is_zero(op->condition));
+
+    // Skip allocation calls for DMA buffers; they are allocated as part of DMA setup
+    // Note: All DMA allocations via c7x_dma_setup have been hoisted to the top of the function.
+    //       See c7x.py, C7xDMATransform
+    if (IsLocal(op->buffer_var.get()) && IsDMA(op->buffer_var.get())) {
+      VisitStmt(op->body);
+      return;
+    }
+
+    int32_t alloc_size = op->constant_allocation_size();
+    ICHECK_GT(alloc_size, 0) << "Can only handle constant size stack allocation for now";
+
+    size_t alloc_size_in_bytes = aligned_size(alloc_size * op->dtype.bytes());
+ 
+    DLOG(INFO) << "ScanMemory:AllocateNode: " << op->buffer_var->name_hint << " : "
+               << alloc_size_in_bytes << std::endl;
+
+    if (!IsLocal(op->buffer_var.get())) {
+      stats_.global_alloc_size += alloc_size_in_bytes;
+    } else {
+      stats_.local_alloc_size += alloc_size_in_bytes;
+    }
+
+    VisitStmt(op->body);
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const ScanMemory& m) {
+    os << "L2 alloc: " << m.stats_.local_alloc_size;
+    os << " Global: " << m.stats_.global_alloc_size << std::endl;
+    return os;
+  }
+
+  private:
+  /*! the storage scope of allocation */
+  std::unordered_map<const VarNode*, std::string> alloc_storage_scope_;
+  const std::set<const VarNode *>& dma_buffers_;
+
+  bool& local_allocations_present_;
+  bool& global_allocations_present_;
+
+  /* \brief Maximum global allocation across functions */
+  size_t& max_global_alloc_sz_in_bytes_;
+
+  /* \brief Account for alignment when computing allocation sizes */
+  const size_t MEM_ALIGN = 8;
+  size_t aligned_size(size_t size) {
+    return (((size + MEM_ALIGN-1)/MEM_ALIGN) * MEM_ALIGN);
+  }
+
+  // Is variable a locally allocated buffer
+  bool IsLocal(const VarNode* var) {
+    auto it = alloc_storage_scope_.find(var);
+    return it != alloc_storage_scope_.end() && it->second.compare(0, 5, "local") == 0;
+  }
+
+  // Is variable used in DMA copy-in/copy-out
+  bool IsDMA(const VarNode* var) {
+    return dma_buffers_.find(var) != dma_buffers_.end();
+  }
+};
+
 CodeGenC7x::CodeGenC7x() { module_name_ = GetUniqueName("__tvm_module_ctx"); }
 
 // adapted from CodeGenC
 void CodeGenC7x::Init(bool output_ssa, bool emit_asserts, std::string target_str) {
   emit_asserts_ = emit_asserts;
   declared_globals_.clear();
+
+  max_global_alloc_sz_in_bytes_ = 0;
+
   decl_stream << "// custom backend for C7x" << "\n";
   decl_stream << "// tvm target: " << target_str << "\n";
   // We don't need packed func API
@@ -177,6 +331,11 @@ void CodeGenC7x::Init(bool output_ssa, bool emit_asserts, std::string target_str
   decl_stream << "#include \"c7x_tvm_runtime.h\"\n\n";
   //decl_stream << "void* " << module_name_ << " = NULL;\n";
   CodeGenC::Init(output_ssa);
+}
+
+void CodeGenC7x::PrintTrailer() {
+  if (max_global_alloc_sz_in_bytes_ > 0)
+    this->stream << "extern \"C\" size_t get_ddr_scratch_mem_size() { return " << max_global_alloc_sz_in_bytes_ << "; }\n";
 }
 
 void CodeGenC7x::AddFunction(const PrimFunc& f) {
@@ -262,6 +421,13 @@ void CodeGenC7x::InitFuncState(const PrimFunc& f) {
   in_vector_cond = false;
   se_in_vec_cond_count = 0;
 
+  local_allocations_present_ = false;
+  global_allocations_present_ = false;
+  ScanMemory MemoryScanner(dma_buffers_, local_allocations_present_, global_allocations_present_, 
+                          max_global_alloc_sz_in_bytes_);
+  MemoryScanner(f->body);
+  DLOG(INFO) << MemoryScanner;
+
   CodeGenC::InitFuncState(f);
 }
 
@@ -310,8 +476,15 @@ void CodeGenC7x::PreFunctionBody(const PrimFunc& f) {
   stream << "CriticalSectionContext csContext;\n";
 
   // Initialize L2Context first, DMAContext needs it for L2 memory allocation
-  this->PrintIndent();
-  stream << "AllocL2Context L2Context;\n";
+  if (local_allocations_present_) {
+    this->PrintIndent();
+    stream << "AllocL2Context L2Context;\n";
+  }
+
+  if (global_allocations_present_) {
+    this->PrintIndent();
+    stream << "AllocDDRContext DDRContext;\n";
+  }
 
   // Do not define a DMAContext if there are no DMA calls
   if (num_dma_intrinsics_ > 0)
@@ -1277,12 +1450,6 @@ void CodeGenC7x::VisitStmt_(const LetStmtNode* op) {
     PrintStmt(op->body);
     return;
   }
-    // Skip allocation calls for DMA buffers; they are allocated as part
-    // of DMA setup
-  else if (is_call_extern(op->value, "C7xAllocate") && IsDMA(op->var.get())) {
-    PrintStmt(op->body);
-    return;
-  }
   else if (is_call_extern(op->value, "c7x_stream_config")) {
     PrintStreamConfig(op->var.get());
     PrintStmt(op->body);
@@ -1336,7 +1503,10 @@ void CodeGenC7x::VisitStmt_(const AllocateNode* op) {
   stream << ' ' << restrict_keyword_;
   stream << ' ' << vid << " = static_cast<";
   PrintType(ptype, stream);
-  stream << ">(L2Context.allocate(" << constant_size * op->dtype.bytes() << "));\n";
+  if (IsLocal(op->buffer_var.get()))
+    stream << ">(L2Context.allocate(" << constant_size * op->dtype.bytes() << "));\n";
+  else
+    stream << ">(DDRContext.allocate(" << constant_size * op->dtype.bytes() << "));\n";
 
   RegisterHandleType(op->buffer_var.get(), op->dtype);
   this->PrintStmt(op->body);
@@ -1621,6 +1791,8 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
     auto f = Downcast<PrimFunc>(kv.second);
     cg.AddFunction(f);
   }
+
+  cg.PrintTrailer();
 
   #if 0
   if (could_have_linked_params) {

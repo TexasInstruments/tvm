@@ -34,7 +34,8 @@
 #define EXTERN_C
 #endif
 
-#define L2_ALIGN_SIZE (128U)
+/* Align to 8 bytes to account for 64b data types */
+#define L2_ALIGN_SIZE (8U)
 #define L2_ALIGN_CEIL(VAL, ALIGN) ((((VAL)+(ALIGN)-1)/(ALIGN)) * (ALIGN))
 
 static uint32_t malloc_size = 0;
