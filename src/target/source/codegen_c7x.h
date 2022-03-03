@@ -268,7 +268,7 @@ class CodeGenC7x final : public CodeGenC {
   // Is variable a locally allocated buffer
   bool IsLocal(const VarNode* var) {
     auto it = alloc_storage_scope_.find(var);
-    return it != alloc_storage_scope_.end() && it->second == "local";
+    return it != alloc_storage_scope_.end() && it->second.compare(0, 5, "local") == 0;
   }
 
   void PrintGetFuncFromBackend(const std::string& func_name, const std::string& packed_func_name);
