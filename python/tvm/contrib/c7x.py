@@ -207,11 +207,69 @@ def SETransform(f, mod, ctx):
        b. Remove if guards that are no longer needed
     4. Wrap-up
        a. Insert stream_config calls at top of function
+
+    valid case 1: the loop is annotated as to be "vectorized" and vectorized later
+      for (ax1.c: int32, 0, 84) {
+        for (ax2.c.ax3.c.fused.outer: int32, 0, 4) {
+          for (ax2.c.ax3.c.fused.inner: int32, 0, 16) "vectorized" {
+            if @tir.likely((((ax2.c.ax3.c.fused.outer*16) + ax2.c.ax3.c.fused.inner) < 49), dtype=bool) {
+              T_multiply.local[(((ax1.c*49) + (ax2.c.ax3.c.fused.outer*16)) + ax2.c.ax3.c.fused.inner)] = ((float32*)placeholder.local0[(((ax1.c*49) + (ax2.c.ax3.c.fused.outer*16)) + ax2.c.ax3.c.fused.inner)]*(float32*)placeholder.local1[ax1.c])
+            }
+          }
+        }
+
+    valid case 2: loop annotated as to be "vectorized", but failed to vectorize later,
+                  we still use vector predicate for scalar store
+        for (ax1.c: int32, 0, 2) {
+          for (ax2.c.ax3.c.fused.outer: int32, 0, 69) {
+            for (ax2.c.ax3.c.fused.inner: int32, 0, 16) "vectorized" {
+              if @tir.likely((((ax2.c.ax3.c.fused.outer*16) + ax2.c.ax3.c.fused.inner) < 1089), dtype=bool) {
+                T_layout_trans.local[(((ax1.c*1089) + (ax2.c.ax3.c.fused.outer*16)) + ax2.c.ax3.c.fused.inner)] = (float32*)T_concat.local0[(((ax2.c.ax3.c.fused.outer*32) + (ax2.c.ax3.c.fused.inner*2)) + ax1.c)]
+              }
+            }
+          }
+
+    valid case 3: loop not annotated as to be "vectorized" (loop from original schedule),
+                   no vector predicate
+          for (j_6: int32, 0, 851760) {
+            if (0f32 <= (float32*)hybrid_nms.v0[(j_6*6)]) {
+              for (k_7: int32, 0, 6) {
+                hybrid_rearrange_box_out_2[(((int32*)valid_indices[0]*6) + k_7)] = (float32*)hybrid_nms.v0[((j_6*6) + k_7)]
+              }
+              valid_indices[0] = ((int32*)valid_indices[0] + 1)
+            }
+            if ((int32*)valid_indices[0] <= j_6) {
+              for (k_8: int32, 0, 6) {
+                hybrid_rearrange_box_out_2[((j_6*6) + k_8)] = -1f32
+              }
+            }
+          }
+
+    # Conditions for memory accesses that can be turned into SE/SA
+    # 1. within the innermost loop
+    # 2. the indexing expression conforms to the innermost loop nest (e.g. a*i + b*j + c*k + d)
+    # 3. the conforming innermost loop nest cannot contain IfThenElse except the veclen_guard,
+    #    because SE/SA cannot be programmed to handle conditions other than veclen_guard
+    #
+    # Conditions for IfTenElse being a true veclen_guard and safely removed
+    # 1. within the innermost loop, cannot be between two loops in the loop nest
+    # 2. the innermost loop is vectorized
+    # 3. there is a qualified SECandidate associated with this guard
+    #
+    # Place for inserting the SE/SAConfig and Open/Close
+    # 1. configs can be hoisted to the beginning of function
+    # 2. Open/Close can be around the level of the definition,
+    #    upper (icnts=1, dims= 0) handles the case where outer loops are not used in indexing
+    #
+    # Valid parameters for SE/SA Config
+    # 1. Using loop bounds and coefficients used in memory access expressions
     '''
     # map of var definitions to loop nesting level; delimits outer scope
     def_levels = {}
     # stack of ForStmts at current point
     loop_nest = []         
+    # stack of (IfThenElseStmt, len(loop_nest)) at current point
+    if_nest = []
     # currently in-effect guard condition
     veclen_guard = None 
     # flat list of all SECandidates
@@ -224,18 +282,22 @@ def SETransform(f, mod, ctx):
     loop_overlaps = {}
     # numerical id for each loop, for debug
     loop_ids = {}
+    # qualified guards that could be removed later
+    qualified_guards = []
 
     class SECandidate():
         '''
         This class represents an instance of a load or store, that can possibly
         be converted to use streaming access.
         '''
-        def __init__(self, op, nest, trip, guard):
+        def __init__(self, op, nest, this_if_nest, trip, guard):
             # the load or store operator, and var operand
             self.op = op
             self.var = op.buffer_var
             # loops between var's def and access
             self.nest = nest
+            # ifs between var's def and access
+            self.if_nest = this_if_nest
             self.outer_loop = nest[0] if nest else None
             self.guard_condition = guard
             self.config = None
@@ -251,13 +313,19 @@ def SETransform(f, mod, ctx):
             '''
             See if a load or store to qualifies to use stream-based access
             '''
-            # TODO: if var is a candidate at any overlapping loop, reject both
-            # TODO: if var is a candidate at this loop, and not same, reject both
             logging.debug(f"qualify: {self}")
             op = self.op
             index = op.index
             buf = op.buffer_var
             if not self.nest:
+                return False
+            # the loop nest cannot contain IfThenElse except the veclen_guard,
+            #   because SE/SA cannot be programmed to handle conditions other than veclen_guard
+            if len(self.if_nest) > 1 or \
+               (len(self.if_nest) == 1 and
+                (self.if_nest[0][1] != len(self.nest) or
+                 _get_if_condition(self.if_nest[0][0]) != self.guard_condition)):
+                logging.debug(f"  disqualified due to if_nest:{[(_get_if_condition(x[0]), x[1]) for x in self.if_nest]}")
                 return False
             # Analyze the index expression to get the coefficients of the
             # loop index variables. Given: 
@@ -305,6 +373,9 @@ def SETransform(f, mod, ctx):
             # Make sure the HW can support this stream setup
             if not config.validate():
                 return False
+            if self.guard_condition != None:
+                if self.if_nest[0][0] not in qualified_guards:
+                    qualified_guards.append(self.if_nest[0][0])
             self.config = config
             logging.debug(f"qualified: {self}")
             return True
@@ -359,7 +430,8 @@ def SETransform(f, mod, ctx):
             return self.sort_key < other.sort_key
         def __str__(self):
             nest_ids = [loop_ids[l] for l in self.nest]
-            return (f"candidate {self.var}, nest={nest_ids}, guard={self.guard_condition} trip={self.sort_key[1]} engine={self.engine} config_var={self.config_var} config=[{self.config}]")
+            if_ids = [ x[1] for x in self.if_nest ]
+            return (f"candidate {self.var}, nest={nest_ids}, if_nest={if_ids}, guard={self.guard_condition} trip={self.sort_key[1]} engine={self.engine} config_var={self.config_var} config=[{self.config}]")
 
     class SEConfig:
         ''' Helper class to build and manage a single SE/SA configuration '''
@@ -441,16 +513,24 @@ def SETransform(f, mod, ctx):
                         trip *= l.extent.value 
                     else:
                         trip *= 10
+                veclen_guard = None   # veclen_guard must be inside the innermost loop
             elif isinstance(op, tvm.tir.Allocate):
                 def_levels.update({op.buffer_var: len(loop_nest)})
             elif isinstance(op, tvm.tir.Let):
                 def_levels.update({op.var: len(loop_nest)})
             # look for vector length guard
             elif isinstance(op, tvm.tir.IfThenElse):
-                veclen_guard = _detect_veclen_guard(op)
+                if_nest.append((op, len(loop_nest)))
+                if len(loop_nest) > 0 and loop_nest[-1].kind == tvm.tir.ForKind.VECTORIZED:
+                    veclen_guard = _detect_veclen_guard(op)
+                    logging.debug(f"_detect_veclen_guard: {_get_if_condition(op)}")
+                    logging.debug(f"_detect_veclen_guard result: {veclen_guard}")
+                else:
+                    logging.debug(f"not veclen_guard: {_get_if_condition(op)}")
             elif isinstance(op, tvm.tir.Store) or isinstance(op, tvm.tir.Load):
                 level = def_levels[op.buffer_var]
-                cand = SECandidate(op, loop_nest[level:], trip, veclen_guard)
+                this_if_nest = [ (x[0], x[1]-level) for x in if_nest if x[1] > level ]
+                cand = SECandidate(op, loop_nest[level:], this_if_nest, trip, veclen_guard)
                 candidates.append(cand)
                 loop = cand.outer_loop
                 if loop:
@@ -462,6 +542,7 @@ def SETransform(f, mod, ctx):
             if isinstance(op, tvm.tir.For):
                 loop_nest.pop()
             elif isinstance(op, tvm.tir.IfThenElse):
+                if_nest.pop()
                 veclen_guard = None
 
         # body of find candidates pass
@@ -546,7 +627,7 @@ def SETransform(f, mod, ctx):
         elif isinstance(op, tvm.tir.IfThenElse):
             # if we streamified all the accesses, remove the vector 
             # length guard
-            if _guard_nullified(op):
+            if op in qualified_guards and _guard_nullified(op):
                then_case = tvm.tir.stmt_functor.ir_transform(
                       op.then_case, _deploy_pre, None)
                return then_case
@@ -607,7 +688,7 @@ def SETransform(f, mod, ctx):
         # is defunct.
         isect = guard_vars.intersection(then_vars)
         logging.debug(f"condition: {guard_condition} guard_vars={guard_vars} then_vars={then_vars} isect={isect}")
-        return len(isect) == 0
+        return len(guard_vars) != 0 and len(isect) == 0
 
     #---------------------------------------------------------------
     # main body of SETransform
@@ -624,6 +705,7 @@ def SETransform(f, mod, ctx):
             cand.qualified = True
             idnum += 1
 
+    logging.debug(f"qualified veclen_guards: {qualified_guards}")
     # For qualified candidates, rewrite accesses 
     stmt = tvm.tir.stmt_functor.ir_transform(f.body, _deploy_pre, None)
 
