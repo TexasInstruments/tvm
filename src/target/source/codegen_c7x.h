@@ -98,7 +98,7 @@ public:
     engine(Downcast<StringImm>(scalar(CC->args[1])).get()->value),
     pred(Downcast<StringImm>(scalar(CC->args[2])).get()->value == "pred"),
     adv(Downcast<StringImm>(scalar(CC->args[3])).get()->value == "adv"),
-    index(CC->args[3].get()) {
+    index(CC->args[4].get()) {
   }
 
 public:
@@ -254,6 +254,12 @@ class CodeGenC7x final : public CodeGenC {
   std::map<const VarNode*, const VarNode*> dma_map_;
   /* \brief SE/SA config information */
   StreamInfo stream_info_;
+  /* \brief vector SE dtypes used in the condition of SelectNode */
+  std::vector<DataType> sel_cond_vse_dtypes_;
+  /* \brief if currently visiting vector condition of SelectNode */
+  bool in_vector_cond;
+  /* \brief current count of vector SE in vector condition of SelectNode */
+  int  se_in_vec_cond_count;
 
   /* \brief Save variables created during codegen - this prevents them from being deallocated.
    *        This is required because these variables are not part of the IR itself.

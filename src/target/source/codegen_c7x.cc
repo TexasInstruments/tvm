@@ -55,7 +55,7 @@ namespace codegen {
 // We use a registered op (rather than a call_extern) for the stream
 // access intrinsic, because we can indicate that it can be vectorized.
 TVM_REGISTER_OP("tir.c7x.stream_access")
-    .set_num_inputs(4)
+    .set_num_inputs(5)
     .set_attr<TCallEffectKind>("TCallEffectKind", Integer(CallEffectKind::kUpdateState))
     .set_attr<TVectorizable>("TVectorizable", true);
 
@@ -129,6 +129,31 @@ public:
   void VisitExpr_(const CallNode* op) override {
     if (is_call_builtin(op, "tir.c7x.stream_access"))
       info_.UpdateVecLen(op);
+
+    // Recurse to handle the case where there is more than one
+    // stream_access in an expression
+    StmtExprVisitor::VisitExpr_(op);
+  }
+};
+
+// A pre-pass to find and collect vector stream (SE) used in condition of SelectNode
+class ScanVSEinSelCond : public StmtExprVisitor {
+  std::vector<DataType>& vse_;
+  bool in_vector_cond;
+public:
+  ScanVSEinSelCond(std::vector<DataType>& vse) : vse_(vse), in_vector_cond(false) {}
+  // Look for vector SelectNode and capture vector SEs
+  void VisitExpr_(const SelectNode* op) override {
+    in_vector_cond = (op->condition->dtype.lanes() > 1);
+    StmtExprVisitor::VisitExpr(op->condition);
+    in_vector_cond = false;
+    StmtExprVisitor::VisitExpr(op->true_value);
+    StmtExprVisitor::VisitExpr(op->false_value);
+  }
+  // Look for @tir.c7x.stream_access(...) and update vse_ if used in vector condition
+  void VisitExpr_(const LoadNode* op) override {
+    if (in_vector_cond && is_call_builtin(op->index, "tir.c7x.stream_access"))
+      vse_.push_back(op->dtype);
 
     // Recurse to handle the case where there is more than one
     // stream_access in an expression
@@ -225,6 +250,18 @@ void CodeGenC7x::InitFuncState(const PrimFunc& f) {
   ScanStreamAccess StreamScanner(stream_info_);
   StreamScanner(f->body);
 
+  // Run the pre-pass to gather SE used in vector select conditions (work around cl7x/opt7x abort)
+  // cl7x/opt7x aborts on: pout[i] = __SE1ADV(float16) != (float16)0.0f ? p2[i] : (float16)0.0f;
+  // work around: pout[i] = (t = __SE1ADV(float16), t) != (float16)0.0f ? p2[i] : (float16)0.0f;
+  // Step 1: collect the SE types into a vector in pre-pass
+  // Step 2: print out all declarations for temporaries, e.g. float16 vse_t0;
+  // Step 3: Rewrite SE load as the comma expression using the workaround
+  sel_cond_vse_dtypes_.clear();
+  ScanVSEinSelCond VSEScanner(sel_cond_vse_dtypes_);
+  VSEScanner(f->body);
+  in_vector_cond = false;
+  se_in_vec_cond_count = 0;
+
   CodeGenC::InitFuncState(f);
 }
 
@@ -281,6 +318,15 @@ void CodeGenC7x::PreFunctionBody(const PrimFunc& f) {
   {
     this->PrintIndent();
     stream << "DMAContext DMAContext("<< num_dma_intrinsics_ << ");\n\n";
+  }
+
+  // Declare vector SE temps that will be used in vector condition of SelectNode
+  int se_count = 0;
+  for (const DataType &vdtype : sel_cond_vse_dtypes_)
+  {
+    this->PrintIndent();
+    PrintType(vdtype, stream);
+    stream << " vse_t" << se_count++ << ";\n";
   }
 }
 
@@ -885,12 +931,16 @@ void CodeGenC7x::PrintVecBinaryOp(const std::string& op, DataType t, PrimExpr lh
 void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*)
   if (is_call_builtin(op->index, "tir.c7x.stream_access")) {
     StreamAccess access(op->index.as<CallNode>());
+    // cl7x/opt7x aborts on: pout[i] = __SE1ADV(float16) != (float16)0.0f ? p2[i] : (float16)0.0f;
+    // work around: pout[i] = (t = __SE1ADV(float16), t) != (float16)0.0f ? p2[i] : (float16)0.0f;
+    if (in_vector_cond)  os << "(vse_t" << se_in_vec_cond_count << " = ";
     // example: __SE0ADV(float16)
     os << "__" << access.engine;
     if (access.adv) os << "ADV";
     os << "(";
     PrintType(op->dtype, os);
     os << ")";
+    if (in_vector_cond)  os << ", vse_t" << se_in_vec_cond_count++ << ")";
     return;
   }
   int lanes = op->dtype.lanes();
@@ -1105,7 +1155,9 @@ void CodeGenC7x::VisitExpr_(const BroadcastNode* op, std::ostream& os) {  // NOL
 // verbatim from CodegenC
 void CodeGenC7x::VisitExpr_(const SelectNode* op, std::ostream& os) {  // NOLINT(*)
   os << "/* select */ (";
+  in_vector_cond = (op->condition->dtype.lanes() > 1);
   PrintExpr(op->condition, os);
+  in_vector_cond = false;
   os << " ? ";
   PrintExpr(op->true_value, os);
   os << " : ";
