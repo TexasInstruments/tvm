@@ -231,25 +231,34 @@ def SETransform(f, mod, ctx):
 
     valid case 3: loop not annotated as to be "vectorized" (loop from original schedule),
                    no vector predicate
-          for (j_6: int32, 0, 851760) {
-            if (0f32 <= (float32*)hybrid_nms.v0[(j_6*6)]) {
-              for (k_7: int32, 0, 6) {
-                hybrid_rearrange_box_out_2[(((int32*)valid_indices[0]*6) + k_7)] = (float32*)hybrid_nms.v0[((j_6*6) + k_7)]
-              }
-              valid_indices[0] = ((int32*)valid_indices[0] + 1)
+        for (j_6: int32, 0, 851760) {
+          if (0f32 <= (float32*)hybrid_nms.v0[(j_6*6)]) {
+            for (k_7: int32, 0, 6) {
+              hybrid_rearrange_box_out_2[(((int32*)valid_indices[0]*6) + k_7)] = (float32*)hybrid_nms.v0[((j_6*6) + k_7)]
             }
-            if ((int32*)valid_indices[0] <= j_6) {
-              for (k_8: int32, 0, 6) {
-                hybrid_rearrange_box_out_2[((j_6*6) + k_8)] = -1f32
-              }
+            valid_indices[0] = ((int32*)valid_indices[0] + 1)
+          }
+          if ((int32*)valid_indices[0] <= j_6) {
+            for (k_8: int32, 0, 6) {
+              hybrid_rearrange_box_out_2[((j_6*6) + k_8)] = -1f32
             }
           }
+        }
+
+    valid case 4: load is inside if_then_else expression, should not SE
+        for (ax1: int32, 0, 6132) {
+          for (ax2: int32, 0, 6) {
+            T_concat_2[((ax1*6) + ax2)] = @tir.if_then_else((2 <= ax2), (float32*)placeholder_6[(((ax1*4) + ax2) - 2)], @tir.if_then_else((1 <= ax2), (float32*)placeholder_8[(((ax1*80) + ax2) + 62)], (float32*)placeholder_7[(((ax1*80) + ax2) + 63)], dtype=float32), dtype=float32)
+          }
+        }
+
 
     # Conditions for memory accesses that can be turned into SE/SA
     # 1. within the innermost loop
     # 2. the indexing expression conforms to the innermost loop nest (e.g. a*i + b*j + c*k + d)
     # 3. the conforming innermost loop nest cannot contain IfThenElse except the veclen_guard,
     #    because SE/SA cannot be programmed to handle conditions other than veclen_guard
+    # 4. Load cannot be under if_then_else expression
     #
     # Conditions for IfTenElse being a true veclen_guard and safely removed
     # 1. within the innermost loop, cannot be between two loops in the loop nest
@@ -270,6 +279,8 @@ def SETransform(f, mod, ctx):
     loop_nest = []         
     # stack of (IfThenElseStmt, len(loop_nest)) at current point
     if_nest = []
+    # stack of if_then_else expression at current point
+    if_expr_nest = []
     # currently in-effect guard condition
     veclen_guard = None 
     # flat list of all SECandidates
@@ -527,7 +538,10 @@ def SETransform(f, mod, ctx):
                     logging.debug(f"_detect_veclen_guard result: {veclen_guard}")
                 else:
                     logging.debug(f"not veclen_guard: {_get_if_condition(op)}")
-            elif isinstance(op, tvm.tir.Store) or isinstance(op, tvm.tir.Load):
+            elif isinstance(op, tvm.tir.Call) and op.op.same_as(tvm.ir.Op.get("tir.if_then_else")):
+                if_expr_nest.append(op)
+            elif (isinstance(op, tvm.tir.Store) or isinstance(op, tvm.tir.Load)) and \
+                 not if_expr_nest:
                 level = def_levels[op.buffer_var]
                 this_if_nest = [ (x[0], x[1]-level) for x in if_nest if x[1] > level ]
                 cand = SECandidate(op, loop_nest[level:], this_if_nest, trip, veclen_guard)
@@ -544,6 +558,8 @@ def SETransform(f, mod, ctx):
             elif isinstance(op, tvm.tir.IfThenElse):
                 if_nest.pop()
                 veclen_guard = None
+            elif isinstance(op, tvm.tir.Call) and op.op.same_as(tvm.ir.Op.get("tir.if_then_else")):
+                if_expr_nest.pop()
 
         # body of find candidates pass
         for var in f.params:
