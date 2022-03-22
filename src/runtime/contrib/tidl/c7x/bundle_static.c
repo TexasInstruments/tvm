@@ -28,7 +28,7 @@
 #include <tvm/runtime/crt/page_allocator.h>
 
 #include "bundle.h"
-#include "tidl_api.h"
+#include "tidl_api_mem.h"
 
 /** \brief Tiered memory management
  * Tier 1: Small size allocation (<= 1KB), handled by TVM managed memory (heap)
@@ -40,10 +40,6 @@
  *         - Book-keep (ptr, size) alloc info, to be used in appMemFree(ptr, size)
  *           (TVM heap does not have this requirement)
  *         - Define max allocation entries to be 2048 (adjustable)
- * TODO: If there are still memory allocation when running the TVM model,
- *       we should get the maximum allocation size across all layers,
- *       and pre-allocate this memory at TVM runtime create time.
- *       We may need a flag to indicate allocation during running the network.
  */
 
 #if defined(__C7100__) && ! defined(HOST_EMULATION)
@@ -61,7 +57,7 @@
   static MemoryManagerInterface* g_memory_manager;
 #endif
 
-#define CRT_MEMORY_DEFAULT_ALIGN 128
+#define CRT_MEMORY_DEFAULT_ALIGN (8U)
 #define MAX_PTR_SIZE_MAP_SIZE (8192U)
 typedef struct {
   void *ptrs[MAX_PTR_SIZE_MAP_SIZE];
@@ -147,6 +143,14 @@ TVM_DLL void* tvm_runtime_create(const char* json_data, const char* params_data,
     // create runtime modules
     TVM_CCALL(TVMGraphExecutor_Create(json_data, mod_syslib, &dev, &graph_executor));
     TVM_CCALL(TVMGraphExecutor_LoadParams(graph_executor, params.data, params.size));
+
+    // allocate ddr scratch memory used in the generated C7x code for layers
+    extern size_t get_ddr_scratch_mem_size();
+    void  *scratch_mem_addr = NULL;
+    size_t scratch_mem_size = get_ddr_scratch_mem_size();
+    if (scratch_mem_size > 0)
+      TVMPlatformMemoryAllocate(scratch_mem_size, dev, &scratch_mem_addr);
+    tvm_tidl_ddr_scratch_set(scratch_mem_addr, scratch_mem_size);
   }
   else
   {

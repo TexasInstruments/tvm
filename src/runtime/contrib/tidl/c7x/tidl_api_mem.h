@@ -44,9 +44,35 @@ extern uint32_t g_l1_mem_size;
 extern uint32_t g_l2_mem_size;
 extern uint32_t g_l3_mem_size;
 
-extern void tvm_tidl_l2_scratch_reset();
+extern void     tvm_tidl_l2_scratch_reset();
 extern uint8_t* tvm_tidl_l2_scratch_alloc(int32_t size);
 extern int32_t  tvm_tidl_l2_scratch_avail_size();
+
+extern void     tvm_tidl_ddr_scratch_set(void *ptr, size_t size);
+extern void     tvm_tidl_ddr_scratch_reset();
+extern uint8_t* tvm_tidl_ddr_scratch_alloc(int32_t size);
+extern int32_t  tvm_tidl_ddr_scratch_avail_size();
+
+//---------------------------------------------------------------------
+// This is an auxilliary API for handling memory allocation requests
+// from TIDL, with usage tracking.
+extern void *tidl_malloc(size_t size);
+extern void *tidl_memalign(size_t alignment, size_t size);
+extern void tidl_free(void *ptr, size_t size);
+
+//---------------------------------------------------------------------
+// This is for integration into PSDK C7x firmware
+//   appMem*() routines are from PSDK RTOS vision_apps
+#ifndef HOST_EMULATION
+/** \brief Heap located in DDR */
+#define APP_MEM_HEAP_DDR (0u)
+/** \brief Heap located in DDR and is used as scratch */
+#define APP_MEM_HEAP_DDR_SCRATCH (4u)
+
+extern void *appMemAlloc(uint32_t heap_id, uint32_t size, uint32_t align);
+extern int32_t appMemFree(uint32_t heap_id, void *ptr, uint32_t size);
+#endif
+
 
 #ifdef __cplusplus
 }

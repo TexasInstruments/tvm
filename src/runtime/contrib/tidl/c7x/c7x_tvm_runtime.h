@@ -128,60 +128,51 @@ private:
   uint8_t *dmaUtilsContext = nullptr; 
 };
 
-extern "C" void *tidl_malloc(size_t size);
-extern "C" void tidl_free(void *ptr, size_t size);
-
 //---------------------------------------------------------------------------------
 // Allocator for L2 Memory. Declare one of these objects within the
 // scope of L2 allocation. 
 class AllocL2Context
 {
   public:
-  AllocL2Context() { tvm_tidl_l2_scratch_reset(); num_ddr_allocs = 0; }
-  ~AllocL2Context() { free_all_ddr_allocs(); }
+  AllocL2Context() { tvm_tidl_l2_scratch_reset(); }
+  ~AllocL2Context() {}
   /* Only called in the generated C7x function for a layer */
   void *allocate(unsigned size)
   {
     void *ptr = tvm_tidl_l2_scratch_alloc(size);
     if (ptr == NULL)
     {
-      ptr = ddr_allocate(size);
-    }
-    if (ptr == NULL)
-    {
-      free_all_ddr_allocs();
       printf("AllocL2Context.allocate failed for size: %d\n", size);
       tvmcrt_exit(-1);
     }
     return ptr;
   }
+};
 
-  #define MAX_NUM_DDR_ALLOCS 128
-  void *ddr_allocate(unsigned size)
+//---------------------------------------------------------------------------------
+// Allocator for DDR Scratch Memory. Declare one of these objects within the
+// scope of DDR allocation.  Opportunistically allocating in L2 if can,
+// otherwise, use the linear DDR scratch memory allocator.
+class AllocDDRContext
+{
+  public:
+  AllocDDRContext() { tvm_tidl_l2_scratch_reset(); tvm_tidl_ddr_scratch_reset(); }
+  ~AllocDDRContext() {}
+  void *allocate(unsigned size)
   {
-    void *ptr = NULL;
-    if (num_ddr_allocs < MAX_NUM_DDR_ALLOCS)
+    void *ptr = tvm_tidl_l2_scratch_alloc(size);
+    if (ptr == NULL)
     {
-      ptr = tidl_malloc(size);
-      if (ptr != NULL)
-      {
-        ptrs[num_ddr_allocs] = ptr;
-        sizes[num_ddr_allocs] = size;
-        num_ddr_allocs++;
-      }
+      ptr = tvm_tidl_ddr_scratch_alloc(size);
+    }
+    if (ptr == NULL)
+    {
+      printf("AllocDDRContext.allocate failed for size: %d\n", size);
+      tvmcrt_exit(-1);
     }
     return ptr;
   }
-  void free_all_ddr_allocs()
-  {
-    for (int i = 0; i < num_ddr_allocs; i++)
-      tidl_free(ptrs[i], sizes[i]);
-    num_ddr_allocs = 0;
-  }
-  void     *ptrs[MAX_NUM_DDR_ALLOCS];
-  unsigned sizes[MAX_NUM_DDR_ALLOCS];
-  int      num_ddr_allocs;
-}; 
+};
 
 //---------------------------------------------------------------------------------
 // Critical section context.  Disable and restore interrupts at entry and exit.

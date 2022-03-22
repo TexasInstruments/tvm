@@ -22,6 +22,7 @@
 //   Implement the TIDL API interface
 /*------------------------------------------------------------------------------*/
 #include "tidl_api.h"
+#include "tidl_api_mem.h"
 #include "itidl_ti.h"
 #include "itidl_rt.h"
 #include "ivision.h"
@@ -84,9 +85,6 @@ static int32_t connect_input_output_tensors(TIDL_subgraph_instance *instance,
                                             DLTensor *in_tensors[],
                                             DLTensor *out_tensors[]);
 static int32_t disconnect_input_output_tensors(TIDL_subgraph_instance *instance);
-static void create_TIDLRT_Tensor(const DLTensor *in_dl, sTIDLRT_Tensor_t *in_rt, int index,
-                                 int is_nchw);
-static int32_t GetTIDLRTElementType(const DLDataType dtype);
 
 // Memory management
 static void init_mem_regions();
@@ -391,13 +389,6 @@ static int32_t init_inbufs(TIDL_subgraph_instance *instance)
     BufDesc->bufPlanes[0].frameROI.width = IOParams->inWidth[i];
     BufDesc->bufPlanes[0].frameROI.height = IOParams->inHeight[i];
 
-    uint32_t BufSize = IOParams->inChannelPitch[i] *
-                       IOParams->inNumChannels[i] * elementSizeBytes;
-
-#if HOST_EMULATION
-    /* Allocation extra in Host emulation mode to avoid read access violation */
-    BufSize *= 2;
-#endif
     // TIDL DataConv: subgraph directly use TVM tensors' data buffers later
     BufDesc->bufPlanes[0].buf = NULL;
   }
@@ -462,7 +453,6 @@ static int32_t init_outbufs(TIDL_subgraph_instance *instance)
   {
     int32_t elementSizeBytes  =
        tidl_element_size(IOParams->outElementType[i]);
-    uint32_t outputMemRequired;
 
     IVISION_BufDesc *BufDesc = &BufDescs[i];
     BufDescList[i] = BufDesc;
@@ -481,10 +471,6 @@ static int32_t init_outbufs(TIDL_subgraph_instance *instance)
               (imHeight + IOParams->outPadT[i] + IOParams->outPadB[i]);
     BufDesc->bufPlanes[0].frameROI.width = imWidth;
     BufDesc->bufPlanes[0].frameROI.height = imHeight;
-
-    outputMemRequired =
-       (IOParams->outNumChannels[i] + IOParams->outPadCh[i] + 1) *
-       IOParams->outChannelPitch[i]*elementSizeBytes;
 
     // TIDL DataConv: subgraph directly use TVM tensors' data buffers later
     BufDesc->bufPlanes[0].buf = NULL;
@@ -522,7 +508,6 @@ static int32_t connect_input_output_tensors(TIDL_subgraph_instance *instance,
   IVISION_BufDesc**  inBufDescList = instance->inBufs->bufDesc;
   IVISION_BufDesc**  outBufDescList = instance->outBufs->bufDesc;
   TIDL_InArgs*       inArgs = instance->inArgs;
-  TIDL_outArgs*      outArgs = instance->outArgs;
   sTIDL_IOBufDesc_t* IOParams = instance->IOParams;
 
   for(int i = 0; i < IOParams->numInputBuf; i++)
@@ -574,122 +559,6 @@ static int32_t disconnect_input_output_tensors(TIDL_subgraph_instance *instance)
   }
 
   return 0;
-}
-
-static void create_TIDLRT_Tensor(const DLTensor *in_dl, sTIDLRT_Tensor_t *in_rt, int index,
-                                 int is_nchw)
-{
-  TIDLRT_setTensorDefault(in_rt);
-
-  //sprintf((char *) in_rt->name, "tidl_i%d", index);
-
-  // Skip padValues for now (assuming TVM tensor is continuous)
-  in_rt->padValues[0] =
-  in_rt->padValues[1] =
-  in_rt->padValues[2] =
-  in_rt->padValues[3] = 0;
-
-  // Skip dataOffset (assuming TVM tensor starts from offset 0)
-  in_rt->dataOffset = 0;
-
-  // If ConvertLayout("NCHW") pass is called on the entire graph
-  // and only transpose or NCHW operators are whitelisted as TIDL
-  // nodes, then TIDLRT do not need to perform any layout conversions.
-  in_rt->layout = is_nchw ? TIDLRT_LT_NCHW : TIDLRT_LT_NHWC;
-
-
-  // Skip zeroPoint and scale for now since those are for quantized models.
-  in_rt->zeroPoint = 0;
-  in_rt->scale = 1.0f;
-
-  // Set memtype
-  in_rt->memType = TIDLRT_MEM_USER_SPACE;
-
-  // Set element type
-  in_rt->elementType = GetTIDLRTElementType(in_dl->dtype);
-
-  // One time setup - FIX
-  {
-    // Set the number of dimensions
-    in_rt->numDim = in_dl->ndim;
-
-    if (in_rt->numDim > TIDLRT_DIM_MAX) {
-      // Truncate to tidlrt max dimensions
-      in_rt->numDim = TIDLRT_DIM_MAX;
-    }
-
-    // Set the dimensions
-    int missing_dims = TIDLRT_DIM_MAX - in_rt->numDim;
-    for (int s = 0; s < missing_dims; s++) {
-      in_rt->dimValues[s] = 1;
-    }
-    for (int s = 0; s < in_rt->numDim; s++) {
-      int64_t shape = in_dl->shape[s];
-      in_rt->dimValues[missing_dims + s] = shape;
-    }
-
-    // Skip pitch for now (using TIDLRT_setTensorDefault(): -1)
-  }
-
-  /* -----------------------------------------------------------------
-   * Per-invocation setup, could change in each subgraph call
-   * -----------------------------------------------------------------*/
-
-  // Set the data pointer
-  in_rt->ptr = in_dl->data;
-}
-
-// Return the TIDLRT element type for a given DLDataType
-int32_t GetTIDLRTElementType(const DLDataType dtype) {
-  if (dtype.lanes != 1) {
-    printf("Vector types (%d) are not supported in TIDL Tensors.\n", dtype.lanes);
-    return -1;
-  }
-
-  switch (dtype.code) {
-     case kDLInt:
-       switch (dtype.bits) {
-         case 8:
-           return TIDLRT_Int8;
-         case 16:
-           return TIDLRT_Int16;
-         case 32:
-           return TIDLRT_Int32;
-         case 64:
-           return TIDLRT_Int64;
-         default:
-           printf("Invalid bit size (%d) for int\n", dtype.bits);
-           return -1;
-       }
-
-     case kDLUInt:
-       switch (dtype.bits) {
-         case 8:
-           return TIDLRT_Uint8;
-         case 16:
-           return TIDLRT_Uint16;
-         case 32:
-           return TIDLRT_Uint32;
-         case 64:
-           return TIDLRT_Uint64;
-         default:
-           printf("Invalid bit size (%d) for int\n", dtype.bits);
-           return -1;
-       }
-
-    case kDLFloat:
-      switch (dtype.bits) {
-        case 32:
-          return TIDLRT_Float32;
-        default:
-          printf("Invalid bit size (%d) for int\n", dtype.bits);
-          return -1;
-      }
-
-    default:
-      printf("Invalid type code\n");
-      return -1;
-  }
 }
 
 //-------------------------------------------------------------------------
