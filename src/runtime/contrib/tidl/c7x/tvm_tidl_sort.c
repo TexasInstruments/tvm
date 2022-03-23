@@ -24,12 +24,18 @@
 #include <stdio.h>
 #include <math.h>
 
-extern void *tidl_malloc(size_t size);
-extern void tidl_free(void *ptr, size_t size);
-
 /* Argsort on flattened input, sorted result in Descending order */
 void tvm_tidl_argsort_nms(float *input, int *sort_num, int *output)
 {
+  // auxiliary stack to avoid recursion (on C7x RTOS task)
+  // Average computation-complexity case (equal partitions) actually has
+  // the maximum stack depth, worst computation-complexity case (one element
+  // in one partition, the rest in the other) has less stack depth.
+  // Maximum stack depth is ceiling(log2(n))
+  // int stack_size = ((int)log2f(*sort_num) + 1) * 2 * sizeof(int);
+  // stack depth of 32 can sort 2^31 boxes (>> what's possible in real networks)
+  int stack[32 * 2];
+
   int l = 0;
   int r = (*sort_num) - 1;
 
@@ -37,13 +43,6 @@ void tvm_tidl_argsort_nms(float *input, int *sort_num, int *output)
   for (int i = l; i <= r; i++)
     output[i] = i;
 
-  // auxiliary stack to avoid recursion (on C7x RTOS task)
-  // Average computation-complexity case (equal partitions) actually has
-  // the maximum stack depth, worst computation-complexity case (one element
-  // in one partition, the rest in the other) has less stack depth.
-  // Maximum stack depth is ceiling(log2(n))
-  int stack_size = ((int)log2f(*sort_num) + 1) * 2 * sizeof(int);
-  int *stack = (int *) tidl_malloc(stack_size);
   int top = 0;
   stack[top++] = l;
   stack[top++] = r;
@@ -100,6 +99,4 @@ void tvm_tidl_argsort_nms(float *input, int *sort_num, int *output)
       stack[top++] = r;
     }
   }
-
-  tidl_free(stack, stack_size);
 }
