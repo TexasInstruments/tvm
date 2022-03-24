@@ -19,7 +19,7 @@ The following are the TVM+TIDL tags compatible with target file system in PSDK r
 
 | PSDK release | TVM+TIDL release tag | Key features                                              |
 |--------------|----------------------|-----------------------------------------------------------|
-| 8.2          | 8.2.0                | C7x code generation support                               |
+| 8.2          | TI.8.2.0, TI.8.2.1   | C7x code generation support                               |
 | 8.1          | TIDL\_PSDK\_8.1      |                                                           |
 | 8.0          | TIDL\_PSDK\_8.0      |                                                           |
 | 7.3          | TIDL\_PSDK\_7.3      | TIDL offload, unsupported layers run on Arm               |
@@ -33,17 +33,17 @@ How to Build for X86\_64 Compilation
 $ # download and install correponding PSDK_RTOS to <PSDKR_PATH>
 $ # download and install clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04
 $ git clone <this_repo>; cd tvm
-$ git check <corresponding_tag>
+$ git checkout <corresponding_tag>
 $ git submodule update --init --recursive
 $ mkdir build; cd build
-$ cmake -DUSE_MICRO=ON -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_LLVM=/path/to/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04/bin/llvm-config -DUSE_TIDL_RT_PATH=${PSDKR_PATH}/tidl_j7_*/ti_dl/rt -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} ..
-$ make -j$(nproc)
+$ cmake -DUSE_MICRO=ON -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_LLVM=/path/to/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04/bin/llvm-config -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/ti_dl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} ..
+$ make clean; make -j$(nproc)
 ```
 
 Release Details
 ---------------
 
-8.2.0
+TI.8.2.0, TI.8.2.1
 - initial release of C7x code generation support
 - merge with neo-ai-tvm 1.10.0
 
