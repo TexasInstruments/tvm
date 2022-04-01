@@ -356,6 +356,12 @@ def SETransform(f, mod, ctx):
             for cnt in extents:
                 if not isinstance(cnt, tvm.tir.IntImm):
                     return False
+            # if Load/SE, make sure the loop nest has no other accesses to the same var
+            if isinstance(op, tvm.tir.Load) and self.outer_loop:
+                for cand in loop_candidates[self.outer_loop]:
+                    if cand != self and cand.var == self.var:
+                        logging.debug(f"  load disqualified due to other accesses of the same var")
+                        return False
 
             # Reverse the lists: inner-->outer
             coeffs = list(coeffs)[-2::-1]  # drop trailing 0
