@@ -375,3 +375,12 @@ tvmcrt_free_all()
 #endif
   g_memory_manager = NULL;
 }
+
+/** \brief TVM C codegen (using flat memory allocation) lowers "Reshape" op to "__nop",
+ *         because input and output share the same memory. (graph_executor_codegen.cc)
+ *         So we provide the "__nop" function for the graph executor runtime.
+ *         To be removed once we move to the aot executor codegen and runtime.
+ */
+int32_t __nop(void* __restrict__ args, void* __restrict__ arg_type_ids, int num_args, void* __restrict__ out_ret_value, void* __restrict__ out_ret_tcode, void* __restrict__ resource_handle) {
+  return 0;
+}
