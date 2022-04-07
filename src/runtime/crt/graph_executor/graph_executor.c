@@ -1156,7 +1156,10 @@ int TVMGraphExecutor_SetupOpExecs(TVMGraphExecutor* executor) {
   }
   for (nid = 0; nid < executor->nodes_count; nid++) {
     const TVMGraphExecutorNode* inode = executor->nodes + nid;
-    if (strcmp(inode->op_type, "null")) {
+    // Begin TI: skip creating pf for "__nop" to suppress error message in CreateTVMOp()
+    // if (strcmp(inode->op_type, "null")) {
+    if (strcmp(inode->op_type, "null") && strcmp(inode->param.func_name, "__nop")) {
+    // End TI
       DLTensorPtr args[TVM_CRT_MAX_ARGS];
       uint32_t args_count = 0;
       for (idx = 0; idx < inode->inputs_count; idx++) {
