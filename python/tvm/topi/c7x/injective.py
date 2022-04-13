@@ -113,14 +113,29 @@ def schedule_injective_from_existing(s: te.Schedule,
          The updated schedule.
     """
 
+    def is_unsupported_op(tensor, invalid_ops):
+        ''' Return True if any of the ops contributing to tensor is not supported
+            by the C7x implementation for injective ops.
+        '''
+        if isinstance(tensor.op, tvm.te.ComputeOp):
+            if tensor.op.name in invalid_ops:
+                logging.debug(f"is_invalid_op true for op={tensor.op.name}")
+                return True
+
+            for t in tensor.op.input_tensors:
+                if is_unsupported_op(t, invalid_ops):
+                    return True
+
+        return False
+
+
     target = tvm.target.Target.current(allow_none=False)
     logging.debug(f"schedule_injective for c7x, target={target}")
 
-    # dma does not apply
-    if C.op.name in ops_do_not_dma:
+    # Check for unsupported ops
+    if (is_unsupported_op(tensor=C, invalid_ops=ops_do_not_dma)):
         return s
 
-    #print("initial schedule")
     #print_schedule(s)
 
     # schedule transformations only apply to dimensioned operations

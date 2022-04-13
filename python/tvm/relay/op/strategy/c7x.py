@@ -36,3 +36,9 @@ def schedule_injective_c7x(_, outs, target):
     """schedule injective ops for c7x"""
     with target:
         return topi.c7x.schedule_injective(outs)
+
+@schedule_concatenate.register(["c7x"])
+def schedule_concatenate(attrs, outs, target):
+    """Schedule concatenate op for c7x"""
+    with target:
+        return topi.c7x.schedule_injective(outs)
