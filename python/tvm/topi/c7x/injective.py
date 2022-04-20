@@ -157,9 +157,17 @@ def schedule_injective_from_existing(s: te.Schedule,
     #print("after fuse")
     #print_schedule(s)
 
-    # split by 16 for vectorization
     vector_length = 64
-    (xyo, inner) = s[cc].split(inner, int(vector_length/elem_bytes))
+    split_factor = int(vector_length/elem_bytes)
+    inner_length = cc.shape[len(cc.shape)-1]
+
+    # Do not split/vectorize if the number of inner loop iterations is
+    # less than the vectorization factor
+    if inner_length < split_factor:
+        return s
+
+    # split for vectorization
+    (xyo, inner) = s[cc].split(inner, split_factor)
     #print("after split")
     #print_schedule(s)
 
