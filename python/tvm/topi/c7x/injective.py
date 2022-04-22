@@ -154,12 +154,14 @@ def schedule_injective_from_existing(s: te.Schedule,
     innerloops = s[cc].op.axis[baxis:]
     if len(innerloops) > 1:
         inner = s[cc].fuse(*innerloops)
-    #print("after fuse")
+    #logging.debug("after fuse")
     #print_schedule(s)
 
     vector_length = 64
     split_factor = int(vector_length/elem_bytes)
-    inner_length = cc.shape[len(cc.shape)-1]
+    inner_length = 1
+    for axis_len in cc.shape[baxis:]:
+        inner_length *= axis_len
 
     # Do not split/vectorize if the number of inner loop iterations is
     # less than the vectorization factor
@@ -168,16 +170,16 @@ def schedule_injective_from_existing(s: te.Schedule,
 
     # split for vectorization
     (xyo, inner) = s[cc].split(inner, split_factor)
-    #print("after split")
+    #logging.debug("after split")
     #print_schedule(s)
 
     # vectorize on inner axis
     s[cc].vectorize(inner)
-    #print("after vectorize")
+    #logging.debug("after vectorize")
     #print_schedule(s)
 
     #show(s)
-    #print("final schedule")
+    #logging.debug("final schedule")
     #print_schedule(s)
     return s
 
