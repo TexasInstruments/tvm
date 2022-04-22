@@ -128,6 +128,27 @@ def schedule_injective_from_existing(s: te.Schedule,
 
         return False
 
+    def contains_call(tensor):
+        ''' Return True if tensor computation contains a call (that we cannot vectorize).
+        '''
+        seen_call = False
+        def visit(expr):
+            nonlocal seen_call
+            if isinstance(expr, tvm.tir.Call): #e.g. expr.op.same_as(tvm.ir.Op.get("tir.floor")):
+                seen_call = True
+
+        if isinstance(tensor.op, tvm.te.ComputeOp):
+            for e in tensor.op.body:
+                if isinstance(e, tvm.tir.PrimExpr):
+                    tvm.tir.stmt_functor.post_order_visit(e, visit)
+                    if seen_call:
+                        return True
+
+            for t in tensor.op.input_tensors:
+                if contains_call(t):
+                    return True
+
+        return seen_call
 
     target = tvm.target.Target.current(allow_none=False)
     logging.debug(f"schedule_injective for c7x, target={target}")
@@ -166,6 +187,10 @@ def schedule_injective_from_existing(s: te.Schedule,
     # Do not split/vectorize if the number of inner loop iterations is
     # less than the vectorization factor
     if inner_length < split_factor:
+        return s
+
+    # Do not split/vectorize if the computation contains a call
+    if contains_call(C):
         return s
 
     # split for vectorization
