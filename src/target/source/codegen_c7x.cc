@@ -702,9 +702,19 @@ void CodeGenC7x::PrintVecStore(const VarNode* buffer, DataType t, PrimExpr base,
 std::string CodeGenC7x::CastFromTo(std::string value, DataType from, DataType target) {
   if (from == target) return value;
   std::ostringstream os;
-  os << "((";
-  this->PrintType(target, os);
-  os << ")" << value << ")";
+
+  // C7x compiler requires convert_ intrinsics for vector casts
+  if (target.lanes() == 1)
+  {
+    os << "((";
+    this->PrintType(target, os);
+    os << ")";
+  } else {
+    os << "convert_";
+    this->PrintType(target, os);
+    os << "(";
+  }
+  os << value << ")";
   return os.str();
 }
 

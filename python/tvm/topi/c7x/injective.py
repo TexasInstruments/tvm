@@ -128,27 +128,86 @@ def schedule_injective_from_existing(s: te.Schedule,
 
         return False
 
-    def contains_call(tensor):
-        ''' Return True if tensor computation contains a call (that we cannot vectorize).
-        '''
-        seen_call = False
-        def visit(expr):
-            nonlocal seen_call
-            if isinstance(expr, tvm.tir.Call): #e.g. expr.op.same_as(tvm.ir.Op.get("tir.floor")):
-                seen_call = True
 
-        if isinstance(tensor.op, tvm.te.ComputeOp):
-            for e in tensor.op.body:
-                if isinstance(e, tvm.tir.PrimExpr):
-                    tvm.tir.stmt_functor.post_order_visit(e, visit)
-                    if seen_call:
+    def vectorize(sch: te.Schedule, C: te.Tensor, cc: te.Tensor, baxis: int, inner: tir.IterVar) -> te.Schedule:
+        '''Attempts to vectorize the schedule'''
+
+        def contains_call(tensor: te.Tensor) -> bool:
+            ''' Return True if tensor computation contains a call (that we cannot vectorize).'''
+            seen_call = False
+            def visit(expr):
+                nonlocal seen_call
+                if isinstance(expr, tvm.tir.Call): #e.g. expr.op.same_as(tvm.ir.Op.get("tir.floor")):
+                    seen_call = True
+
+            if isinstance(tensor.op, tvm.te.ComputeOp):
+                for e in tensor.op.body:
+                    if isinstance(e, tvm.tir.PrimExpr):
+                        tvm.tir.stmt_functor.post_order_visit(e, visit)
+                        if seen_call:
+                            return True
+
+                for t in tensor.op.input_tensors:
+                    if contains_call(t):
                         return True
 
-            for t in tensor.op.input_tensors:
-                if contains_call(t):
-                    return True
+            return seen_call
 
-        return seen_call
+
+        def largest_element(tensor: te.Tensor, largest_element_bytes: int) -> int:
+            ''' Returns the largest element size in bytes across all tensors referenced
+                in an expression. Used to determine the vectorization factor.
+            '''
+            elem_bytes = int(DataType(tensor.dtype).bits / 8)
+            if elem_bytes > largest_element_bytes:
+                largest_element_bytes = elem_bytes
+
+            logging.debug(f"largest_element for {tensor}, size={elem_bytes}, l={largest_element_bytes}")
+            if isinstance(tensor.op, tvm.te.ComputeOp):
+                for t in tensor.op.input_tensors:
+                    largest_element_bytes = largest_element(t, largest_element_bytes)
+
+            return largest_element_bytes
+
+
+        # Use the largest element in the expression to determine the vectorization factor
+        largest_elem_bytes = largest_element(C, 0)
+
+        # Fuse inner loops
+        innerloops = sch[cc].op.axis[baxis:]
+        if len(innerloops) > 1:
+            inner = sch[cc].fuse(*innerloops)
+        #logging.debug("after fuse")
+        #print_schedule(s)
+
+        vector_length = 64
+        split_factor = int(vector_length/largest_elem_bytes)
+        inner_length = 1
+        for axis_len in cc.shape[baxis:]:
+            inner_length *= axis_len
+
+        # Do not split/vectorize if the number of inner loop iterations is
+        # less than the vectorization factor
+        if inner_length < split_factor:
+            return sch
+
+        # Do not split/vectorize if the computation contains a call
+        if contains_call(C):
+            return sch
+
+        # Split for vectorization
+        (xyo, inner) = sch[cc].split(inner, split_factor)
+        #logging.debug("after split")
+        #print_schedule(s)
+
+        # Annotate inner axis as vectorized
+        sch[cc].vectorize(inner)
+        #logging.debug("after vectorize")
+        #print_schedule(s)
+
+        return sch
+
+
 
     target = tvm.target.Target.current(allow_none=False)
     logging.debug(f"schedule_injective for c7x, target={target}")
@@ -171,41 +230,9 @@ def schedule_injective_from_existing(s: te.Schedule,
     # Transform to use double buffering, local buffers and DMA
     s, cc, baxis, inner = double_buffer_with_dma(s, C)
 
-    # fuse inner loops
-    innerloops = s[cc].op.axis[baxis:]
-    if len(innerloops) > 1:
-        inner = s[cc].fuse(*innerloops)
-    #logging.debug("after fuse")
-    #print_schedule(s)
+    # Attempt to vectorize the schedule
+    s = vectorize(s, C, cc, baxis, inner)
 
-    vector_length = 64
-    split_factor = int(vector_length/elem_bytes)
-    inner_length = 1
-    for axis_len in cc.shape[baxis:]:
-        inner_length *= axis_len
-
-    # Do not split/vectorize if the number of inner loop iterations is
-    # less than the vectorization factor
-    if inner_length < split_factor:
-        return s
-
-    # Do not split/vectorize if the computation contains a call
-    if contains_call(C):
-        return s
-
-    # split for vectorization
-    (xyo, inner) = s[cc].split(inner, split_factor)
-    #logging.debug("after split")
-    #print_schedule(s)
-
-    # vectorize on inner axis
-    s[cc].vectorize(inner)
-    #logging.debug("after vectorize")
-    #print_schedule(s)
-
-    #show(s)
-    #logging.debug("final schedule")
-    #print_schedule(s)
     return s
 
 
