@@ -775,6 +775,8 @@ template <> struct SE_element_type_flag<2>
    { static const __SE_ELETYPE val = __SE_ELETYPE_16BIT; };
 template <> struct SE_element_type_flag<4>
    { static const __SE_ELETYPE val = __SE_ELETYPE_32BIT; };
+template <> struct SE_element_type_flag<8>
+   { static const __SE_ELETYPE val = __SE_ELETYPE_64BIT; };
 
 /*-----------------------------------------------------------------------------
 * SE_veclen_flag - convert number of bytes to SE vector length flag
