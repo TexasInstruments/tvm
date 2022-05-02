@@ -847,6 +847,7 @@ class ConcatOpConverter : public TensorRTOpConverter {
   }
 };
 
+#if TRT_VERSION_GE(5, 1, 5)
 class SplitOpConverter : public TensorRTOpConverter {
  public:
   SplitOpConverter() : TensorRTOpConverter({kTensor}) {}
@@ -893,6 +894,7 @@ class SplitOpConverter : public TensorRTOpConverter {
     }
   }
 };
+#endif
 
 class BiasAddOpConverter : public TensorRTOpConverter {
  public:
@@ -1271,7 +1273,6 @@ GetOpConverters() {
   map->emplace("expand_dims", std::make_shared<ExpandDimsOpConverter>());
   map->emplace("squeeze", std::make_shared<SqueezeOpConverter>());
   map->emplace("concatenate", std::make_shared<ConcatOpConverter>());
-  map->emplace("split", std::make_shared<SplitOpConverter>());
   map->emplace("nn.conv2d_transpose", std::make_shared<Conv2DTransposeOpConverter>());
   map->emplace("transpose", std::make_shared<TransposeOpConverter>());
   map->emplace("layout_transform", std::make_shared<LayoutTransformOpConverter>());
@@ -1293,6 +1294,7 @@ GetOpConverters() {
   map->emplace("atan", std::make_shared<UnaryOpConverter>());
   map->emplace("ceil", std::make_shared<UnaryOpConverter>());
   map->emplace("floor", std::make_shared<UnaryOpConverter>());
+  map->emplace("split", std::make_shared<SplitOpConverter>());
   map->emplace("strided_slice", std::make_shared<StridedSliceOpConverter>());
 #endif  // TRT_VERSION_GE(5, 1, 5)
 #if TRT_VERSION_GE(6, 0, 1)
