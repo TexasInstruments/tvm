@@ -246,11 +246,11 @@ stage('Build') {
         ws(per_exec_ws('tvm/build-gpu')) {
           init_git()
           sh "${docker_run} ${ci_gpu} ./tests/scripts/task_config_build_gpu.sh"
-          make(ci_gpu, 'build', '-j2')
+          make(ci_gpu, 'build', '-j8')
           pack_lib('gpu', tvm_multilib)
           // compiler test
           sh "${docker_run} ${ci_gpu} ./tests/scripts/task_config_build_gpu_other.sh"
-          make(ci_gpu, 'build2', '-j2')
+          make(ci_gpu, 'build2', '-j8')
       }
     }
   },
@@ -263,7 +263,7 @@ stage('Build') {
             script: "${docker_run} ${ci_cpu} ./tests/scripts/task_config_build_cpu.sh",
             label: "Create CPU cmake config",
           )
-          make(ci_cpu, 'build', '-j2')
+          make(ci_cpu, 'build', '-j16')
           pack_lib('cpu', tvm_multilib_tsim)
           timeout(time: max_time, unit: 'MINUTES') {
             ci_setup(ci_cpu)
@@ -293,7 +293,7 @@ stage('Build') {
             script: "${docker_run} ${ci_wasm} ./tests/scripts/task_config_build_wasm.sh",
             label: "Create WASM cmake config",
           )
-          make(ci_wasm, 'build', '-j2')
+          make(ci_wasm, 'build', '-j16')
           timeout(time: max_time, unit: 'MINUTES') {
             ci_setup(ci_wasm)
             sh (
@@ -316,7 +316,7 @@ stage('Build') {
             script: "${docker_run} ${ci_i386} ./tests/scripts/task_config_build_i386.sh",
             label: "Create i386 cmake config",
           )
-          make(ci_i386, 'build', '-j2')
+          make(ci_i386, 'build', '-j16')
           pack_lib('i386', tvm_multilib_tsim)
         }
       }
@@ -343,7 +343,7 @@ stage('Build') {
             script: "${docker_run} ${ci_qemu} ./tests/scripts/task_config_build_qemu.sh",
             label: "Create QEMU cmake config",
           )
-          make(ci_qemu, 'build', '-j2')
+          make(ci_qemu, 'build', '-j16')
           timeout(time: max_time, unit: 'MINUTES') {
             ci_setup(ci_qemu)
             sh (
