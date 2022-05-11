@@ -95,21 +95,25 @@ def c7x_pass_context():
 
 #----------------------------------------------------------------
 # Register c7x-specific local memory tag
-# Not used - currently just using "local"
-'''
+# So that tagged local memory has properly defined size and we don't need to modify TVM source
 from tvm._ffi.registry import register_func
 
-@register_func("tvm.info.mem.local.c7x")
-def mem_info_c7x():
-    # pylint: disable=bad-whitespace
-    return tvm.ir.make_node(
-        "MemoryInfo",
-        unit_bits=8,
-        max_num_bits=10000000,
-        max_simd_bits=32,
-        head_address=tvm.runtime.const(100, "uint32"),
-    )
-'''
+def register_c7x_local_mem(scope_name):
+    def register_helper(func_name):
+        @register_func(func_name)
+        def mem_info_c7x():
+            # pylint: disable=bad-whitespace
+            return tvm.ir.make_node(
+                "MemoryInfo",
+                unit_bits=8,
+                max_num_bits=448*1024*8,
+                max_simd_bits=64,         # used for buffer alignment
+                head_address=None         # starting address of mem
+            )
+
+    func_name = "tvm.info.mem." + scope_name
+    if not tvm.get_global_func(func_name, allow_missing=True):
+        register_helper(func_name)
 
 #----------------------------------------------------------------
 def merge_block(slist, body):

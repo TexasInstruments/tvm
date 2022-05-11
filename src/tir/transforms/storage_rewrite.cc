@@ -560,15 +560,8 @@ class StoragePlanRewriter : public StmtExprMutator {
           if (e->scope.tag.length() != 0) {
             MemoryInfo info = GetMemoryInfo(e->scope.to_string());
             uint64_t total_elem = e->const_nbits / e->elem_type.bits();
-            // Begin TI
-            // TI: Different tags in scope_name "local<tag>" are used to prevent sharing/fusing
-            //     different DMA local buffers, no memory info are defined for these scope_names
-            if (info.defined())
-            {
-            // End TI
-              ICHECK_LE(total_elem * e->elem_type.bits(), info->max_num_bits)
-                  << "Allocation exceed bound of memory tag " << e->scope.to_string();
-            }
+            ICHECK_LE(total_elem * e->elem_type.bits(), info->max_num_bits)
+                << "Allocation exceed bound of memory tag " << e->scope.to_string();
           }
         } else {
           // Build a merged allocation

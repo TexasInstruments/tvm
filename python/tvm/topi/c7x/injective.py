@@ -23,6 +23,7 @@ import tvm
 from tvm import te
 from tvm import tir
 from tvm.runtime import DataType
+from tvm.contrib.c7x import register_c7x_local_mem
 from .. import utils
 
 logging = logging.getLogger("c7x_injective")
@@ -39,7 +40,11 @@ logging = logging.getLogger("c7x_injective")
 #   We should write a separate schedule for T_concat, split the concat axis into several
 #   loops nests, each loop nest with one or two input tensors and use streaming engine
 #   for the input tensors. (TODO)
-ops_do_not_dma = ['T_strided_slice', 'T_concat' ]
+# - T_reshape causes lhs and rhs tensors using different indexing expressions in different
+#   dimensions.  This makes creating a local copy of rhs using the lhs loop bounds problematic.
+#   Disable for now (creating local buffers and dma).  We should revisit to see if the loop nest
+#   can still be fused and vectorized.
+ops_do_not_dma = ['T_strided_slice', 'T_concat', 'T_reshape']
 
 # Do not DMA cases
 # 1. specific operators that DMA does not bring performance benefits, they might
@@ -50,6 +55,8 @@ ops_do_not_dma = ['T_strided_slice', 'T_concat' ]
 # 3. There is only 1 block or the blocking axis is outside the whole loop nest,
 #    is it worthwhile to DMA each input as one block, and DMA the output as one block?
 #    Should we simply skip DMA since there will not be double buffering?
+# 4. lhs tensor and rhs tensor have differenet dimensions and therefore use different indexing
+#    expressions, e.g. T_reshape
 #
 # DMA configurations for output and input: out[f(i,j,k)], in[g(i,j,k)]
 #    DetectLinearEquation analyzes f(i,j,k) and g(i,j,k) to compute the coeff for each loop var,
@@ -313,9 +320,12 @@ def double_buffer_with_dma(s: te.Schedule,
     for t in op.input_tensors:
         is_placeholder = isinstance(t.op, tvm.te.PlaceholderOp)
         if len(t.shape) > 1:
-            l = s.cache_read(t, f"local{len(local_inputs)}", op)
+            scope_name = f"local{len(local_inputs)}"
+            register_c7x_local_mem(scope_name)
+            l = s.cache_read(t, scope_name, op)
             local_inputs.append((l, is_placeholder))
     if len(dims) > 1:
+        register_c7x_local_mem("local")
         cc = s.cache_write(C, "local")
         inner = s[cc].op.axis[-1]
     logging.debug("after local buffers")
