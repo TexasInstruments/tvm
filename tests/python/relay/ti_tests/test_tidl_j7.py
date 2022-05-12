@@ -122,11 +122,11 @@ def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgra
     tidl_version = "7.3"   # corresponding Processor SDK version
     tidl_artifacts_folder = "./artifacts_" + model_name +  ("_target" if args.target else "_host")
     os.makedirs(tidl_artifacts_folder, exist_ok = True)
-    for root, dirs, files in os.walk(tidl_artifacts_folder, topdown=False):
-        for f in files:
-            os.remove(os.path.join(root, f))
-        for d in dirs:
-            os.rmdir(os.path.join(root, d))
+    path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
+    path_graph = os.path.join(tidl_artifacts_folder, "deploy_graph.json")
+    path_params = os.path.join(tidl_artifacts_folder, "deploy_param.params")
+    [os.path.exists(f) and os.remove(f) for f in [path_lib, path_graph, path_params]]
+
     tidl_compiler = tidl.TIDLCompiler(platform=tidl_platform, version=tidl_version,
                                       tidl_tools_path=tidl_tools_path,
                                       artifacts_folder=tidl_artifacts_folder,
@@ -156,9 +156,6 @@ def model_compile(model_name, mod_orig, params, model_input_list, max_num_subgra
         graph, lib, params = relay.build_module.build(mod, target=target, params=params)
     tidl.remove_tidl_params(params)
 
-    path_lib = os.path.join(tidl_artifacts_folder, "deploy_lib.so")
-    path_graph = os.path.join(tidl_artifacts_folder, "deploy_graph.json")
-    path_params = os.path.join(tidl_artifacts_folder, "deploy_param.params")
     if args.target:
         lib.export_library(path_lib, cc=arm_gcc)
     else:

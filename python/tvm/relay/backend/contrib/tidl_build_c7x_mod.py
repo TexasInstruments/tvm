@@ -218,11 +218,9 @@ EXPORT int tvm_main_delete()
 }}
 ''')
 
-
-def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
+def gen_c7x_source(tidl_compiler, mod, params, num_tidl_subgraphs):
     """
-    This function builds a c7x deployable module that c7x TVM C runtime can run,
-    returns an Arm wrapper deployable module that has c7x deployable module embedded in
+    This function generates c7x source files for TIDL-unsupported layers and TIDL subgraphs
 
     Parameters
     ----------
@@ -235,11 +233,6 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
         The parameter dict to be used by relay
     num_tidl_subgraphs: int
         Number of TIDL subgraphs
-
-    Returns
-    -------
-    status: int
-        1: success, -1: failure
     """
     temp_folder = tidl_compiler.temp_folder
     print("Building C7x tvm deployable module: generating c files...")
@@ -281,6 +274,31 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
 
     gen_model_tvm_funcs(os.path.join(temp_folder, "tvm_main.c"), num_tidl_subgraphs)
 
+def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
+    """
+    This function builds a c7x deployable module that c7x TVM C runtime can run,
+    returns an Arm wrapper deployable module that has c7x deployable module embedded in
+
+    Parameters
+    ----------
+    tidl_compiler: TIDLCompiler
+        TIDLCompiler instance
+    mod : tvm.relay.Module
+        Partitioned Relay IR graph between TIDL subgraphs and TIDL-unsupported layers
+        To be compiled with "c7x" codegen into a c7x deployable module
+    params : dict of str to tvm.NDArray
+        The parameter dict to be used by relay
+    num_tidl_subgraphs: int
+        Number of TIDL subgraphs
+
+    Returns
+    -------
+    status: int
+        1: success, -1: failure
+    """
+    if os.environ.get("TIDL_REBUILD_ONLY") == None:
+        gen_c7x_source(tidl_compiler, mod, params, num_tidl_subgraphs)
+
     print("Building C7x tvm deployable module: building... (log in c7x_deploy_mod.log)")
     # if script from python package:      tvm/relay/backend/contrib/tidl_build_c7x_mod.py
     # if script from dev repo: tvm/python/tvm/relay/backend/contrib/tidl_build_c7x_mod.py
@@ -288,7 +306,7 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
     if not os.path.exists(os.path.join(tvm_root, "src/runtime/contrib/tidl/c7x")):
         tvm_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
     tvm_c7x_root = os.path.join(tvm_root, "src/runtime/contrib/tidl/c7x")
-    abs_temp_folder = os.path.abspath(temp_folder)
+    abs_temp_folder = os.path.abspath(tidl_compiler.temp_folder)
     log_file = os.path.join(abs_temp_folder, "c7x_deploy_tvm.log")
     command  = f'make TVM_ROOT={tvm_root} TVM_C7X_ROOT={tvm_c7x_root} QUIET= ' + \
                f' -C {abs_temp_folder} -f {tvm_c7x_root}/Makefile.c7x_mod -j$(nproc)'

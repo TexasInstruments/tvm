@@ -2650,6 +2650,12 @@ class TIDLCompiler:
                 0  - no compilation due to missing TIDL tools
         """
 
+        # Skip TIDL import and C7x code generation.  Proceed directly to
+        # re-build the C7x deployable module and the Arm deployable module,
+        # reusing the existing source in the tempDir from the previous compilation.
+        if self.c7x_codegen > 0 and os.environ.get("TIDL_REBUILD_ONLY") != None:
+            return enable_c7x_mod(self, mod_orig, mod_orig, params, 0), 0
+
         # (Backward compatible) if single calibration image/data/dict, convert to list
         if not isinstance(graph_input_list, list):
             graph_input_list = [ graph_input_list ]
