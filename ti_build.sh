@@ -18,6 +18,11 @@ if [ -z "${WORKSPACE}" ]; then
     exit 1
 fi
 
+if [ -z "${EVM_IP}" ]; then
+    echo "You must define EVM_IP before calling this script"
+    exit 1
+fi
+
 CLANG_VERSION=clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04
 
 BUILD_DIR=${WORKSPACE}/build
@@ -32,3 +37,35 @@ make -j$(nproc)
 # Create the python package
 cd ../python
 python3 ./setup.py bdist_wheel
+cd -
+
+# Use TVM to compile unit tests
+UNIT_TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests/unit_tests
+cd $UNIT_TEST_DIR
+
+# Create a Python virtual environment to install the TVM wheel file and build a test case
+unset PYTHONPATH
+python3 -m venv build_env && source ./build_env/bin/activate
+export https_proxy=http://wwwgate.ti.com:80
+export http_proxy=http://wwwgate.ti.com:80
+pip3 install ${WORKSPACE}/python/dist/tvm-*-cp36-cp36m-linux_x86_64.whl
+pip3 install graphviz
+
+# Use TVM python artifacts from the whl package
+echo $PYTHONPATH
+
+# Compile model on host, generate artifacts directory and copy to EVM
+./relay_mul.py --compile --copy_to_evm ${EVM_IP}
+
+# Run model on EVM
+ssh root@${EVM_IP} './relay_mul.py --inference'
+retval=$?
+if [ $retval -eq 0 ]
+then
+    echo "Unit test PASSED"
+else
+    echo "Unit test FAILED"
+fi
+exit $retval
+
+#ansible j7-evm -i ansible_evm.yml -u root -a "./relay_mul.py --inference"
