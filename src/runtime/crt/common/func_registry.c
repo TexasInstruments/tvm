@@ -82,12 +82,16 @@ tvm_crt_error_t TVMFuncRegistry_Lookup(const TVMFuncRegistry* reg, const char* n
 tvm_crt_error_t TVMFuncRegistry_GetByIndex(const TVMFuncRegistry* reg,
                                            tvm_function_index_t function_index,
                                            TVMBackendPackedCFunc* out_func) {
+#if 0  // Begin TI: FuncRegistry (name to func_ptr mapping) actually can handle >= 255 functions.
+       // Somehow TVM C runtime chooses a single byte to encode the number of functions.
+       // This number is not used/checked anywhere else other than here.
   uint8_t num_funcs;
 
   num_funcs = reg->names[0];
   if (function_index >= num_funcs) {
     return kTvmErrorFunctionIndexInvalid;
   }
+#endif // End TI
 
   *out_func = reg->funcs[function_index];
   return kTvmErrorNoError;
