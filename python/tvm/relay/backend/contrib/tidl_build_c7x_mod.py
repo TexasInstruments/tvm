@@ -181,6 +181,7 @@ EXPORT int tvm_main_create()
   char* params_data = (char*)(params_bin);
   tvm_handle = tvm_runtime_create(json_data, params_data, params_bin_len);
 
+  if (tvm_handle == NULL)  return -1;
   return 0;
 }}
 
