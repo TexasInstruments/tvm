@@ -52,8 +52,7 @@ def enable_c7x_mod(tidl_compiler, mod, mod_orig, params, num_tidl_subgraphs):
     """
     status = build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs)
     if status == -1:
-        print("Building C7x tvm deployable module failed.  Reverting to Arm execution.")
-        return mod
+        raise Exception("Building C7x tvm deployable module failed.")
 
     print("Creating Arm wrapper tvm module...")
     mod_arm = relay.transform.RemoveUnusedFunctions()(mod_orig)
