@@ -33,6 +33,7 @@ def test_compile(models, platforms, targets, tidls, c7xs):
             if t_h == "--host" and c_nc == "--c7x":
               continue
 
+            print(f"\n\nCompiling config: {[model, platform, t_h, t_nt, c_nc]} ...")
             try:
               subprocess.run(["python3", "compile_model.py", model, "--platform", platform,
                               t_h, t_nt, c_nc], check=True)
@@ -104,5 +105,5 @@ if __name__ == "__main__":
     print("Failed configs:")
     for config in failed_configs:
       print(f"  {config}")
-    sys.exit(-1)
+    sys.exit(1)
 

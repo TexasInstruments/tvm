@@ -51,6 +51,9 @@ test_od = {
 }
 
 
+tvm_models_dir = os.path.join(os.environ["HOME"], ".tvm_test_data/models")
+
+
 models = {
   'mv1_tf' : {
     'file': ["url", "http://download.tensorflow.org/models/mobilenet_v1_2018_08_02/mobilenet_v1_1.0_224.tgz", "mobilenet_v1_1.0_224.tgz", "mobilenet_v1_1.0_224_frozen.pb"],
@@ -105,6 +108,13 @@ models = {
     'calib_data': ['street_small'],
     'test': test_od,
   },
+
+  'swin_tiny_timm' : {
+    'file': ["timm", "swin_tiny_patch4_window7_224"],
+    'input_info': {**inputs_224, 'name':"input.1"},
+    'calib_data': ['cat', 'cat2'],
+    'test': test_top5,
+  },
 }
 
 
@@ -140,6 +150,20 @@ def get_model_file(model_name):
     _, tv_model_name = models[model_name]['file']
     model = getattr(tv_models, tv_model_name)(pretrained=True)
     return model.eval()
+  elif models[model_name]['file'][0] == "timm":
+    _, timm_model_name = models[model_name]['file']
+    input_node = models[model_name]['input_info']['name']
+    model_file = os.path.join(tvm_models_dir, timm_model_name + ".onnx")
+    if not os.path.exists(model_file):
+      import torch
+      import timm
+      from prepostproc import get_calib_inputs
+      model = timm.create_model(timm_model_name, pretrained=True).eval()
+      calib_inputs = get_calib_inputs(model_name)
+      data = torch.from_numpy(calib_inputs[0].get(input_node))
+      torch.onnx.export(model, data, model_file,
+                        export_params=True, opset_version=11, do_constant_folding=True)
+    return model_file
 
 
 def get_relay_model(model_name : str):
@@ -224,7 +248,7 @@ def get_relay_model(model_name : str):
     return from_tf(model_file, model_name)
   elif model_name.endswith("_tfl"):
     return from_tfl(model_file, model_name)
-  elif model_name.endswith("_onnx"):
+  elif model_name.endswith("_onnx") or model_name.endswith("_timm"):
     return from_onnx(model_file, model_name)
   elif model_name.endswith("_mxnet"):
     return from_mxnet(model_file, model_name)

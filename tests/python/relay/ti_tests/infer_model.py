@@ -158,5 +158,5 @@ if __name__ == "__main__":
   print(f"infer_model {'succeed' if ret else 'fail'}ed: {args.model_name} {args.platform} "
         f"{'target' if is_target else 'host'} {'dlr' if args.dlr else 'tvm'} "
         f"{'tidl' if args.tidl else 'notidl'} {'c7x' if args.c7x else 'noc7x'}")
-  sys.exit(0 if ret else -1)
+  sys.exit(0 if ret else 1)
 

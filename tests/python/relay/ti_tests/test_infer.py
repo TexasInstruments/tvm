@@ -25,6 +25,7 @@ from models import models
 
 def test_infer(models, platforms, dlr_tvm, tidls, c7xs):
   is_target = (processor() == "aarch64")
+  t_h = "--target" if is_target else "--host"
   failed_configs = []
   for model in models:
     for platform in platforms:
@@ -35,11 +36,12 @@ def test_infer(models, platforms, dlr_tvm, tidls, c7xs):
             if (not is_target) and c_nc == "--c7x":
               continue
 
+            print(f"\n\nInferring config: {[model, platform, t_h, t_nt, c_nc, d_t]} ...")
             try:
               subprocess.run(["python3", "infer_model.py", model, "--platform", platform,
                               d_t, t_nt, c_nc], check=True)
             except:
-              failed_configs.append([model, platform, d_t, t_nt, c_nc])
+              failed_configs.append([model, platform, t_h, t_nt, c_nc, d_t])
 
   return failed_configs
 
@@ -98,5 +100,5 @@ if __name__ == "__main__":
     print("Failed configs:")
     for config in failed_configs:
       print(f"  {config}")
-    sys.exit(-1)
+    sys.exit(1)
 
