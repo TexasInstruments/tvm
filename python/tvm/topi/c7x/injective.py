@@ -24,7 +24,7 @@ from tvm import te
 from tvm import tir
 from tvm.runtime import DataType
 from tvm.contrib.c7x import register_c7x_local_mem
-from .. import utils
+from .. import utils, tag
 
 logging = logging.getLogger("c7x_injective")
 
@@ -120,17 +120,17 @@ def schedule_injective_from_existing(s: te.Schedule,
          The updated schedule.
     """
 
-    def is_unsupported_op(tensor, invalid_ops):
+    def is_unsupported_op(tensor, is_invalid_op):
         ''' Return True if any of the ops contributing to tensor is not supported
             by the C7x implementation for injective ops.
         '''
         if isinstance(tensor.op, tvm.te.ComputeOp):
-            if tensor.op.name in invalid_ops:
+            if is_invalid_op(tensor.op):
                 logging.debug(f"is_invalid_op true for op={tensor.op.name}")
                 return True
 
             for t in tensor.op.input_tensors:
-                if is_unsupported_op(t, invalid_ops):
+                if is_unsupported_op(t, is_invalid_op):
                     return True
 
         return False
@@ -220,10 +220,19 @@ def schedule_injective_from_existing(s: te.Schedule,
     logging.debug(f"schedule_injective for c7x, target={target}")
 
     # Check for unsupported ops
-    if (is_unsupported_op(tensor=C, invalid_ops=ops_do_not_dma)):
+    # Only apply tiling and dma on subset of injective ops: broadcast ops (including elemwise ops)
+    # - For ops that are injective but not broadcast/elemwise, e.g. ones in ops_do_not_dma list,
+    #   output tensor indexing axis might have different ordering/bounds than the input tensor.
+    #   When using block size computed from output tensor to tile the input tensor, we might
+    #   encouter problems such as:
+    #   - After sinking with "compute_at", input tensor block size cannot be reduced
+    #   - The loop nest tiled for output block cannot compute the tiled input tensor block
+    #   - After vectorization, complicated index computation in input tensor blocks produces
+    #     complicated vector masks
+    # - For broadcast/elemwise ops, output tensor and input tensor always have the same axis
+    #   ordering.
+    if is_unsupported_op(tensor=C, is_invalid_op=(lambda t: not tag.is_broadcast(s[t].op.tag))):
         return s
-
-    #print_schedule(s)
 
     # schedule transformations only apply to dimensioned operations
     if not s[C].op.axis:
@@ -360,17 +369,21 @@ def double_buffer_with_dma(s: te.Schedule,
         logging.debug("after sink")
         print_schedule(s)
 
-    # mark local<->ext copies as using dma.
+    # mark local<->ext copies as using dma.  Encode each dma transfer size for verifying later.
+    total_blocks = nblocks
+    if baxis > 1:
+        for dim_size in dims[:baxis-1]:
+            total_blocks *= dim_size
     for t, is_placeholder in local_inputs:
         # AutoInlineInjective can push compute into the copy loops - such loops
         # cannot be annotated with the dma pragma.
         #dump(t)
-        if is_placeholder and tensor_size(t) % nblocks == 0:
-            s[t].pragma(s[t].op.axis[0], "dma", tensor_size(t)//nblocks)
+        if is_placeholder and tensor_size(t) % total_blocks == 0:
+            s[t].pragma(s[t].op.axis[0], "dma", tensor_size(t)//total_blocks)
     if cc != C:
         #dump(cc)
         # if no split above, block is outer loop
-        s[C].pragma(block, "dma", tensor_size(C)//nblocks)
+        s[C].pragma(block, "dma", tensor_size(C)//total_blocks)
 
     return (s, cc, baxis, inner)
 
