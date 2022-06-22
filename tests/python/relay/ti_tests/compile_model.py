@@ -19,8 +19,6 @@
 
 import os
 import sys
-# pytorch, tvm loading order causing name conflicts: https://github.com/apache/tvm/issues/9362
-import torch
 
 def compile_relay(mod_orig, params, input_list,
                   platform, is_target, w_tidl, w_c7x, artifacts_folder, tidl_bits=8):
