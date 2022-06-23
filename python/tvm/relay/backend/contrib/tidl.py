@@ -2705,8 +2705,10 @@ class TIDLCompiler:
             mod['main'] = RemoveIdentityClip().visit(mod['main'])
         # Removing redundant outputs
         mod = relay.transform.EliminateCommonSubexpr()(mod)
+        mod = relay.transform.DynamicToStatic()(mod)
         with open(os.path.join(self.temp_folder, "relay_graph.prepared.txt"), "w") as relay_txt:
             print(mod.astext(show_meta_data=False), file=relay_txt)
+        mod_pre = mod
 
         #============= Reject dynamic shape/network for now ==============
         if find_dynamic_shape(mod):
@@ -2782,7 +2784,7 @@ class TIDLCompiler:
                     print("TIDL artifacts are stored at " + self.artifacts_folder)
                     mod_final, status = mod, 1        # TIDL Compilation success
                     if (self.c7x_codegen > 0):
-                        mod_final = enable_c7x_mod(self, mod, mod_orig, params, num_imported_sgs)
+                        mod_final = enable_c7x_mod(self, mod, mod_pre, params, num_imported_sgs)
                 else:
                     print("TIDL import of Relay IR graph failed.")
                     mod_final, status = mod_orig, -1  # TIDL Compilation failure

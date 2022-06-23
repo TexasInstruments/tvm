@@ -26,7 +26,7 @@ from tvm import transform
 from tvm.relay.expr_functor import ExprMutator
 from . import tidl
 
-def enable_c7x_mod(tidl_compiler, mod, mod_orig, params, num_tidl_subgraphs):
+def enable_c7x_mod(tidl_compiler, mod, mod_pre, params, num_tidl_subgraphs):
     """
     This function builds a c7x deployable module that c7x TVM C runtime can run,
     returns an Arm wrapper deployable module that has c7x deployable module embedded in
@@ -38,8 +38,8 @@ def enable_c7x_mod(tidl_compiler, mod, mod_orig, params, num_tidl_subgraphs):
     mod : tvm.relay.Module
         Partitioned Relay IR graph between TIDL subgraphs and TIDL-unsupported layers
         To be compiled with "c7x" codegen into a c7x deployable module
-    mod_orig : tvm.relay.Module
-        Original Relay IR graph
+    mod_pre : tvm.relay.Module
+        Prepared Relay IR graph before partitioning
     params : dict of str to tvm.NDArray
         The parameter dict to be used by relay
     num_tidl_subgraphs: int
@@ -55,12 +55,7 @@ def enable_c7x_mod(tidl_compiler, mod, mod_orig, params, num_tidl_subgraphs):
         raise Exception("Building C7x tvm deployable module failed.")
 
     print("Creating Arm wrapper tvm module...")
-    mod_arm = relay.transform.RemoveUnusedFunctions()(mod_orig)
-    mod_arm["main"] = relay.build_module.bind_params_by_name(mod_arm["main"], params)
-    mod_arm["main"] = tidl.RemoveTrainingOperators().visit(mod_arm["main"])
-    mod_arm = relay.transform.FoldConstant()(mod_arm)
-    mod_arm = relay.transform.EliminateCommonSubexpr()(mod_arm)
-    mod_arm = relay.transform.InferType()(mod_arm)
+    mod_arm = relay.transform.InferType()(mod_pre)
 
     # Outline "main" function body to subgraph "tidl_tvm_0" (representing c7x deployable module)
     # See relay_graph.wrapper.txt in artifacts_folder/tempDir.  E.g.
