@@ -39,6 +39,15 @@ $ # build python package in $TVM_HOME/python/dist
 # cd ../python; python3 ./setup.py bdist_wheel
 ```
 
+Building the TVM Graph Executor (Runtime) for aarch64
+-----------------------------------------------------
+```console
+mkdir build_aarch64; cd build_aarch64
+cmake -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/ti_dl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} -DCMAKE_TOOLCHAIN_FILE=../cmake/modules/contrib/ti-aarch64-linux-gcc-toolchain.cmake ..
+make clean; make -j$(nproc) runtime
+```
+
+
 Release Details
 ---------------
 

@@ -23,55 +23,84 @@ if [ -z "${EVM_IP}" ]; then
     exit 1
 fi
 
-CLANG_VERSION=clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04
 
-BUILD_DIR=${WORKSPACE}/build
+function build_tvm {
 
-# Build TVM
-rm -rf $BUILD_DIR
-mkdir $BUILD_DIR
-cd $BUILD_DIR
-cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=YES -DUSE_MICRO=ON -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_LLVM="${TVM_DEPS_PATH}/$CLANG_VERSION/bin/llvm-config --link-static" -DHIDE_PRIVATE_SYMBOLS=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/ti_dl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} ..
-make -j$(nproc)
+    local BUILD_DIR=${WORKSPACE}/build
+    local CLANG_VERSION=clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04
 
-# Create the python package
-cd ../python
-python3 ./setup.py bdist_wheel
-cd -
+    # Build TVM
+    rm -rf $BUILD_DIR
+    mkdir $BUILD_DIR
+    cd $BUILD_DIR
+    cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=YES -DUSE_MICRO=ON -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_LLVM="${TVM_DEPS_PATH}/$CLANG_VERSION/bin/llvm-config --link-static" -DHIDE_PRIVATE_SYMBOLS=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/ti_dl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} ..
+    make -j$(nproc)
 
-# Use TVM to compile a unit test
-TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests/relay_mul
-cd $TEST_DIR
+    # Create the python package
+    cd ../python
+    python3 ./setup.py bdist_wheel
+    cd -
+}
 
-# Create a Python virtual environment to install the TVM wheel file and build a test case
-unset PYTHONPATH
-python3 -m venv build_env && source ./build_env/bin/activate
-export https_proxy=http://wwwgate.ti.com:80
-export http_proxy=http://wwwgate.ti.com:80
+# Build the Graph Executor for aarch64
+function build_aarch64_ge {
+    local BUILD_DIR_AARCH64=${WORKSPACE}/build_aarch64
+    local GCC_VERSION=gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu
 
-# Update pip3 first
-python3 -m pip install -U pip
+    export ARM64_GCC_PATH=${TVM_DEPS_PATH}/$GCC_VERSION
 
-# Install TVM in the venv
-pip3 install ${WORKSPACE}/python/dist/tvm-*-cp36-cp36m-linux_x86_64.whl
+    rm -rf $BUILD_DIR_AARCH64
+    mkdir $BUILD_DIR_AARCH64
+    cd $BUILD_DIR_AARCH64
 
-# Install packages required to compile models with TVM
-pip3 install graphviz
-pip3 install tflite==2.4.0 onnx==1.9.0 mxnet==1.7.0.post2 gluoncv==0.8.0 torch==1.10.2 tensorflow==1.14.0 timm==0.5.4
-pip3 install --no-deps torchvision==0.11.2
+    cmake -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/ti_dl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} -DCMAKE_TOOLCHAIN_FILE=../cmake/modules/contrib/ti-aarch64-linux-gcc-toolchain.cmake ..
+    make -j$(nproc) runtime
+    cd -
+}
 
-# Compile model on host, generate artifacts directory and copy to EVM
-./relay_mul.py --compile --copy_to_evm ${EVM_IP}
+function test_tvm {
+    # Use TVM to compile a unit test
+    local TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests/relay_mul
+    cd $TEST_DIR
 
-# Run model on EVM
-ssh root@${EVM_IP} './relay_mul.py --inference'
-retval=$?
-if [ $retval -eq 0 ]
-then
-    echo "Unit test PASSED"
-else
-    echo "Unit test FAILED"
-fi
-exit $retval
+    # Create a Python virtual environment to install the TVM wheel file and build a test case
+    unset PYTHONPATH
+    python3 -m venv build_env && source ./build_env/bin/activate
+    export https_proxy=http://wwwgate.ti.com:80
+    export http_proxy=http://wwwgate.ti.com:80
 
-#ansible j7-evm -i ansible_evm.yml -u root -a "./relay_mul.py --inference"
+    # Update pip3 first
+    python3 -m pip install -U pip
+
+    # Install TVM in the venv
+    pip3 install ${WORKSPACE}/python/dist/tvm-*-cp36-cp36m-linux_x86_64.whl
+
+    # Install packages required to compile models with TVM
+    pip3 install graphviz
+    pip3 install tflite==2.4.0 onnx==1.9.0 mxnet==1.7.0.post2 gluoncv==0.8.0 torch==1.10.2 tensorflow==1.14.0 timm==0.5.4
+    pip3 install --no-deps torchvision==0.11.2
+
+    # Compile model on host, generate artifacts directory and copy to EVM
+    ./relay_mul.py --compile --copy_to_evm ${EVM_IP}
+
+    # Run model on EVM
+    ssh root@${EVM_IP} './relay_mul.py --inference'
+    local retval=$?
+
+    if [ $retval -eq 0 ]
+    then
+        echo "Unit test PASSED"
+    else
+        echo "Unit test FAILED"
+    fi
+
+    return $retval
+}
+
+
+build_tvm
+build_aarch64_ge
+
+# Run test_tvm and exit with return value from test_tvm
+test_tvm
+exit $?
