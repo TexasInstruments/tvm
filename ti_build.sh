@@ -55,6 +55,7 @@ function build_aarch64_ge {
 
     cmake -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/ti_dl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} -DCMAKE_TOOLCHAIN_FILE=../cmake/modules/contrib/ti-aarch64-linux-gcc-toolchain.cmake ..
     make -j$(nproc) runtime
+    scp libtvm_runtime.so root@${EVM_IP}:
     cd -
 }
 
@@ -92,7 +93,18 @@ function test_tvm {
         echo "Unit test PASSED"
     else
         echo "Unit test FAILED"
+        return $retval
     fi
+
+    # Test C++ Graph Executor
+    make clean; make
+    retval=$?
+    if [ $retval -ne 0 ]
+    then
+        return $retval
+    fi
+    scp -rq artifacts_relay_mul_c7x_target relay_mul root@${EVM_IP}:
+    ssh root@${EVM_IP} 'LD_LIBRARY_PATH=. ./relay_mul'
 
     return $retval
 }

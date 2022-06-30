@@ -188,7 +188,8 @@ if __name__ == "__main__":
     if args.compile:
         artifacts = compile_model(model, args)
         if args.copy_to_evm != None:
-            copy_to_evm(model, args.copy_to_evm, artifacts)
+            if not copy_to_evm(model, args.copy_to_evm, artifacts):
+                sys.exit(1)
 
     if args.inference:
         status = run_model(model, True)
