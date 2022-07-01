@@ -43,6 +43,10 @@ colors = [ (255, 0, 0), (0, 255, 0), (0, 0, 255), (128, 128, 0), (128, 0, 128), 
 
 def get_calibdata_file(testdata_name):
   """ Return the testdata file, given the model name """
+  # workaround SSL: CERTIFICATE_VERIFY_FAILED
+  import ssl
+  ssl._create_default_https_context = ssl._create_unverified_context
+
   if testdata[testdata_name]['file'][0] == "url":
     from tvm.contrib.download import download_testdata
     _, url, save_name = testdata[testdata_name]['file']

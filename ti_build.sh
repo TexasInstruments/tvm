@@ -69,6 +69,7 @@ function test_tvm {
     python3 -m venv build_env && source ./build_env/bin/activate
     export https_proxy=http://wwwgate.ti.com:80
     export http_proxy=http://wwwgate.ti.com:80
+    export no_proxy=ti.com
 
     # Update pip3 first
     python3 -m pip install -U pip
@@ -80,6 +81,9 @@ function test_tvm {
     pip3 install graphviz
     pip3 install tflite==2.4.0 onnx==1.9.0 mxnet==1.7.0.post2 gluoncv==0.8.0 torch==1.10.2 tensorflow==1.14.0 timm==0.5.4
     pip3 install --no-deps torchvision==0.11.2
+
+    # Initialize the ssh connection to EVM, save EVM into .known_hosts
+    ssh -o "StrictHostKeyChecking no" root@${EVM_IP} 'uname -a'
 
     # Compile model on host, generate artifacts directory and copy to EVM
     ./relay_mul.py --compile --copy_to_evm ${EVM_IP}
@@ -109,10 +113,54 @@ function test_tvm {
     return $retval
 }
 
+function run_tvm_tidl_tests {
+    # Use TVM to compile a unit test
+    local TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests
+    cd $TEST_DIR
+
+    # Set up environment variables for TVM+TIDL compilation
+    # ARM64_GCC_PATH already set in build_aarch64_ge
+    export TIDL_TOOLS_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/tidl_tools)
+    export CGT7X_ROOT=$(ls -d ${PSDKR_PATH}/ti-cgt-c7000_*)
+    export TI_TESTS_DISABLE_DOWNLOAD_PROGRESS=1
+    pip3 install pytest opencv-python
+
+    # Run compilation tests
+    python3 ./test_compile.py
+    retval=$?
+    if [ $retval -ne 0 ]; then
+        return $retval
+    fi
+
+    # Run inference tests on host
+    mkdir -p testdata
+    cp ~/.tvm_test_data/data/* testdata
+    python3 ./test_infer.py --tvm
+    retval=$?
+    if [ $retval -ne 0 ]; then
+        return $retval
+    fi
+
+    # Run inference tests on EVM (export workspace dir and mount it on EVM)
+    ssh root@${EVM_IP} 'mkdir -p /home/sdomcbld; mount -t nfs sdomc-build4.dhcp.ti.com:/home/sdomcbld /home/sdomcbld'
+    ssh root@${EVM_IP} 'cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests; python3 ./test_infer.py'
+    retval=$?
+
+    return $retval
+}
+
 
 build_tvm
 build_aarch64_ge
 
 # Run test_tvm and exit with return value from test_tvm
 test_tvm
-exit $?
+retval=$?
+
+# If test_tvm succeeds, run TVM+TIDL tests in tests/python/relay/ti_tests
+if [ $retval -eq 0 ]; then
+    run_tvm_tidl_tests
+    retval=$?
+fi
+
+exit $retval

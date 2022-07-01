@@ -22,6 +22,10 @@ import subprocess
 from platform import processor
 from models import models
 
+skipped_configs = [
+  # Not enough memory to run the model
+  [ 'yolo3_mv1_mxnet', 'J7', '--target', '--notidl', '--c7x', '--dlr' ],
+]
 
 def test_infer(models, platforms, dlr_tvm, tidls, c7xs):
   is_target = (processor() == "aarch64")
@@ -37,6 +41,9 @@ def test_infer(models, platforms, dlr_tvm, tidls, c7xs):
               continue
 
             print(f"\n\nInferring config: {[model, platform, t_h, t_nt, c_nc, d_t]} ...")
+            if [model, platform, t_h, t_nt, c_nc, d_t] in skipped_configs:
+              print("Skipped")
+              continue
             try:
               subprocess.run(["python3", "infer_model.py", model, "--platform", platform,
                               d_t, t_nt, c_nc], check=True)

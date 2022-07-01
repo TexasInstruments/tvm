@@ -83,6 +83,10 @@ def download(url, path, overwrite=False, size_compare=False, verbose=1, retries=
         """Show the download progress."""
         if count == 0:
             return
+        # Begin TI: disable progress in test log
+        if environ.get("TI_TESTS_DISABLE_DOWNLOAD_PROGRESS", None):
+            return
+        # End TI
         duration = time.time() - start_time
         progress_size = int(count * block_size)
         speed = int(progress_size / (1024 * duration))
