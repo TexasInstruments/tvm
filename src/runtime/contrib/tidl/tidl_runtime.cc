@@ -244,6 +244,12 @@ class TIDLJ7Module : public runtime::ModuleNode {
     params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
     params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
     params.TIDLVprintf = TIDLVprintf;
+    char *env_string = getenv("TIDL_RT_TARGET_PRIORITY");
+    if (env_string)
+      params.targetPriority = atoi(env_string);
+    env_string = getenv("TIDL_RT_MAX_PREEMPT_DELAY");
+    if (env_string)
+      params.maxPreEmptDelay = atof(env_string);
     TIDL_LOG << "#TVM# net size: " << info.net_data.size();
     TIDL_LOG << "#TVM# ioparams size: " << info.params_data.size();
 
@@ -569,6 +575,8 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
       TVMRT_delete_   = LoadSymbol<decltype(TVMRT_delete_)>  ("TVMRT_delete");
       TVMRT_invoke_   = LoadSymbol<decltype(TVMRT_invoke_)>  ("TVMRT_invoke");
       TVMRT_deactive_ = LoadSymbol<decltype(TVMRT_deactive_)>("TVMRT_deactivate");
+      TVMRT_setParamsDefault_ = LoadSymbol<decltype(TVMRT_setParamsDefault_)>(
+                                                    "TVMRT_setParamsDefault");
     }
   }
 
@@ -608,6 +616,7 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
 
     // Call TVMRT_create() to initialize the C7x TVM graph
     sTVMRT_Params_t params;
+    TVMRT_setParamsDefault_(&params);
     params.deploy_mod = (void*) info.c7x_deploy_mod.data();
     params.deploy_mod_size = info.c7x_deploy_mod.size();
     params.num_input_tensors = info.NumInputs();
@@ -633,6 +642,12 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
     params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
     params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
     params.TVMVprintf = TIDLVprintf;
+    char *env_string = getenv("TIDL_RT_TARGET_PRIORITY");
+    if (env_string)
+      params.targetPriority = atoi(env_string);
+    env_string = getenv("TIDL_RT_MAX_PREEMPT_DELAY");
+    if (env_string)
+      params.maxPreEmptDelay = atof(env_string);
     TIDL_LOG << "#TVM# c7x_deploy_mod size: " << params.deploy_mod_size;
 
     if (TVMRT_create_(&params, &tvmrt_handle) != 0) {
@@ -702,6 +717,7 @@ private:
   decltype(&TVMRT_delete)     TVMRT_delete_ = nullptr;
   decltype(&TVMRT_invoke)     TVMRT_invoke_ = nullptr;
   decltype(&TVMRT_deactivate) TVMRT_deactive_ = nullptr;
+  decltype(&TVMRT_setParamsDefault) TVMRT_setParamsDefault_ = nullptr;
 };
 
 
