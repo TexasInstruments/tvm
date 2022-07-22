@@ -161,14 +161,19 @@ def gen_model_tvm_funcs(outfile, num_tidl_subgraphs):
 #define EXPORT __attribute__((visibility("protected")))
 
 static void *tvm_handle = NULL;
+static int32_t tvm_rt_debug_level = 0;
+int32_t tvm_rt_get_debug_level() {{ return tvm_rt_debug_level; }}
 
-EXPORT int tvm_main_create()
-{{''')
+EXPORT int tvm_main_create(void *rt_info)
+{{
+  if (rt_info != NULL)
+    tvm_rt_debug_level = ((tvm_tidl_rt_info *)rt_info)->tvm_rt_debug_level;
+''')
 
         for i in range(num_tidl_subgraphs):
             fo.write(f'''
-  extern int tidl_{i}_init(void);
-  if (tidl_{i}_init() != 0)  return -1;''')
+  extern int tidl_{i}_init(void*);
+  if (tidl_{i}_init(rt_info) != 0)  return -1;''')
 
         fo.write(f'''
   char* json_data = (char*)(graph_json);

@@ -450,12 +450,13 @@ void J7CSourceCodegen::EmitInitFunction(const std::string& prefix, uint32_t subg
                                         const runtime::TIDLSubgraphInfo& subgraph_info)
 {
     const char* TS = "    ";
-    code_stream_ << "extern \"C\" int " << prefix << "_init(void) {\n"
+    code_stream_ << "extern \"C\" int " << prefix << "_init(void* rt_info) {\n"
                  << TS  << prefix << "_instance = init_tidl_subgraph((void *) subgraph" << subgraph_id << "_net_bin,\n"
                  << TS << TS << TS << "subgraph" << subgraph_id << "_net_bin_len,\n"
                  << TS << TS << TS << "(void* ) subgraph" << subgraph_id << "_params_1_bin,\n"
                  << TS << TS << TS << "getUDMADrvObjPtr(),\n"
-                 << TS << TS << TS << subgraph_info.is_nchw << " /* is_nchw */);\n\n"
+                 << TS << TS << TS << subgraph_info.is_nchw << " /* is_nchw */,\n"
+                 << TS << TS << TS << "rt_info);\n\n"
                  << TS << "return (" << prefix << "_instance == NULL) ? -1 : 0;\n"
                  << "}\n\n";
 }

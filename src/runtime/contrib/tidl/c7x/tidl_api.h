@@ -30,13 +30,23 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Need to be in sync with tvm_tidl_rt_info defined in tiovx/include/TI/j7_tvm.h */
+typedef struct {
+  int32_t tvm_rt_debug_level;
+  int32_t tidl_trace_log_level;
+  int32_t tidl_trace_write_level;
+  float   max_preempt_delay;
+} tvm_tidl_rt_info;
+
 //---------------------------------------------------------------------
 // Instantiate a TIDL graph
 extern void* init_tidl_subgraph(void *Network,
                                 uint32_t network_size,
 				void *IOParams,
 				void *udmaDrvObjPtr,
-                                int   is_nchw);
+                                int   is_nchw,
+                                void *rt_info);
 
 // Invoke a TIDL graph
 extern int32_t process_tidl_subgraph(void *instance,

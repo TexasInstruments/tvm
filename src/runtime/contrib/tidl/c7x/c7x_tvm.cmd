@@ -105,10 +105,6 @@ SECTIONS
 --import=DmaUtilsAutoInc3d_trigger
 --import=DmaUtilsAutoInc3d_wait
 
---import=tvm_rt_get_debug_level
---import=tidl_get_trace_log_level
---import=tidl_get_trace_write_level
-
 --import=TVM_lockInterrupts
 --import=TVM_unlockInterrupts
 

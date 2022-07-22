@@ -108,7 +108,8 @@ EXTERN_C void* init_tidl_subgraph(void *network,
                                   uint32_t network_size,
                                   void *IOParams,
                                   void* udmaDrvObjPtr,
-                                  int   is_nchw)
+                                  int   is_nchw,
+                                  void* in_rt_info)
 {
   int32_t status = IALG_EOK;
 
@@ -134,8 +135,7 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   TIDL_CreateParams  createParams;
   TIDL_createParamsInit(&createParams);
 
-  extern int32_t tidl_get_trace_log_level();
-  extern int32_t tidl_get_trace_write_level();
+  tvm_tidl_rt_info *rt_info = (tvm_tidl_rt_info *) in_rt_info;
   extern int32_t TVM_lockInterrupts();
   extern void    TVM_unlockInterrupts(int32_t);
 
@@ -146,15 +146,18 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   createParams.optimiseExtMem                = TIDL_OptimiseExtMemL1;
   createParams.quantRangeExpansionFactor     = 1.0;
   createParams.quantRangeUpdateFactor        = 0.0;
-  createParams.traceLogLevel                 = tidl_get_trace_log_level();
-  createParams.traceWriteLevel               = tidl_get_trace_write_level();
+  if (rt_info != NULL)
+  {
+    createParams.traceLogLevel                 = rt_info->tidl_trace_log_level;
+    createParams.traceWriteLevel               = rt_info->tidl_trace_write_level;
+    createParams.maxPreEmptDelay               = rt_info->max_preempt_delay;
+  }
   createParams.reservedCtrl                  = 0;
 #if (HOST_EMULATION)
   createParams.flowCtrl                      = TIDL_FLOW_CTRL_REF_ONLY;
 #else
   createParams.flowCtrl                      = TIDL_FLOW_CTRL_DEFAULT ;
 #endif
-  //createParams.maxPreEmptDelay               = FLT_MAX;
   createParams.traceBaseName                 = NULL;
   createParams.udmaDrvObj                    = udmaDrvObjPtr;
 
