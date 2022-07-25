@@ -50,40 +50,8 @@ uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
 }
 
 // Begin TI
-#include <float.h>
-#ifdef __C7100__
- #include <c7x.h>
- #define _TSC_read() (__TSC)
- #define _TSC_reset() (__TSC = 0)
-#else
- #include "time.h"
- #define _TSC_read() (clock())
- #define _TSC_reset()
-#endif
-static uint64_t *tvm_nodes_time;
-extern int32_t tvm_rt_get_debug_level();
-
-static void print_stats(DLTensor *tensor)
-{
-  int32_t elem_bytes = tensor->dtype.bits / 8;
-  int32_t size = (int32_t) Shape_Accumulate(tensor->shape, tensor->ndim);
-  printf("TVM CRT: Out[0]: ndim=%d, elem_bytes=%d, num_elements=%d, data=%p\n",
-         tensor->ndim, elem_bytes, size, tensor->data);
-  if (tensor->dtype.code == kDLFloat)
-  {
-    float minval =  FLT_MAX;
-    float maxval = -FLT_MAX;
-    float sum = 0.0f;
-    for (int i = 0; i < size; i++)
-    {
-      float val = ((float *)tensor->data)[i];
-      if (val < minval)  minval = val;
-      if (val > maxval)  maxval = val;
-      sum += val;
-    }
-    printf("TVM CRT:         min=%f, max=%f, sum=%f\n", minval, maxval, sum);
-  }
-}
+#define TVM_RT_TRACE_CRT
+#include <tvm/runtime/crt/tvm_tidl_trace.h>
 // End TI
 
 int NodeEntry_Load(TVMGraphExecutorNodeEntry* entry, JSONReader* reader) {
@@ -928,45 +896,53 @@ int TVMGraphExecutor_LoadParams(TVMGraphExecutor* executor, const char* param_bl
  */
 void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
   uint32_t tvm_rt_debug_level = tvm_rt_get_debug_level();
-  uint32_t num_execs = 0;
-  if (tvm_rt_debug_level > 1)
-    tvm_nodes_time[0] = _TSC_read();
+  int32_t  tvm_rt_trace_node  = tvm_rt_get_trace_node();
+  uint64_t t_g, t_n;
+  if (tvm_rt_debug_level > 1) {
+    tvm_rt_trace_init();
+    t_g = _TSC_read();
+  }
 
   // setup the array and requirements.
   uint32_t idx;
   for (idx = 0; idx < executor->op_execs_count; ++idx) {
     if (executor->op_execs[idx].fexec) {
-      if (tvm_rt_debug_level > 2)
+      if (tvm_rt_debug_level > 3)
         printf("TVM CRT: running %s (%d)\n", executor->op_execs[idx].name, idx);
+      if (tvm_rt_debug_level > 1)
+        t_n = _TSC_read();
 
 #if TVM_CRT_DEBUG
       printf("calling: %s (%d)\n", executor->op_execs[idx].name, idx);
 #endif  // TVM_CRT_DEBUG
       executor->op_execs[idx].Call(&(executor->op_execs[idx]));
 
+      if (tvm_rt_debug_level > 1)
+      {
+        t_n = _TSC_read() - t_n;  /* Cycles */
+        tvm_rt_trace_node_begin(idx, executor->op_execs[idx].name, t_n);
+      }
       if (tvm_rt_debug_level > 2)
       {
-        uint32_t eid = TVMGraphExecutor_GetEntryId(executor, idx, 0);
-        DLTensor *tensor = &(executor->data_entry[eid].dl_tensor);
-        print_stats(tensor);
+        uint32_t num_outputs = 1;
+        if (idx < executor->node_row_ptr_count - 1)
+          num_outputs = executor->node_row_ptr[idx+1] - executor->node_row_ptr[idx];
+        for (uint32_t out_id = 0; out_id < num_outputs; out_id++) {
+          uint32_t eid = TVMGraphExecutor_GetEntryId(executor, idx, out_id);
+          DLTensor *tensor = &(executor->data_entry[eid].dl_tensor);
+          tvm_rt_trace_write_tensor(tensor, out_id, tvm_rt_debug_level,
+                                    (int)idx == tvm_rt_trace_node ? 1:0);
+        }
       }
-      if (tvm_rt_debug_level > 1)  tvm_nodes_time[++num_execs] = _TSC_read();
+      if (tvm_rt_debug_level > 1)
+        tvm_rt_trace_write_int(TVM_RT_TRACE_END_NODE);  /* End of node */
     }
   }
 
   if (tvm_rt_debug_level > 1)
   {
-    printf("TVM CRT: TVM Run total elapsed (K Cycles): %ld\n",
-           (tvm_nodes_time[num_execs] - tvm_nodes_time[0]) / 1000);
-    uint32_t idx_execs = 0;
-    for (idx = 0; idx < executor->op_execs_count; ++idx) {
-      if (executor->op_execs[idx].fexec)
-      {
-        printf("TVM CRT:    Node %d, %s, elapsed: %ld\n", idx, executor->op_execs[idx].name,
-               (tvm_nodes_time[idx_execs+1] - tvm_nodes_time[idx_execs]) / 1000);
-        idx_execs += 1;
-      }
-    }
+    t_g = _TSC_read() - t_g;  /* Cycles */
+    tvm_rt_trace_finalize(t_g);
   }
 }
 
@@ -1194,28 +1170,6 @@ int TVMGraphExecutor_SetupOpExecs(TVMGraphExecutor* executor) {
     }
   }
 
-  // Begin TI
-  tvm_nodes_time = NULL;
-  int32_t tvm_rt_debug_level = tvm_rt_get_debug_level();
-  if (status == kTvmErrorNoError && tvm_rt_debug_level > 1)
-  {
-    int num_execs = 0;
-    for (nid = 0; nid < executor->nodes_count; nid++) {
-      if (executor->op_execs[nid].fexec)  num_execs += 1;
-    }
-    err = TVMPlatformMemoryAllocate((num_execs+1)*sizeof(uint64_t), dev, (void**)&tvm_nodes_time);
-    if (err != kTvmErrorNoError)
-    {
-      fprintf(stderr, "Fail to alloc mem for profiling time of %d nodes.\n", num_execs);
-      status = -1;
-    }
-    else
-    {
-      memset(tvm_nodes_time, 0, (num_execs+1)*sizeof(uint64_t));
-    }
-  }
-  // End TI
-
   return status;
 }
 
@@ -1385,13 +1339,6 @@ int TVMGraphExecutor_Release(TVMGraphExecutor** pptr) {
   if (status != 0) {
     return status;
   }
-  // Begin TI
-  if (tvm_nodes_time != NULL)
-    status = TVMPlatformMemoryFree(tvm_nodes_time, dev);
-  if (status != 0) {
-    return status;
-  }
-  // End TI
 
   if (g_fexecs) {
     status = TVMPlatformMemoryFree(g_fexecs, dev);

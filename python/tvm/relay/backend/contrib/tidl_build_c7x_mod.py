@@ -162,12 +162,26 @@ def gen_model_tvm_funcs(outfile, num_tidl_subgraphs):
 
 static void *tvm_handle = NULL;
 static int32_t tvm_rt_debug_level = 0;
+static void *  tvm_rt_trace_ptr = NULL;
+static int32_t tvm_rt_trace_size = 0;
+static int32_t tvm_rt_trace_node = 0;
 int32_t tvm_rt_get_debug_level() {{ return tvm_rt_debug_level; }}
+void*   tvm_rt_get_trace_ptr()   {{ return tvm_rt_trace_ptr; }}
+int32_t tvm_rt_get_trace_size()  {{ return tvm_rt_trace_size; }}
+int32_t tvm_rt_get_trace_node()  {{ return tvm_rt_trace_node; }}
+static void tvm_rt_set_rt_info(tvm_tidl_rt_info *rt_info)
+{{
+  if (rt_info == NULL)  return;
+  tvm_rt_debug_level = rt_info->tvm_rt_debug_level;
+  tvm_rt_trace_ptr   = (void *) rt_info->tvm_rt_trace_ptr;
+  tvm_rt_trace_size  = rt_info->tvm_rt_trace_size;
+  tvm_rt_trace_node  = rt_info->tvm_rt_trace_node;
+}}
+
 
 EXPORT int tvm_main_create(void *rt_info)
 {{
-  if (rt_info != NULL)
-    tvm_rt_debug_level = ((tvm_tidl_rt_info *)rt_info)->tvm_rt_debug_level;
+  tvm_rt_set_rt_info((tvm_tidl_rt_info *)rt_info);
 ''')
 
         for i in range(num_tidl_subgraphs):

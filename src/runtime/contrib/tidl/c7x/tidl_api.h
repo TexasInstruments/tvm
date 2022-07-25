@@ -33,10 +33,13 @@ extern "C" {
 
 /* Need to be in sync with tvm_tidl_rt_info defined in tiovx/include/TI/j7_tvm.h */
 typedef struct {
-  int32_t tvm_rt_debug_level;
-  int32_t tidl_trace_log_level;
-  int32_t tidl_trace_write_level;
-  float   max_preempt_delay;
+  int32_t  tvm_rt_debug_level;
+  int32_t  tidl_trace_log_level;
+  int32_t  tidl_trace_write_level;
+  float    max_preempt_delay;
+  uint64_t tvm_rt_trace_ptr;
+  int32_t  tvm_rt_trace_size;
+  int32_t  tvm_rt_trace_node;
 } tvm_tidl_rt_info;
 
 //---------------------------------------------------------------------
