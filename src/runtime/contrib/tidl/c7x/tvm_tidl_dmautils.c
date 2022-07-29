@@ -134,6 +134,7 @@ int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
   xferProp.circProp.circDir       = (uint8_t)DMAUTILSAUTOINC3D_CIRCDIR_DST;
 
   xferProp.syncType               = (int32_t)syncType;
+  xferProp.dmaDfmt                = (uint32_t)DMAUTILSAUTOINC3D_DFMT_NONE;
 
   // pointers could also be set in pTrMem_chs[0] before configure()
   xferProp.ioPointers.srcPtr = (uint8_t *) srcPtr;
