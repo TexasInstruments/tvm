@@ -14,6 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Backend contrib modules."""
+"""External backend codegen modules for Relay."""
 from .tidl import *
 from .tidl_reduce_subgraph_size import *

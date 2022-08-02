@@ -96,7 +96,7 @@ def expand_dims(data, axis, num_newaxis=1):
     data : relay.Expr
         The input data to the operator.
 
-    axis : int
+    axis : Union[int, Expr]
         The axis at which the input array is expanded.
         Should lie in range `[-data.ndim - 1, data.ndim]`.
         If `axis < 0`, it is the first axis inserted;
@@ -110,7 +110,13 @@ def expand_dims(data, axis, num_newaxis=1):
     result : relay.Expr
         The reshaped result.
     """
-    return _make.expand_dims(data, axis, num_newaxis)
+    if isinstance(axis, int):
+        return _make.expand_dims(data, axis, num_newaxis)
+    if isinstance(axis, Expr):
+        # TODO (AndrewZhaoLuo): investigate performance issues with consecutive
+        # dynamic expand_dims on non-llvm targets.
+        return _dyn_make.expand_dims(data, axis, num_newaxis)
+    raise ValueError(f"Unknown type for axis: {type(axis)}")
 
 
 def transpose(data, axes=None):
@@ -143,7 +149,7 @@ def squeeze(data, axis=None):
     data : tvm.relay.Expr
         The input data to the operator.
 
-    axis : None or List[int]
+    axis : None or List[int] or Expr
         The set of axes to remove.
         If axis = None, remove all axis of dimensions 1.
         If any specified axis has dimension that does not equal 1, it is an error.
@@ -153,6 +159,10 @@ def squeeze(data, axis=None):
     result : tvm.relay.Expr
         The squeezed result.
     """
+    if isinstance(axis, Constant):
+        axis = list(axis.data.numpy())
+    if isinstance(axis, Expr):
+        return _dyn_make.squeeze(data, axis)
     return _make.squeeze(data, axis)
 
 
@@ -1412,25 +1422,32 @@ def sparse_fill_empty_rows(sparse_indices, sparse_values, dense_shape, default_v
     Fill rows in a sparse matrix that do no contain any values. Values are placed in the first
     column of empty rows. The sparse array is in COO format.
     It returns a TupleWrapper with 3 outputs
+
     Parameters
     ----------
     sparse_indices : relay.Expr
         A 2-D tensor[N, ndims] of integers containing location of sparse values, where N is
         the number of sparse values and n_dim is the number of dimensions of the dense_shape.
         The first column of this relay parameter must be sorted in ascending order.
+
     sparse_values : relay.Expr
         A 1-D tensor[N] containing the sparse values for the sparse indices.
+
     dense_shape : relay.Expr
         A 1-D tensor[ndims] which contains shape of the dense output tensor.
+
     default_value : relay.Expr
         A 1-D tensor[1] containing the default value for the remaining locations.
+
     Returns
     -------
     new_sparse_indices : relay.Expr
         A 2-D tensor[?, ndims] of integers containing location of new sparse
         indices. The first column outputs must be sorted in ascending order.
+
     new_sparse_values : relay.Expr
         A 1-D tensor[?] containing the sparse values for the sparse indices.
+
     empty_row_indicator : relay.Expr
         A 1-D tensor[dense_shape[0]] filled with zeros and ones
         indicating whether the particular row is empty or full respectively
@@ -1741,21 +1758,96 @@ def unique(data, is_sorted=True, return_counts=False):
     .. code-block:: python
 
         [output, indices, num_unique] = unique([4, 5, 1, 2, 3, 3, 4, 5], False, False)
-        output         =  [4, 5, 1, 2, 3, ?, ?, ?]
+        output         =  [4, 5, 1, 2, 3, _, _, _]
         indices        =  [0, 1, 2, 3, 4, 4, 0, 1]
         num_unique     =  [5]
 
         [output, indices, num_unique, counts] = unique([4, 5, 1, 2, 3, 3, 4, 5], False, True)
-        output         =  [4, 5, 1, 2, 3, ?, ?, ?]
+        output         =  [4, 5, 1, 2, 3, _, _, _]
         indices        =  [0, 1, 2, 3, 4, 4, 0, 1]
         num_unique     =  [5]
-        counts         =  [2, 2, 1, 1, 2, ?, ?, ?]
+        counts         =  [2, 2, 1, 1, 2, _, _, _]
 
         [output, indices, num_unique] = unique([4, 5, 1, 2, 3, 3, 4, 5], True)
-        output         =  [1, 2, 3, 4, 5, ?, ?, ?]
+        output         =  [1, 2, 3, 4, 5, _, _, _]
         indices        =  [3, 4, 0, 1, 2, 2, 3, 4]
         num_unique     =  [5]
     """
     if return_counts:
         return TupleWrapper(_make.unique(data, is_sorted, return_counts), 5)
     return TupleWrapper(_make.unique(data, is_sorted, return_counts), 4)
+
+
+def invert_permutation(data):
+    """Computes the inverse permutation of data.
+    This operation computes the inverse of an index permutation.
+    It takes a 1-D integer tensor x, which represents the indices of a zero-based
+    array and swaps each value with its index position.
+
+    For an output tensor y and an input tensor x, this operation computes the following:
+    y[x[i]] = i for i in [0, 1, ..., len(x) - 1]
+
+    Parameters
+    ----------
+    data : relay.Expr
+        The source data to be invert permuated.
+
+    Returns
+    -------
+    ret : relay.Expr
+        Invert permuated data. Has the same type as data.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        data = [3, 4, 0, 2, 1]
+        relay.invert_permutation(data) = [2, 4, 3, 0, 1]
+    """
+    return _make.invert_permutation(data)
+
+
+def stft(data, n_fft, hop_length, win_length, window, normalized, onesided):
+    """
+    The STFT computes the Fourier transform of short overlapping windows of the input.
+    This giving frequency components of the signal as they change over time.
+
+    Parameters
+    ----------
+    data : relay.Expr
+        Either a 1-D tensor or a 2-D batch tensor.
+
+    n_fft : int
+        The size of Fourier transform
+
+    hop_length : int
+        The distance between neighboring sliding window frames
+
+    win_length : int
+        The size of window frame and STFT filter
+
+    window : relay.Expr
+        A 1-D tensor window frame
+
+    normalized : bool
+        Whether to return the normalized STFT results
+
+    onesided : bool
+        Whether to return onesided result or fill with conjugate symmetry
+
+    Returns
+    -------
+    output : relay.Expr
+        Tensor containing the STFT result
+
+    Examples
+    --------
+    .. code-block:: python
+
+        data = [1, 2, 3, 4, 5, 6]
+        window = [4, 3, 2]
+        [n_fft, hop_length, win_length, normalized, onesided] = [3, 3, 3, False, True]
+        relay.stft(data, n_fft, hop_length, win_length, window, normalized, onesided)
+        -> [[[15.0000,  0.0000], [34.0000,  0.0000]], [[ 4.5000,  0.8660], [ 1.0000, -1.7321]]]
+    """
+    return _make.stft(data, n_fft, hop_length, win_length, window, normalized, onesided)

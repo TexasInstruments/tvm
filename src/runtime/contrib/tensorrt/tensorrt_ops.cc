@@ -226,6 +226,55 @@ class ElementWiseBinaryOpConverter : public TensorRTOpConverter {
   }
 };
 
+class Conv1DOpConverter : public TensorRTOpConverter {
+ public:
+  Conv1DOpConverter() : TensorRTOpConverter({kTensor, kWeight}) {}
+
+  void Convert(TensorRTOpConverterParams* params) const {
+    auto input_tensor = params->inputs.at(0).tensor;
+    auto input_dims = TrtDimsToVector(input_tensor->getDimensions());
+    auto weight_shape = params->inputs.at(1).weight_shape;
+    ICHECK_EQ(params->node.GetAttr<std::vector<std::string>>("data_layout")[0], "NCW");
+    ICHECK_EQ(params->node.GetAttr<std::vector<std::string>>("kernel_layout")[0], "OIW");
+    auto str_strides = params->node.GetAttr<std::vector<std::string>>("strides");
+    auto str_dilation = params->node.GetAttr<std::vector<std::string>>("dilation");
+    auto str_padding = params->node.GetAttr<std::vector<std::string>>("padding");
+    int groups = std::stoi(params->node.GetAttr<std::vector<std::string>>("groups")[0]);
+    int channels = weight_shape[0];
+    if (params->node.HasAttr("channels") &&
+        !params->node.GetAttr<std::vector<std::string>>("channels")[0].empty()) {
+      channels = std::stoi(params->node.GetAttr<std::vector<std::string>>("channels")[0]);
+    }
+
+    auto shuffle_layer = params->network->addShuffle(*input_tensor);
+    std::vector<int> new_shape = {input_dims[0], input_dims[1], 1};
+    shuffle_layer->setReshapeDimensions(VectorToTrtDims(new_shape));
+    input_tensor = shuffle_layer->getOutput(0);
+
+    const auto kernel_size = nvinfer1::DimsHW(weight_shape[2], 1);
+    nvinfer1::Weights bias{nvinfer1::DataType::kFLOAT, nullptr, 0};
+
+    auto conv_layer = params->network->addConvolution(*input_tensor, channels, kernel_size,
+                                                      params->inputs.at(1).weight, bias);
+    ICHECK(conv_layer != nullptr);
+    conv_layer->setPadding(nvinfer1::DimsHW(std::stoi(str_padding[0]), 0));
+    ICHECK_EQ(str_strides.size(), 1);
+    const auto strides = nvinfer1::DimsHW(std::stoi(str_strides[0]), 1);
+    conv_layer->setStride(strides);
+    ICHECK_EQ(str_dilation.size(), 1);
+    const auto dilation = nvinfer1::DimsHW(std::stoi(str_dilation[0]), 1);
+    conv_layer->setDilation(dilation);
+    conv_layer->setNbGroups(groups);
+    input_tensor = conv_layer->getOutput(0);
+
+    auto conv_output_dims = TrtDimsToVector(input_tensor->getDimensions());
+    std::vector<int> back_shape = {0, 0};
+    auto shuffle_back_layer = params->network->addShuffle(*input_tensor);
+    shuffle_back_layer->setReshapeDimensions(VectorToTrtDims(back_shape));
+    params->outputs.push_back(shuffle_back_layer->getOutput(0));
+  }
+};
+
 class Conv2DOpConverter : public TensorRTOpConverter {
  public:
   Conv2DOpConverter() : TensorRTOpConverter({kTensor, kWeight}) {}
@@ -798,6 +847,7 @@ class ConcatOpConverter : public TensorRTOpConverter {
   }
 };
 
+#if TRT_VERSION_GE(5, 1, 5)
 class SplitOpConverter : public TensorRTOpConverter {
  public:
   SplitOpConverter() : TensorRTOpConverter({kTensor}) {}
@@ -835,7 +885,7 @@ class SplitOpConverter : public TensorRTOpConverter {
     std::vector<int> start(input_dims.size(), 0);
     std::vector<int> size(input_dims.begin(), input_dims.end());
     std::vector<int> strides(input_dims.size(), 1);
-    for (int i = 0; i < split_sizes.size(); ++i) {
+    for (size_t i = 0; i < split_sizes.size(); ++i) {
       start[axis] = split_starts[i];
       size[axis] = split_sizes[i];
       auto slice_layer = params->network->addSlice(*input, VectorToTrtDims(start),
@@ -844,6 +894,7 @@ class SplitOpConverter : public TensorRTOpConverter {
     }
   }
 };
+#endif
 
 class BiasAddOpConverter : public TensorRTOpConverter {
  public:
@@ -1174,9 +1225,14 @@ class BatchMatmulOpConverter : public TensorRTOpConverter {
   BatchMatmulOpConverter() : TensorRTOpConverter({kTensor, kTensor}) {}
 
   void Convert(TensorRTOpConverterParams* params) const {
+    auto transa = std::stoi(params->node.GetAttr<std::vector<std::string>>("transpose_a")[0]);
+    auto transb = std::stoi(params->node.GetAttr<std::vector<std::string>>("transpose_b")[0]);
+    nvinfer1::MatrixOperation trt_transa =
+        transa ? nvinfer1::MatrixOperation::kTRANSPOSE : nvinfer1::MatrixOperation::kNONE;
+    nvinfer1::MatrixOperation trt_transb =
+        transb ? nvinfer1::MatrixOperation::kTRANSPOSE : nvinfer1::MatrixOperation::kNONE;
     nvinfer1::IMatrixMultiplyLayer* matmul_layer = params->network->addMatrixMultiply(
-        *params->inputs.at(0).tensor, nvinfer1::MatrixOperation::kNONE,
-        *params->inputs.at(1).tensor, nvinfer1::MatrixOperation::kTRANSPOSE);
+        *params->inputs.at(0).tensor, trt_transa, *params->inputs.at(1).tensor, trt_transb);
     ICHECK(matmul_layer != nullptr);
     params->outputs.push_back(matmul_layer->getOutput(0));
   }
@@ -1193,6 +1249,7 @@ GetOpConverters() {
   map->emplace("nn.batch_norm", std::make_shared<BatchNormOpConverter>());
   map->emplace("nn.layer_norm", std::make_shared<LayerNormOpConverter>());
   map->emplace("nn.softmax", std::make_shared<SoftmaxOpConverter>());
+  map->emplace("nn.conv1d", std::make_shared<Conv1DOpConverter>());
   map->emplace("nn.conv2d", std::make_shared<Conv2DOpConverter>());
   map->emplace("nn.dense", std::make_shared<DenseOpConverter>());
   map->emplace("nn.bias_add", std::make_shared<BiasAddOpConverter>());
@@ -1216,7 +1273,6 @@ GetOpConverters() {
   map->emplace("expand_dims", std::make_shared<ExpandDimsOpConverter>());
   map->emplace("squeeze", std::make_shared<SqueezeOpConverter>());
   map->emplace("concatenate", std::make_shared<ConcatOpConverter>());
-  map->emplace("split", std::make_shared<SplitOpConverter>());
   map->emplace("nn.conv2d_transpose", std::make_shared<Conv2DTransposeOpConverter>());
   map->emplace("transpose", std::make_shared<TransposeOpConverter>());
   map->emplace("layout_transform", std::make_shared<LayoutTransformOpConverter>());
@@ -1238,6 +1294,7 @@ GetOpConverters() {
   map->emplace("atan", std::make_shared<UnaryOpConverter>());
   map->emplace("ceil", std::make_shared<UnaryOpConverter>());
   map->emplace("floor", std::make_shared<UnaryOpConverter>());
+  map->emplace("split", std::make_shared<SplitOpConverter>());
   map->emplace("strided_slice", std::make_shared<StridedSliceOpConverter>());
 #endif  // TRT_VERSION_GE(5, 1, 5)
 #if TRT_VERSION_GE(6, 0, 1)

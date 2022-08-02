@@ -289,6 +289,11 @@ bool StackRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
         << "cast: expect input type to be TupleType but get " << types[0];
     return false;
   }
+  for (auto field : tensor_tuple->fields) {
+    if (field.as<IncompleteTypeNode>()) {
+      return false;
+    }
+  }
   const auto* param = attrs.as<StackAttrs>();
   const auto& first = Downcast<TensorType>(tensor_tuple->fields[0]);
   const int ndim = static_cast<int>(first->shape.size());
@@ -1705,6 +1710,63 @@ RELAY_REGISTER_OP("sparse_reshape")
     .set_attr<TOpPattern>("TOpPattern", kInjective)
     .set_support_level(3);
 
+TVM_REGISTER_NODE_TYPE(StftAttrs);
+
+bool STFTRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
+             const TypeReporter& reporter) {
+  // types: [data, window, result]
+  ICHECK_EQ(types.size(), 3) << "STFTRel expects 3 types but " << types.size() << "provided";
+  ICHECK_EQ(num_inputs, 2) << "Unique: expect 2 inputs but " << num_inputs << " provided";
+  auto data = types[0].as<TensorTypeNode>();
+  if (data == nullptr) {
+    ICHECK(types[0].as<IncompleteTypeNode>())
+        << "Unique: expect input type to be TensorType but get " << types[0];
+    return false;
+  }
+  const auto* param = attrs.as<StftAttrs>();
+  const int ndim = static_cast<int>(data->shape.size());
+  std::vector<IndexExpr> oshape;
+  int dim = 0;
+  if (ndim == 2) {
+    oshape.push_back(data->shape[0]);  // batch dimension
+    dim += 1;
+  }
+  oshape.push_back(param->onesided ? param->n_fft / 2 + 1 : param->n_fft);
+  if (data->shape[dim].as<AnyNode>())
+    oshape.push_back(Any());
+  else
+    oshape.push_back(indexdiv((data->shape[dim] - param->n_fft), param->hop_length) +
+                     1);  // n_frames
+  oshape.push_back(2);
+  reporter->Assign(types[2], TensorType(oshape, data->dtype));
+  return true;
+}
+
+Expr MakeSTFT(Expr data, int n_fft, int hop_length, int win_length, Expr window, bool normalized,
+              bool onesided) {
+  auto attrs = make_object<StftAttrs>();
+  attrs->n_fft = n_fft;
+  attrs->hop_length = hop_length;
+  attrs->win_length = win_length;
+  attrs->normalized = normalized;
+  attrs->onesided = onesided;
+  static const Op& op = Op::Get("stft");
+  return Call(op, {data, window}, Attrs(attrs), {});
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.stft").set_body_typed(MakeSTFT);
+
+RELAY_REGISTER_OP("stft")
+    .describe(
+        R"code(The STFT computes the Fourier transform of short overlapping windows of the input.
+)code" TVM_ADD_FILELINE)
+    .set_num_inputs(2)
+    .add_argument("data", "Tensor", "the input tensor")
+    .add_argument("window", "Tensor", "the optional window function")
+    .add_type_rel("stft", STFTRel)
+    .set_support_level(3)
+    .set_attr<TOpPattern>("TOpPattern", kOpaque);
+
 // meshgrid operator
 TVM_REGISTER_NODE_TYPE(MeshgridAttrs);
 
@@ -2405,7 +2467,15 @@ bool BroadCastToRel(const Array<Type>& types, int num_inputs, const Attrs& attrs
   const InitOpAttrs* param = attrs.as<InitOpAttrs>();
   ICHECK(param);
 
-  DataType out_dtype = types[0].as<TensorTypeNode>()->dtype;
+  DataType out_dtype;
+  if (auto ttype = types[0].as<TensorTypeNode>()) {
+    out_dtype = ttype->dtype;
+  } else {
+    ICHECK(types[0].as<IncompleteTypeNode>())
+        << "Broadcast: expect to be TensorType but get " << types[0];
+    return false;
+  }
+
   std::vector<IndexExpr> oshape;
 
   const Array<Integer>& cshape_array = param->shape.value();
@@ -2643,24 +2713,19 @@ InferCorrectLayoutOutput StridedSliceInferCorrectLayout(
         params->strides = new_strides;
         layout = new_layout;
       }
-    } else {
+    } else if (old_layout_name.size() <
+               new_layout_name.size()) {  // prohibit transforms such as NCHW4c -> NCHW
       if (params->axes) {
         auto axes = params->axes.value();
         Array<Integer> new_axes;
-
         for (size_t i = 0; i < axes.size(); ++i) {
           auto old_idx = axes[i];
           auto new_idx = new_layout.IndexOf(layout[old_idx]);
           new_axes.push_back(new_idx);
 
           const LayoutAxis& axis = layout[old_idx];
-          if (!axis.IsPrimal()) {
-            // original layout that contains splitted axes is not supported
-            return out_default;
-          }
-
+          ICHECK(axis.IsPrimal());
           auto factor = new_layout.FactorOf(axis);
-
           if (factor == -1) {
             new_begin.push_back(begin[i]);
             new_end.push_back(end[i]);
@@ -2680,10 +2745,7 @@ InferCorrectLayoutOutput StridedSliceInferCorrectLayout(
       } else {
         for (size_t i = 0; i < begin.size(); i++) {
           const LayoutAxis& axis = layout[i];
-          if (!axis.IsPrimal()) {
-            // original layout that contains splitted axes is not supported
-            return out_default;
-          }
+          ICHECK(axis.IsPrimal());
           auto factor = new_layout.FactorOf(axis);
           if (factor == -1) {
             new_begin.push_back(IntImm(begin[i]->dtype, begin[i]));
@@ -2873,15 +2935,18 @@ bool SplitRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
     }
     reporter->Assign(types[1], TupleType(Array<Type>(fields)));
   } else {
-    auto indices = Downcast<Array<ObjectRef>>(param->indices_or_sections);
+    Array<IndexExpr> indices;
+    for (auto i : Downcast<Array<Integer>>(param->indices_or_sections)) {
+      indices.push_back(IntImm(DataType::Int(32), i.as<IntImmNode>()->value));
+    }
     auto begin = IndexExpr(tir::make_zero(DataType::Int(32)));
     std::vector<Type> fields;
     for (unsigned int i = 0; i < indices.size(); ++i) {
-      ICHECK(reporter->Assert(Downcast<IndexExpr>(indices[i]) > begin))
+      ICHECK(reporter->Assert(indices[i] > begin))
           << "indices_or_sections need to be a sorted ascending list";
       std::vector<IndexExpr> oshape(data->shape.begin(), data->shape.end());
-      oshape[axis] = Downcast<IndexExpr>(indices[i]) - begin;
-      begin = Downcast<IndexExpr>(indices[i]);
+      oshape[axis] = indices[i] - begin;
+      begin = indices[i];
       auto vec_type = TensorType(oshape, data->dtype);
       fields.push_back(vec_type);
     }
@@ -3301,8 +3366,10 @@ bool GatherRel(const Array<Type>& types, int num_inputs, const Attrs& attrs,
   oshape.reserve(ndim_data);
   for (size_t i = 0; i < ndim_data; ++i) {
     if (i == static_cast<size_t>(axis)) {
-      const int64_t* indice_shape_i = tir::as_const_int(indices->shape[i]);
-      ICHECK_GE(*indice_shape_i, 1);
+      if (indices->shape[i].as<IntImmNode>()) {
+        const int64_t* indice_shape_i = tir::as_const_int(indices->shape[i]);
+        ICHECK_GE(*indice_shape_i, 1);
+      }
     } else {
       ICHECK(reporter->AssertEQ(indices->shape[i], data->shape[i]));
     }
@@ -4034,5 +4101,23 @@ RELAY_REGISTER_OP("unique")
     .add_type_rel("unique", UniqueRel)
     .set_support_level(3)
     .set_attr<TOpPattern>("TOpPattern", kOpaque);
+
+// invert_permutation
+Expr MakeInvertPermutation(Expr data) {
+  static const Op& op = Op::Get("invert_permutation");
+  return Call(op, {data}, Attrs(), {});
+}
+
+TVM_REGISTER_GLOBAL("relay.op._make.invert_permutation").set_body_typed(MakeInvertPermutation);
+
+RELAY_REGISTER_OP("invert_permutation")
+    .describe(R"doc(Computes the inverse permutation of a tensor.)doc" TVM_ADD_FILELINE)
+    .set_num_inputs(1)
+    .add_argument("data", "Tensor", "The input tensor.")
+    .add_type_rel("Identity", IdentityRel)
+    .set_support_level(1)
+    .set_attr<TOpPattern>("TOpPattern", kInjective)
+    .set_attr<TOpIsStateful>("TOpIsStateful", false);
+
 }  // namespace relay
 }  // namespace tvm

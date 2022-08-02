@@ -131,6 +131,50 @@ def compute_reshape(attrs, inputs, output_type):
 
 _reg.register_strategy("sparse_reshape", strategy.sparse_reshape_strategy)
 
+# stft
+@_reg.register_compute("stft")
+def compute_stft(attrs, inputs, output_type):
+    """Compute definition of stft"""
+    return topi.stft(
+        inputs[0],
+        attrs.n_fft,
+        attrs.hop_length,
+        attrs.win_length,
+        attrs.window,
+        attrs.normalized,
+        attrs.onesided,
+        output_type.shape,
+    )
+
+
+_reg.register_strategy("stft", strategy.stft_strategy)
+
+
+@script
+def _stft_shape_func(data, n_fft, hop_length, onesided):
+    output_shape = output_tensor((4,), "int64")
+    output_shape[0] = int64(data.shape[0])
+    if onesided:
+        output_shape[1] = int64(int64(n_fft) // int64(2)) + int64(1)
+    else:
+        output_shape[1] = int64(n_fft)
+    output_shape[2] = int64(int64(data.shape[1] - n_fft) // int64(hop_length)) + int64(1)
+    output_shape[3] = int64(2)
+    return output_shape
+
+
+@_reg.register_shape_func("stft", True)
+def stft_shape_func(attrs, inputs, _):
+    """
+    Shape func for stft.
+    """
+    return [
+        _stft_shape_func(
+            inputs[0], convert(attrs.n_fft), convert(attrs.hop_length), convert(attrs.onesided)
+        )
+    ]
+
+
 # scatter_add
 @_reg.register_compute("scatter_add")
 def compute_scatter_add(attrs, inputs, output_type):
@@ -186,6 +230,11 @@ def compute_unique(attrs, inputs, output_type):
 
 
 _reg.register_strategy("unique", strategy.unique_strategy)
+
+# invert_permutation
+_reg.register_strategy("invert_permutation", strategy.invert_permutation_strategy)
+_reg.register_shape_func("invert_permutation", False, elemwise_shape_func)
+
 
 #####################
 #  Shape functions  #
@@ -906,9 +955,9 @@ def tile_shape_func(attrs, inputs, _):
 
 
 @script
-def _split_shape_func(data_shape, index, indices_or_sections, axis):
+def _split_shape_func(data_shape, index, indices_or_sections, param_is_indices, axis):
     out = output_tensor((data_shape.shape[0],), "int64")
-    if len(indices_or_sections) == 1:
+    if param_is_indices:
         for i in const_range(data_shape.shape[0]):
             if i == axis:
                 assert (
@@ -956,10 +1005,18 @@ def split_shape_func(attrs, inputs, _):
         if isinstance(indices_or_sections, int)
         else len(indices_or_sections) + 1
     )
-    if isinstance(indices_or_sections, int):
+
+    param_is_indices = isinstance(indices_or_sections, int)
+    if param_is_indices:
         indices_or_sections = [indices_or_sections]
     return [
-        _split_shape_func(inputs[0], convert(i), convert(indices_or_sections), convert(axis))
+        _split_shape_func(
+            inputs[0],
+            convert(i),
+            convert(indices_or_sections),
+            convert(param_is_indices),
+            convert(axis),
+        )
         for i in range(num_out)
     ]
 
@@ -1172,3 +1229,23 @@ def gather_nd_shape_func(attrs, inputs, _):
     assert index_rank > 0, "index_rank needs to be specified for dynamic gather_nd"
 
     return [_gather_nd_shape(inputs[0], inputs[1], convert(batch_dims), convert(index_rank))]
+
+
+@script
+def _gather_shape(data_shape, indices_shape, axis):
+    out_shape = output_tensor((data_shape.shape[0],), "int64")
+    for i in range(data_shape.shape[0]):
+        if i != axis:
+            assert (
+                data_shape[i] == indices_shape[i]
+            ), "data and indices size at non-gather axes must be the same"
+        out_shape[i] = indices_shape[i]
+    return out_shape
+
+
+@_reg.register_shape_func("gather", False)
+def gather_shape_func(attrs, inputs, _):
+    """
+    Shape func for gather operator.
+    """
+    return [_gather_shape(inputs[0], inputs[1], attrs.axis)]

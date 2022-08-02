@@ -461,8 +461,11 @@ def _conv(opname):
             raise tvm.error.OpAttributeInvalid(msg.format(attr["padding"]))
 
         if "kernel_layout" not in attr:
-            if opname in ["conv", "conv_transpose"]:
+            if opname == "conv":
                 attr["kernel_layout"] = "HWIO" if attr["data_format"] == "NHWC" else "OIHW"
+            elif opname == "conv_transpose":
+                # conv_transpose in TVM has weights be IOHW for NCHW
+                attr["kernel_layout"] = "HWIO" if attr["data_format"] == "NHWC" else "IOHW"
             else:
                 attr["kernel_layout"] = "HWOI" if attr["data_format"] == "NHWC" else "OIHW"
 
@@ -1087,7 +1090,9 @@ def _resize(method):
 
         # Ignore the new attributes from TF2.0, for now.
         return AttrCvt(
-            op_name="resize", ignores=["Tdim", "half_pixel_centers"], extras={"method": method}
+            op_name="resize2d",
+            ignores=["Tdim", "half_pixel_centers"],
+            extras={"method": method, "roi": None},
         )(inputs, attr)
 
     return _impl
@@ -1125,13 +1130,23 @@ def _no_op():
 
 def _matmul():
     def _impl(inputs, attr, params, mod):
+        from .tensorflow import TF_DEFAULT_CONFIGS
+
         channels = _infer_channels(inputs[1], not attr["transpose_b"])
-        if attr["transpose_a"]:
-            inputs[0] = _op.transpose(inputs[0], axes=(1, 0))
-        if not attr["transpose_b"]:
-            inputs[1] = _op.transpose(inputs[1], axes=(1, 0))
+        if TF_DEFAULT_CONFIGS["use_dense"]:
+            if attr["transpose_a"]:
+                inputs[0] = _op.transpose(inputs[0], axes=(1, 0))
+            if not attr["transpose_b"]:
+                inputs[1] = _op.transpose(inputs[1], axes=(1, 0))
+            return AttrCvt(
+                op_name="dense",
+                extras={"units": channels},
+                ignores=["transpose_a", "transpose_b", "T"],
+            )(inputs, attr)
         return AttrCvt(
-            op_name="dense", extras={"units": channels}, ignores=["transpose_a", "transpose_b", "T"]
+            op_name="matmul",
+            extras={"units": channels},
+            ignores=["T"],
         )(inputs, attr)
 
     return _impl
@@ -1139,6 +1154,8 @@ def _matmul():
 
 def _batch_matmul():
     def _impl(inputs, attr, params, mod):
+        from .tensorflow import TF_DEFAULT_CONFIGS
+
         input_x = inputs[0]
         input_y = inputs[1]
         orig_shape_x = _infer_shape(input_x, mod)
@@ -1175,9 +1192,16 @@ def _batch_matmul():
             input_y = _op.reshape(input_y, (1, orig_shape_y[-2], orig_shape_y[-1]))
         adj_x = attr["adj_x"]
         adj_y = attr["adj_y"]
-        input_x = _op.transpose(input_x, axes=[0, 2, 1]) if adj_x else input_x
-        input_y = _op.transpose(input_y, axes=[0, 2, 1]) if not adj_y else input_y
-        ret = get_relay_op("batch_matmul")(input_x, input_y)
+
+        if TF_DEFAULT_CONFIGS["use_nt_batch_matmul"]:
+            # Strictly convert all batch_matmul to NT format
+            input_x = _op.transpose(input_x, axes=[0, 2, 1]) if adj_x else input_x
+            input_y = _op.transpose(input_y, axes=[0, 2, 1]) if not adj_y else input_y
+            ret = get_relay_op("batch_matmul")(input_x, input_y)
+        else:
+            ret = get_relay_op("batch_matmul")(
+                input_x, input_y, transpose_a=adj_x, transpose_b=adj_y
+            )
 
         # reshape result back to n-dimensional
         if ndim > 3:
@@ -2904,6 +2928,7 @@ _convert_map = {
     "GreaterEqual": _broadcast("greater_equal"),
     "Identity": _identity(),
     "IdentityN": _identityn(),
+    "InvertPermutation": AttrCvt("invert_permutation"),
     "IsFinite": AttrCvt("isfinite"),
     "IsInf": AttrCvt("isinf"),
     "IsNan": AttrCvt("isnan"),
@@ -2950,8 +2975,8 @@ _convert_map = {
     "Relu": AttrCvt("relu"),
     "Relu6": _relu6(),
     "Reshape": _reshape(),
-    "ResizeBicubic": _resize("bilinear"),
-    "ResizeBilinear": _resize("bilinear"),
+    "ResizeBicubic": _resize("cubic"),
+    "ResizeBilinear": _resize("linear"),
     "ResizeNearestNeighbor": _resize("nearest_neighbor"),
     "ReverseV2": _reverse_v2(),
     "RightShift": AttrCvt("right_shift"),

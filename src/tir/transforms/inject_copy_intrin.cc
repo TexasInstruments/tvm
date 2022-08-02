@@ -29,6 +29,7 @@
 #include <tvm/tir/transform.h>
 
 #include "../../arith/pattern_match.h"
+#include "ir_utils.h"
 
 namespace tvm {
 namespace tir {
@@ -42,10 +43,7 @@ class CopyIntrinInjector : public StmtMutator {
         flower_copy_fromto_(flower_copy_fromto) {}
 
   Stmt VisitStmt_(const AttrStmtNode* op) final {
-    if (op->attr_key == attr::storage_scope) {
-      const VarNode* buf = op->node.as<VarNode>();
-      storage_scope_[buf] = op->value.as<StringImmNode>()->value;
-    } else if (op->attr_key == pragma_key_) {
+    if (op->attr_key == pragma_key_) {
       // TI Begin
       // If the copy loop pattern does not conform to the pattern required for copy intrinsics,
       // return the original copy loop body.
@@ -155,11 +153,9 @@ class CopyIntrinInjector : public StmtMutator {
       dst_strides.push_back(make_const(DataType::Int(32), 1));
     }
     Buffer dst = Buffer(store->buffer_var, store->value.dtype(), dst_shape, dst_strides,
-                        store_strides[loop_var_size], store->buffer_var->name_hint,
-                        GetStorageScope(store->buffer_var.get()), 0, 0, kDefault);
+                        store_strides[loop_var_size], store->buffer_var->name_hint, 0, 0, kDefault);
     Buffer src = Buffer(load->buffer_var, load->dtype, src_shape, src_strides, src_elem_offset,
-                        load->buffer_var->name_hint, GetStorageScope(load->buffer_var.get()), 0, 0,
-                        kDefault);
+                        load->buffer_var->name_hint, 0, 0, kDefault);
     *out = flower_copy_fromto_(src, dst, pad_before, pad_after, pad_value);
     // TI Begin
     // If the flower function does not create the correct statement, return false
@@ -180,21 +176,11 @@ class CopyIntrinInjector : public StmtMutator {
 
     return true;
   }
-  // Get storage scope
-  std::string GetStorageScope(const VarNode* var) const {
-    auto it = storage_scope_.find(var);
-    if (it != storage_scope_.end()) {
-      return it->second;
-    } else {
-      return "";
-    }
-  }
+
   // pragma key
   std::string pragma_key_;
   // function to lower copy intrinsics.
   const PackedFunc& flower_copy_fromto_;
-  // Storage scope
-  std::unordered_map<const VarNode*, std::string> storage_scope_;
   // arith analyzer
   arith::Analyzer analyzer_;
   // TI Begin

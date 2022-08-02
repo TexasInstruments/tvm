@@ -46,11 +46,13 @@ from .interpolate import *
 from .scan import *
 from .einsum import *
 from .unique import *
-from .mlas_op import *
+from .searchsorted import *
+from .stft import *
 from . import generic
 from . import nn
 from . import x86
 from . import cuda
+from . import gpu
 from . import arm_cpu
 from . import mali
 from . import bifrost
@@ -62,6 +64,7 @@ from . import image
 from . import sparse
 from . import hls
 from . import random
+from . import hexagon
 from . import c7x
 
 # error reporting
