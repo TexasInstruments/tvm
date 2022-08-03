@@ -253,13 +253,13 @@ def gen_c7x_source(tidl_compiler, mod, params, num_tidl_subgraphs):
 
     if (tidl_compiler.c7x_codegen == 9):  # debug mode: generating generic c code
         with tidl.build_config(tidl_compiler=tidl_compiler, gen_c7x_mod_enabled=1):
-            graph, lib, params_c7x = relay.build_module.build(mod, target="c",
-                                                              target_host="c", params=params)
+            graph, lib, params_c7x = relay.build(mod, tvm.target.Target("c", host="c"),
+                                                 params=params)
     else:
         with tidl.build_config(tidl_compiler=tidl_compiler, gen_c7x_mod_enabled=1):
             with c7x.c7x_target_config():
-                graph, lib, params_c7x = relay.build_module.build(mod, target="c7x",
-                                                                  target_host="c7x", params=params)
+                graph, lib, params_c7x = relay.build(mod, tvm.target.Target("c7x", host="c7x"),
+                                                     params=params)
     tidl.remove_tidl_params(params_c7x)
     modules = lib._collect_dso_modules()
     for i in range(len(modules)):

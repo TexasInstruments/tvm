@@ -783,7 +783,7 @@ def C7xDMATransform(f, mod, ctx):
     """
     Implementation of C7xDMAPass
     """
-    # map from vars to storage scope attrs, and allocation statements
+    # map from vars to allocation statements
     local_var_info = {}
     # list of vars involved in c7x_dma_calls
     dma_buffers = []
@@ -794,25 +794,17 @@ def C7xDMATransform(f, mod, ctx):
     # in dma copies
     def _dma_pre(op):
         builtin_call_extern = tvm.ir.Op.get("tir.call_extern")
-        if isinstance(op, tvm.tir.AttrStmt):
-            if op.attr_key == "storage_scope" and \
-               isinstance(op.node, tvm.tir.Var):
-                local_var_info[op.node] = { 'attr' : op }
-        elif isinstance(op, tvm.tir.Allocate) and \
-             op.buffer_var in local_var_info:
-                local_var_info[op.buffer_var]['alloc'] = op
+        if isinstance(op, tvm.tir.Allocate):
+            local_var_info[op.buffer_var] = { 'alloc' : op }
         elif op.op.same_as(builtin_call_extern) and \
              op.args[0].value == "c7x_dma_copy":
             dma_copy_calls.append(op)
             dma_buffers.extend([op.args[1], op.args[2]])
 
-    # post-order walk: remove attr and allocation statements from inner loop; 
-    # they will re-generated at outer loop level
+    # post-order walk: remove allocation statements from inner loop;
+    # they will be re-generated at outer loop level
     def _dma_post(op):
-        if isinstance(op, tvm.tir.AttrStmt):
-            if op.node in dma_buffers:
-                return op.body
-        elif isinstance(op, tvm.tir.Allocate):
+        if isinstance(op, tvm.tir.Allocate):
             if op.buffer_var in dma_buffers:
                 return op.body
 
@@ -838,7 +830,7 @@ def C7xDMATransform(f, mod, ctx):
     # Run the pre/post passes above
     stmt = tvm.tir.stmt_functor.ir_transform(
         f.body, _dma_pre, _dma_post,
-        ["tir.Allocate", "tir.AttrStmt", "tir.Call"])
+        ["tir.Allocate", "tir.Call"])
 
     stmts = []   # hoisted statements
     for dma_call in dma_copy_calls:
@@ -852,11 +844,9 @@ def C7xDMATransform(f, mod, ctx):
             if var in local_var_info:
                 dma_name = var.name.split('.')[0] + ".dma"
         dma = tvm.tir.Var(dma_name, "handle")
-        # hoist the attr and alloc statements for local buffers
+        # hoist the alloc statements for local buffers
         for var in (src,dst):
             if var in local_var_info:
-                attr = local_var_info[var]['attr']
-                stmts.append(attr)
                 alloc = local_var_info[var]['alloc']
                 stmts.append(alloc)
         # let dma_object = c7x_dma_setup(src, dim3, dim2, dim1, dim0,
@@ -866,7 +856,7 @@ def C7xDMATransform(f, mod, ctx):
         setup = tvm.tir.LetStmt(dma, setup, tvm.tir.Evaluate(1))   # dummy body
         stmts.append(setup)
 
-    # hoist attr, alloc, and dma setup to top of function body
+    # hoist alloc, and dma setup to top of function body
     stmt = merge_block(stmts, stmt)
     return f.with_body(stmt)
 

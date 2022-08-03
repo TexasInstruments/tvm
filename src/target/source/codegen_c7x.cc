@@ -190,16 +190,6 @@ class ScanMemory : public StmtExprVisitor {
       global_allocations_present_ = true;
   }
 
-  // Save off storage scope attribute. Needed for IsLocal()
-  void VisitStmt_(const AttrStmtNode* op) override {
-    if (op->attr_key == tir::attr::storage_scope) {
-      const VarNode* v = op->node.as<VarNode>();
-      ICHECK(v);
-      alloc_storage_scope_[v] = op->value.as<StringImmNode>()->value;
-    }
-    VisitStmt(op->body);
-  }
-
   void VisitExpr_(const CallNode* op) override {
     if (!is_call_extern(op, "c7x_dma_setup"))
     {
@@ -251,6 +241,9 @@ class ScanMemory : public StmtExprVisitor {
 
   void VisitStmt_(const AllocateNode* op) override {
     ICHECK(!is_zero(op->condition));
+
+    auto scope = GetPtrStorageScope(op->buffer_var);
+    alloc_storage_scope_[op->buffer_var.get()] = scope;
 
     // Skip allocation calls for DMA buffers; they are allocated as part of DMA setup
     // Note: All DMA allocations via c7x_dma_setup have been hoisted to the top of the function.
@@ -1490,6 +1483,9 @@ void CodeGenC7x::VisitStmt_(const LetStmtNode* op) {
 void CodeGenC7x::VisitStmt_(const AllocateNode* op) {
   //stream << "// VisitStmt<AllocateNode>\n";
   ICHECK(!is_zero(op->condition));
+  auto scope = GetPtrStorageScope(op->buffer_var);
+  alloc_storage_scope_[op->buffer_var.get()] = scope;
+
   // Skip allocation calls for DMA buffers; they are allocated as part
   // of DMA setup
   if (IsLocal(op->buffer_var.get()) && IsDMA(op->buffer_var.get())) {
@@ -1502,8 +1498,6 @@ void CodeGenC7x::VisitStmt_(const AllocateNode* op) {
   this->PrintIndent();
   int32_t constant_size = op->constant_allocation_size();
   ICHECK_GT(constant_size, 0) << "Can only handle constant size stack allocation for now";
-  const VarNode* buffer = op->buffer_var.as<VarNode>();
-  std::string scope = alloc_storage_scope_.at(buffer);
   PrintStorageScope(scope, stream);
   //PrintType(op->dtype, stream);
   // stream << ' ' << vid << '[' << constant_size << "];\n";
@@ -1532,10 +1526,6 @@ void CodeGenC7x::VisitStmt_(const AttrStmtNode* op) {
         BindThreadIndex(iv);
       }
     }
-  } else if (op->attr_key == tir::attr::storage_scope) {
-    const VarNode* v = op->node.as<VarNode>();
-    ICHECK(v);
-    alloc_storage_scope_[v] = op->value.as<StringImmNode>()->value;
   /*
   } else if (op->attr_key == tir::attr::volatile_scope) {
     const VarNode* v = op->node.as<VarNode>();

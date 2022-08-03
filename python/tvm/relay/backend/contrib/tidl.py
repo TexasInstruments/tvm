@@ -844,7 +844,7 @@ def get_quantization(expr, mod, all_nodes=None, inout_quant_dict={}):
             return known_quantization
         if isinstance(expr, relay.expr.Call):
             op_name = expr.op.name
-            if op_name in ['nn.bias_add', 'image.resize', 'clip']:
+            if op_name in ['nn.bias_add', 'image.resize2d', 'clip']:
                 return get_quantization(expr.args[0], mod, all_nodes, inout_quant_dict)
             elif op_name == 'cast':
                 if expr.checked_type.dtype == 'int32':
@@ -1108,11 +1108,13 @@ class SubgraphRemover(ExprMutator):
     Removes subgraphs which are in the list subgraphs_to_remove and returns them back to regular
     TVM compilation in main function.
     """
-    def __init__(self, subgraphs_to_remove, mod, new_mod, rename_starting_from_0=True):
+    def __init__(self, subgraphs_to_remove, mod, new_mod, compiler="tidl",
+                 rename_starting_from_0=True):
         ExprMutator.__init__(self)
         self.subgraphs_to_remove = subgraphs_to_remove
         self.mod = mod
         self.new_mod = new_mod
+        self.compiler = compiler
         self.rename_starting_from_0 = rename_starting_from_0
         self.count = 0
 
@@ -1130,7 +1132,7 @@ class SubgraphRemover(ExprMutator):
             if name != "main":
                 # Copy the GlobalVar (subgraph function) to the new module and call.
                 if self.rename_starting_from_0:
-                    new_name = name.split('_')[0] + "_" + str(self.count)
+                    new_name = self.compiler + "_" + str(self.count)
                     self.count += 1
                 else:
                     new_name = name
@@ -1173,7 +1175,8 @@ def prune_subgraphs_with_multiple_inputs(mod, compiler="tidl"):
            or isinstance(mod[name].params[0].checked_type, relay.TupleType):
             subgraph_names_to_remove.append(name)
     new_mod = tvm.IRModule()
-    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
+    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod,
+                                      compiler=compiler).visit(mod["main"])
     return new_mod
 
 def prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=16, compiler="tidl"):
@@ -1208,7 +1211,8 @@ def prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=16, compiler
               and len(mod[name].body.checked_type.fields) > in_out_limit):
             subgraph_names_to_remove.append(name)
     new_mod = tvm.IRModule()
-    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
+    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod,
+                                      compiler=compiler).visit(mod["main"])
     return new_mod
 
 def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_threshold=None):
@@ -1248,7 +1252,8 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_thres
     subgraph_names_to_remove = {x[0] for x in subgraphs_to_prune}
     # Create new pruned module
     new_mod = tvm.IRModule()
-    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod).visit(mod["main"])
+    new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod,
+                                      compiler=compiler).visit(mod["main"])
     return new_mod
 
 def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_etypes,
@@ -1818,7 +1823,7 @@ class TIDLAnnotation:
         self._register_constrained_op("divide")
         self._register_constrained_op("split")
         self._register_constrained_op("strided_slice")
-        self._register_constrained_op("image.resize")
+        self._register_constrained_op("image.resize2d")
         # "clip" is supported with constraints in J7
         self._register_constrained_op("clip")
         self._register_supported_op("nn.leaky_relu")
