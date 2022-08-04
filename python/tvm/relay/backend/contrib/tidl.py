@@ -1260,7 +1260,8 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_et
                          temp_folder,
                          net_file, params_file, platform, tensor_bits=8,
                          tidl_calib_flags=0, tidl_bias_calib_iters=50,
-                         output_feature_16bit_names_list='', params_16bit_names_list=''):
+                         output_feature_16bit_names_list='', params_16bit_names_list='',
+                         mixed_precision_factor=-1.0):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Save quantized input vector to a file for calib tool to read
@@ -1287,7 +1288,8 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_et
         import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_flags,
                                             tidl_bias_calib_iters,
                                             output_feature_16bit_names_list,
-                                            params_16bit_names_list)
+                                            params_16bit_names_list,
+                                            mixed_precision_factor)
         return (import_ret == 0), 123  ## TODO: do we need dataQ for J7?
 
 class InOutNodes(ctypes.Structure):
@@ -1326,7 +1328,8 @@ class TIDLImport:
     def __init__(self, import_lib, calib_tool, tidl_tools_path, artifacts_folder,
                  tidl_target="tidl", tidl_platform="J7", data_layout="NCHW",
                  tensor_bits=8, tidl_calib_flags=0, tidl_bias_calib_iters=50,
-                 output_feature_16bit_names_list='', params_16bit_names_list=''):
+                 output_feature_16bit_names_list='', params_16bit_names_list='',
+                 mixed_precision_factor=-1.0):
         self.import_lib = import_lib
         self.calib_tool = calib_tool
         self.tidl_tools_path = tidl_tools_path
@@ -1339,6 +1342,7 @@ class TIDLImport:
         self.tidl_bias_calib_iters = tidl_bias_calib_iters
         self.output_feature_16bit_names_list = output_feature_16bit_names_list
         self.params_16bit_names_list = params_16bit_names_list
+        self.mixed_precision_factor = mixed_precision_factor;
         self.info_dict = {}
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
         self.temp_folder = os.path.join(artifacts_folder, 'tempDir/')
@@ -1669,7 +1673,8 @@ class TIDLImport:
                                      self.tensor_bits, self.tidl_calib_flags,
                                      self.tidl_bias_calib_iters,
                                      self.output_feature_16bit_names_list,
-                                     self.params_16bit_names_list)
+                                     self.params_16bit_names_list,
+                                     self.mixed_precision_factor)
 
             self.info_dict['subgraphs'].append(subgraph_info_dict)
             if status:
@@ -1976,6 +1981,8 @@ class TIDLCompiler:
                   0 for disable, 1 for enable, default is 0
             - 'pre_batchnorm_fold' : int
                   0 for disable, 1 for enable, default is 1
+            - 'mixed_precision_factor' : float
+                  -1.0 for disable, != -1.0 for auto mixed precision calibration
             The following keys / values can only be overwritten at accuracy level 9:
             - 'activation_clipping' : int
                   0 for disable, 1 for enable
@@ -1984,8 +1991,6 @@ class TIDLCompiler:
             - 'bias_calibration' : int
                   0 for disable, 1 for enable
             - 'channel_wise_quantization' : int
-                  0 for disable, 1 for enable
-            - 'mixed_precision' : int
                   0 for disable, 1 for enable
         ti_internal_nc_flag: int
             Internal use only, default is 0x641
@@ -1998,13 +2003,13 @@ class TIDLCompiler:
             'pre_batchnorm_fold'           : 1,
             'output_feature_16bit_names_list' : '',
             'params_16bit_names_list'         : '',
+            'mixed_precision_factor'       : -1.0,
             # Below options can only be overwritten at accuracy level 9
             # Defaults for these options are in default_accuracy_level_options
             'activation_clipping'          : None,
             'weight_clipping'              : None,
             'bias_calibration'             : None,
             'channel_wise_quantization'    : None,
-            'mixed_precision'              : None,
             }
     default_accuracy_level_options = {
                                    # options for level 0 and 1 cannot be updated
@@ -2013,13 +2018,11 @@ class TIDLCompiler:
                                          'weight_clipping'           : 0,
                                          'bias_calibration'          : 0,
                                          'channel_wise_quantization' : 0,
-                                         'mixed_precision'           : 0,
                                        },
                                    1 : { 'activation_clipping'       : 1,
                                          'weight_clipping'           : 1,
                                          'bias_calibration'          : 1,
                                          'channel_wise_quantization' : 0,
-                                         'mixed_precision'           : 0,
                                        },
                                    # 9 : same defaults as accuracy level 1
                                  }
@@ -2076,6 +2079,7 @@ class TIDLCompiler:
             self.pre_batchnorm_fold = calib_options['pre_batchnorm_fold']
             self.output_feature_16bit_names_list = calib_options['output_feature_16bit_names_list']
             self.params_16bit_names_list = calib_options['params_16bit_names_list']
+            self.mixed_precision_factor = calib_options['mixed_precision_factor']
             self.tidl_calib_flags = ((1 if (calib_options['activation_clipping'] == 1) else 0) +
                                      (2 if (calib_options['weight_clipping'] == 1) else 0) +
                                      (4 if (calib_options['bias_calibration'] == 1) else 0) +
@@ -2235,7 +2239,8 @@ class TIDLCompiler:
                                          data_layout, self.tensor_bits,
                                          self.tidl_calib_flags, self.tidl_bias_calib_iters,
                                          self.output_feature_16bit_names_list,
-                                         self.params_16bit_names_list)
+                                         self.params_16bit_names_list,
+                                         self.mixed_precision_factor)
                 print("Generating subgraph boundary tensors for calibration...")
                 subgraph_tensors_list, relay_quantization, relay_etypes = generate_subgraph_tensors(
                                  self.tidl_target, mod, params, graph_input_list, self.temp_folder,
