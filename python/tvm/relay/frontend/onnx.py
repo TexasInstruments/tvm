@@ -1045,12 +1045,6 @@ class Pad(OnnxOpConverter):
             value = 0.0
 
         pad_width_expr = fold_constant(_op.transpose(_op.reshape(pads, (2, -1))))
-        #TI: pads are always constants, manually transpose until fold_constant() fully works
-        if isinstance(pads, tvm.relay.Var):
-            pads = params[pads.name_hint].asnumpy().astype("int64")
-        dims = int(len(pads) / 2)
-        pad_width_expr = [list(pair) for pair in zip(pads[:dims], pads[dims:])]
-        #endTI
         pad_mode = attr.get("mode", b"constant").decode("utf-8")
         if not pad_mode in ["constant", "edge", "reflect"]:
             raise tvm.error.OpAttributeInvalid(
@@ -2669,26 +2663,6 @@ class Resize(OnnxOpConverter):
         size = _op.cast(shape_of(inputs[0]), infer_type(scale).checked_type.dtype) * scale
         ndims = len(infer_shape(inputs[0]))
 
-        #Begin TI
-        input_shape = infer_shape(inputs[0])
-        dyn_shape = any(isinstance(dim_shape, tvm.tir.expr.Any) for dim_shape in input_shape)
-        if not dyn_shape:
-            known_size = (np.asarray(input_shape) *
-                          params[scale.name_hint].asnumpy()).astype("int32")
-            if ndims == 3:
-                out_size = (known_size[2], known_size[3])
-                out = _op.image.resize1d(inputs[0], out_size, None, "NCW", method, "asymmetric")
-            elif ndims == 4:
-                out_size = (known_size[2], known_size[4])
-                out = _op.image.resize2d(inputs[0], out_size, None, "NCHW", method, "asymmetric")
-            elif ndims == 5:
-                out_size = (known_size[2], known_size[5])
-                out = _op.image.resize3d(inputs[0], out_size, None, "NCDHW", method, "asymmetric")
-            else:
-                raise NotImplementedError("Resize only supports 3, 4, or 5 dims")
-            return out
-        #End TI
-
         out = None
         if ndims == 3:
             out_size = fold_constant(_op.strided_slice(size, [2], [3]))
@@ -2779,22 +2753,6 @@ class Resize(OnnxOpConverter):
             )
 
         out_size = fold_constant(_op.strided_slice(size, [2], [ndims]))
-
-        #Begin TI
-        scale = inputs[2]
-        scale_shape = infer_shape(scale)
-        if len(inputs) == 4:
-            size = inputs[3]
-            known_size = params[size.name_hint].asnumpy().astype("int32")
-            out_size = (known_size[2], known_size[3])
-        else:
-            input_shape = infer_shape(inputs[0])
-            dyn_shape = any(isinstance(dim_shape, tvm.tir.expr.Any) for dim_shape in input_shape)
-            if not dyn_shape:
-                known_size = (np.asarray(input_shape) *
-                              params[scale.name_hint].asnumpy()).astype("int32")
-                out_size = (known_size[2], known_size[3])
-        #End TI
 
         out = None
         if ndims == 3:

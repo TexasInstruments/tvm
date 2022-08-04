@@ -122,7 +122,6 @@ function run_tvm_tidl_tests {
     # ARM64_GCC_PATH already set in build_aarch64_ge
     export TIDL_TOOLS_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/tidl_tools)
     export CGT7X_ROOT=$(ls -d ${PSDKR_PATH}/ti-cgt-c7000_*)
-    export TI_TESTS_DISABLE_DOWNLOAD_PROGRESS=1
     pip3 install pytest opencv-python
 
     # Run compilation tests
