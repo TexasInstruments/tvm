@@ -428,11 +428,11 @@ def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
         quant_tensors = []
         for input_tensor, scale, sign, quant_min, quant_max in zip(input_tensors, quant_scales,
                                                            input_signs, quant_mins, quant_maxs):
-            # only use 1 batch for calibration
-            input_tensor = input_tensor[0, :]
+            # # only use 1 batch for calibration
+            # input_tensor = input_tensor[0, :]
             # change layout to CxHxW to use numpy.flatten to change to 1-d array
-            if data_layout == "NHWC" and len(input_tensor.shape) == 3:
-                input_tensor = input_tensor.transpose(2, 0, 1)
+            if data_layout == "NHWC" and len(input_tensor.shape) == 4:
+                input_tensor = input_tensor.transpose(0, 3, 1, 2)
 
             # No more quant.  Keep TVM tensor as is, Use TIDL data convert layers
             #tensor_norm = np.multiply(input_tensor, scale)
@@ -1216,6 +1216,7 @@ class TensorDescriptor(ctypes.Structure):
     _fields_ = [('scale', ctypes.c_double),
                 ('zp', ctypes.c_int),
                 ('element_type', ctypes.c_int),
+                ('n', ctypes.c_int),
                 ('channel', ctypes.c_int),
                 ('height', ctypes.c_int),
                 ('width', ctypes.c_int),
@@ -1322,7 +1323,7 @@ class TIDLImport:
             descr[i].scale = input_scale_invs[i]
             descr[i].zp = input_zps[i]
             descr[i].element_type = input_etypes[i]
-            (descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][1:4]
+            (descr[i].n, descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][0:4]
             descr[i].name = bytes(input_names[i], 'utf-8')
         for i in range(len(output_zps)):
             descr[len(input_zps) + i].scale = output_scale_invs[i]

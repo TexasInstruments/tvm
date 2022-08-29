@@ -374,12 +374,14 @@ class TIDLJ7Module : public runtime::ModuleNode {
             }
 
             // Set the dimensions
+            rt_arg->dimValues[0] = tensor_arg->shape[0];  /* batch size */
+            TIDL_LOG << "#TVM#  dimValues[0]: " << rt_arg->dimValues[0];
             int missing_dims = TIDLRT_DIM_MAX - rt_arg->numDim;
-            for (int s = 0; s < missing_dims; s++) {
+            for (int s = 1; s <= missing_dims; s++) {
               rt_arg->dimValues[s] = 1;
               TIDL_LOG << "#TVM#  auto-added dimValues[" << s << "]: 1";
             }
-            for (int s = 0; s < rt_arg->numDim; s++) {
+            for (int s = 1; s < rt_arg->numDim; s++) {
               int64_t shape = tensor_arg->shape[s];
               rt_arg->dimValues[missing_dims + s] = shape;
               TIDL_LOG << "#TVM#  dimValues[" << missing_dims+s << "]: "<<shape;
