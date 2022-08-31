@@ -27,11 +27,11 @@ skipped_configs = [
   [ 'yolo3_mv1_mxnet', 'J7', '--target', '--notidl', '--c7x', '--dlr' ],
 ]
 
-def test_infer(models, platforms, dlr_tvm, tidls, c7xs):
+def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
   is_target = (processor() == "aarch64")
   t_h = "--target" if is_target else "--host"
   failed_configs = []
-  for model in models:
+  for model in in_models:
     for platform in platforms:
       for d_t in dlr_tvm:
         for t_nt in tidls:
@@ -40,15 +40,16 @@ def test_infer(models, platforms, dlr_tvm, tidls, c7xs):
             if (not is_target) and c_nc == "--c7x":
               continue
 
-            print(f"\n\nInferring config: {[model, platform, t_h, t_nt, c_nc, d_t]} ...")
-            if [model, platform, t_h, t_nt, c_nc, d_t] in skipped_configs:
-              print("Skipped")
-              continue
-            try:
-              subprocess.run(["python3", "infer_model.py", model, "--platform", platform,
-                              d_t, t_nt, c_nc], check=True)
-            except:
-              failed_configs.append([model, platform, t_h, t_nt, c_nc, d_t])
+            for n in (models[model]['batch_size'] if 'batch_size' in models[model] else [0]):
+              print(f"\n\nInferring config: {[model, platform, t_h, t_nt, c_nc, d_t, n]} ...")
+              if [model, platform, t_h, t_nt, c_nc, d_t] in skipped_configs:
+                print("Skipped")
+                continue
+              try:
+                subprocess.run(["python3", "infer_model.py", model, "--platform", platform,
+                                d_t, t_nt, c_nc, "--batch_size", str(n)], check=True)
+              except:
+                failed_configs.append([model, platform, t_h, t_nt, c_nc, d_t, n])
 
   return failed_configs
 

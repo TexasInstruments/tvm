@@ -83,16 +83,16 @@ def load_image(img_file, resize_wh, crop_wh, mean, scale, needs_nchw, needs_quan
     norm_img[:, :, 1] = (norm_img[:, :, 1] - mean[1]) * scale[1]
     norm_img[:, :, 2] = (norm_img[:, :, 2] - mean[2]) * scale[2]
 
-  # Set batch_size of input data: NHWC
-  batch_size = 1
-  input_data = np.concatenate([norm_img[np.newaxis, :, :]]*batch_size)
+  # Set batch_size dimension of input data: NHWC
+  input_data = norm_img[np.newaxis, :, :, :]
   if needs_nchw:
     input_data = input_data.transpose(0, 3, 1, 2)  # NCHW
   return input_data
 
 
-def get_input_from_files(model_name, files):
+def get_input_from_files(model_name, files, batch_size=0):
   input_name = models[model_name]['input_info']['name']
+  batch      = models[model_name]['input_info']['shape'][0] if batch_size == 0 else batch_size
   resize_wh  = models[model_name]['input_info']['resize_wh']
   crop_wh    = models[model_name]['input_info']['crop_wh']
   mean       = models[model_name]['input_info']['mean']
@@ -100,33 +100,46 @@ def get_input_from_files(model_name, files):
   is_nchw    = models[model_name]['input_info']['is_nchw']
   is_quant   = models[model_name]['input_info']['dtype'] == "uint8"
 
-  return [ {input_name : load_image(x, resize_wh, crop_wh, mean, scale, is_nchw, is_quant)}
-           for x in files ]
+  num_files = len(files)
+  num_batches = (num_files // batch) + (0 if num_files % batch == 0 else 1)
+  inputs = []
+  for j in range(num_batches):
+    batch_images = []
+    for i in range(batch):
+      f = files[ (j * batch  + i) % num_files]
+      batch_images.append(load_image(f, resize_wh, crop_wh, mean, scale, is_nchw, is_quant))
+    inputs.append({input_name : np.concatenate(batch_images)})
+  return inputs
 
 
-def get_calib_inputs(model_name):
+def get_calib_inputs(model_name, batch_size=0):
   """ Return pre-processed calibration data"""
   calib_files = [get_calibdata_file(x) for x in models[model_name]['calib_data']]
-  return get_input_from_files(model_name, calib_files)
+  return get_input_from_files(model_name, calib_files, batch_size)
 
 
-def get_test_inputs(model_name):
+def get_test_inputs(model_name, batch_size=0):
   """ Return pre-processed test data"""
   test_files = [get_testdata_file(x) for x in models[model_name]['test']['test_data']]
-  return get_input_from_files(model_name, test_files)
+  return get_input_from_files(model_name, test_files, batch_size)
 
 
 def get_top5(res):
   """ Return top5 values and corresponding indicies """
-  top5 = []
-  values = []
-  for i in range(5):
-    top = np.argmax(res[0, :])
-    top5.append(top)
-    values.append(res[0, top])
-    res[0, top] = 0
-  print(f"Inference results (top5):\n  {top5}\n  {values}")
-  return top5, values
+  bs_top5 = []
+  bs_values = []
+  for n in range(res.shape[0]):
+    top5 = []
+    values = []
+    for i in range(5):
+      top = np.argmax(res[n, :])
+      top5.append(top)
+      values.append(res[n, top])
+      res[n, top] = 0
+    print(f"{n} Inference results (top5):\n  {top5}\n  {values}")
+    bs_top5.append(top5)
+    bs_values.append(values)
+  return bs_top5, bs_values
 
 
 def save_seg(model_name, res, artifacts_folder):
@@ -174,12 +187,13 @@ def save_od(model_name, res, artifacts_folder):
 def check_test_results(model_name, res, artifacts_folder):
   """ Check inference results """
   if 'in_top5' in models[model_name]['test']:
-    top5, values = get_top5(res[0])
+    bs_top5, bs_values = get_top5(res[0])
     e_top5 = models[model_name]['test']['in_top5']
-    for i in e_top5:
-      if i not in top5:
-        print(f"Expected index {i} not in top5 results")
-        return False
+    for j in range(len(bs_top5)):
+      for i in e_top5[j % len(e_top5)]:
+        if i not in bs_top5[j]:
+          print(f"Expected index {i} not in top5 results")
+          return False
   elif 'save_seg' in models[model_name]['test']:
     if models[model_name]['test']['save_seg']:
       save_seg(model_name, res, artifacts_folder)

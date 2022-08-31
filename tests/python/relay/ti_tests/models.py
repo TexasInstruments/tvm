@@ -33,8 +33,8 @@ inputs_224 = {
 
 
 test_top5 = {
-  'test_data' : ['airshow'],
-  'in_top5' : [895, 403],
+  'test_data' : ['airshow', 'cat'],
+  'in_top5' : [[895, 403], [282, 281]],
   #'prob5': [],
 }
 
@@ -60,21 +60,22 @@ models = {
     'output_name': "MobilenetV1/Predictions/Softmax",
     'input_info': {**inputs_224, 'shape':(1,224,224,3), 'is_nchw':False},
     'calib_data': ['airshow', 'cat', 'cat2'],
-    'test': {**test_top5, 'in_top5':[896,404]},
+    'test': {**test_top5, 'in_top5':[[896, 404], [283, 282]]},
+    'batch_size': [0, 2],
   },
 
   'mv2_quant_tfl' : {
     'file': ["url", "https://storage.googleapis.com/download.tensorflow.org/models/tflite_11_05_08/mobilenet_v2_1.0_224_quant.tgz", "mobilenet_v2_1.0_224_quant.tgz", "mobilenet_v2_1.0_224_quant.tflite"],
     'input_info': {**inputs_224, 'shape':(1,224,224,3), 'is_nchw':False, 'dtype':"uint8"},
     'calib_data': ['cat'],
-    'test': {**test_top5, 'in_top5':[896,404]},
+    'test': {**test_top5, 'in_top5':[[896, 404], [283, 282]]},
   },
 
   'mv2_onnx' : {
     'file': ["url", "https://github.com/onnx/models/raw/cbda9ebd037241c6c6a0826971741d5532af8fa4/vision/classification/mobilenet/model/mobilenetv2-7.onnx", "mobilenetv2-7.onnx", "mobilenetv2-7.onnx"],
     'input_info': {**inputs_224, 'name':"data"},
     'calib_data': ['cat', 'cat2', 'airshow'],
-    'test': test_top5,
+    'test': {**test_top5, 'in_top5':[[895, 403], [278, 282]]},
   },
 
   'mv3_large_mxnet' : {
@@ -83,6 +84,7 @@ models = {
     'calib_data': ['cat', 'cat2', 'airshow'],
     'test': test_top5,
     'tidl_bits' : 16,
+    #'batch_size': [0, 2], # pending TIDL import bug fix on multi-consumers
   },
 
   'mv2_pth' : {
@@ -91,6 +93,7 @@ models = {
     'calib_data': ['airshow', 'cat2', 'cat'],
     'test': test_top5,
     'tidl_bits' : 16,
+    'batch_size': [0, 2],
   },
 
   'deeplabv3_tfl' : {
@@ -166,7 +169,7 @@ def get_model_file(model_name):
     return model_file
 
 
-def get_relay_model(model_name : str):
+def get_relay_model(model_name : str, batch_size:int=0):
   """Obtain model and convert to Relay"""
 
   from tvm import relay
@@ -176,8 +179,6 @@ def get_relay_model(model_name : str):
     import tensorflow as tf
     from tvm.relay.testing import tf as tf_testing
 
-    input_node = models[model_name]['input_info']['name']
-    input_shape = models[model_name]['input_info']['shape']
     layout = "NCHW" if models[model_name]['input_info']['is_nchw'] else "NHWC"
     output_node = models[model_name]['output_name']
     shape_dict = {input_node : input_shape}
@@ -209,8 +210,6 @@ def get_relay_model(model_name : str):
       import tflite.Model
       tflite_model = tflite.Model.Model.GetRootAsModel(tflite_model_buf, 0)
 
-    input_node = models[model_name]['input_info']['name']
-    input_shape = models[model_name]['input_info']['shape']
     input_dtype = models[model_name]['input_info']['dtype']
     mod, params = relay.frontend.from_tflite(tflite_model, shape_dict={input_node : input_shape},
                                              dtype_dict={input_node : input_dtype})
@@ -220,23 +219,17 @@ def get_relay_model(model_name : str):
   def from_onnx(model_file, model_name):
     import onnx
 
-    input_node = models[model_name]['input_info']['name']
-    input_shape = models[model_name]['input_info']['shape']
     mod, params = relay.frontend.from_onnx(onnx.load(model_file), shape={input_node : input_shape})
     print(f"ONNX model {model_name} imported to Relay IR.")
     return mod, params
 
   def from_mxnet(model_file, model_name):
-    input_node = models[model_name]['input_info']['name']
-    input_shape = models[model_name]['input_info']['shape']
     mod, params = relay.frontend.from_mxnet(model_file, {input_node : input_shape})
     print(f"MxNet model {model_name} imported to Relay IR.")
     return mod, params
 
   def from_pytorch(model_file, model_name):
     import torch
-    input_node = models[model_name]['input_info']['name']
-    input_shape = models[model_name]['input_info']['shape']
     input_data = torch.randn(input_shape)
     scripted_model = torch.jit.trace(model_file, input_data).eval()
     mod, params = relay.frontend.from_pytorch(scripted_model, [(input_node, input_shape)])
@@ -247,6 +240,11 @@ def get_relay_model(model_name : str):
   model_file = get_model_file(model_name)
 
   # Convert the model to Relay
+  input_node = models[model_name]['input_info']['name']
+  input_shape = models[model_name]['input_info']['shape']
+  if (batch_size != 0):
+    input_shape = (batch_size, *input_shape[1:])
+
   if model_name.endswith("_tf"):
     return from_tf(model_file, model_name)
   elif model_name.endswith("_tfl"):

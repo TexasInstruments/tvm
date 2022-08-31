@@ -22,9 +22,9 @@ import subprocess
 from models import models
 
 
-def test_compile(models, platforms, targets, tidls, c7xs):
+def test_compile(in_models, platforms, targets, tidls, c7xs):
   failed_configs = []
-  for model in models:
+  for model in in_models:
     for platform in platforms:
       for t_h in targets:
         for t_nt in tidls:
@@ -33,12 +33,13 @@ def test_compile(models, platforms, targets, tidls, c7xs):
             if t_h == "--host" and c_nc == "--c7x":
               continue
 
-            print(f"\n\nCompiling config: {[model, platform, t_h, t_nt, c_nc]} ...")
-            try:
-              subprocess.run(["python3", "compile_model.py", model, "--platform", platform,
-                              t_h, t_nt, c_nc], check=True)
-            except:
-              failed_configs.append([model, platform, t_h, t_nt, c_nc])
+            for n in (models[model]['batch_size'] if 'batch_size' in models[model] else [0]):
+              print(f"\n\nCompiling config: {[model, platform, t_h, t_nt, c_nc, n]} ...")
+              try:
+                subprocess.run(["python3", "compile_model.py", model, "--platform", platform,
+                                t_h, t_nt, c_nc, "--batch_size", str(n)], check=True)
+              except:
+                failed_configs.append([model, platform, t_h, t_nt, c_nc, n])
 
   return failed_configs
 
@@ -106,4 +107,3 @@ if __name__ == "__main__":
     for config in failed_configs:
       print(f"  {config}")
     sys.exit(1)
-

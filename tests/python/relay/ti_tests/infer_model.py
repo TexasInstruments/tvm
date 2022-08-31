@@ -94,17 +94,18 @@ def run_model(artifacts_folder: str, input_dict, use_dlr: bool):
   return results
 
 
-def infer_model(model_name, platform, is_target, is_dlr, w_tidl, w_c7x):
+def infer_model(model_name, platform, is_target, is_dlr, w_tidl, w_c7x, batch_size=0):
   """ Run model model inference for a single (platform, target, tidl, c7x) config """
   from prepostproc import get_test_inputs, check_test_results
   from utils import get_artifacts_folder
 
-  artifacts_folder = get_artifacts_folder(model_name, platform, is_target, w_tidl, w_c7x)
+  artifacts_folder = get_artifacts_folder(model_name, platform, is_target, w_tidl, w_c7x,
+                                          batch_size)
   if not os.path.exists(artifacts_folder):
     raise Exception(f"{artifacts_folder} does not exist for inference")
   print(f"Running inference with deployable module in {artifacts_folder} ...")
 
-  input_list = get_test_inputs(model_name)
+  input_list = get_test_inputs(model_name, batch_size)
   res = run_model(artifacts_folder, input_list[0], is_dlr)
   passed = check_test_results(model_name, res, artifacts_folder)
   print("Pass" if passed else "Fail")
@@ -136,6 +137,9 @@ def parse_args():
   parser.add_argument('--noc7x', action='store_false',
                       dest="c7x",
                       help="Disable C7x code generation")
+  parser.add_argument('--batch_size', action='store',
+                      default=0, type=int,
+                      help='Overwrite default batch size in the model, 0 means no overwrite')
   args = parser.parse_args()
 
   assert(args.model_name is not None), "Please specify a model name"
@@ -150,12 +154,14 @@ if __name__ == "__main__":
 
   ret = False
   try:
-    ret = infer_model(args.model_name, args.platform, is_target, args.dlr, args.tidl, args.c7x)
+    ret = infer_model(args.model_name, args.platform, is_target, args.dlr, args.tidl, args.c7x,
+                      args.batch_size)
   except Exception as ex:
     print(ex)
     ret = False
 
   print(f"infer_model {'succeed' if ret else 'fail'}ed: {args.model_name} {args.platform} "
         f"{'target' if is_target else 'host'} {'dlr' if args.dlr else 'tvm'} "
-        f"{'tidl' if args.tidl else 'notidl'} {'c7x' if args.c7x else 'noc7x'}")
+        f"{'tidl' if args.tidl else 'notidl'} {'c7x' if args.c7x else 'noc7x'}"
+        f"{(' bs'+str(args.batch_size)) if args.batch_size != 0 else ''}")
   sys.exit(0 if ret else 1)

@@ -37,11 +37,12 @@ def restore_outputs(fds):
   os.close(fds[0])
 
 
-def get_artifacts_folder(model_name, platform, is_target, w_tidl, w_c7x):
+def get_artifacts_folder(model_name, platform, is_target, w_tidl, w_c7x, batch_size=0):
   """ Return the artifacts folder name based on config """
   artifacts_folder = "artifacts/" + model_name + "_" + platform
   artifacts_folder = artifacts_folder + "_" + ("target" if is_target else "host")
   artifacts_folder = artifacts_folder + "_" + ("tidl" if w_tidl else "notidl")
   artifacts_folder = artifacts_folder + "_" + ("c7x" if w_c7x else "noc7x")
+  artifacts_folder = artifacts_folder + (("_bs" + str(batch_size)) if batch_size != 0 else "")
   return artifacts_folder
 

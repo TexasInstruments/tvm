@@ -16,12 +16,14 @@
 # under the License.
 """ Compile a model from models.py to a TVM deployable module """
 
+import os
 import sys
 
 from tvm.contrib.tidl import compile
 
 def compile_model(model_name: str, platform: str,
-                  compile_for_device: bool, enable_tidl_offload: bool, enable_c7x_codegen: bool):
+                  compile_for_device: bool, enable_tidl_offload: bool, enable_c7x_codegen: bool,
+                  batch_size:int=0):
   """ Compile a model based on the parameters specified
 
   Parameters
@@ -40,6 +42,9 @@ def compile_model(model_name: str, platform: str,
               i.e. entire network runs on the C7x
       False => Enable Arm code generation for layers not offloaded to TIDL
                Unsupported layers are run on Arm (aarch64)
+  batch_size:
+      0: use the batch size that comes with the model
+      otherwise: override the default batch size
   Return
   ------
   True for success, False for failure
@@ -49,15 +54,19 @@ def compile_model(model_name: str, platform: str,
   from prepostproc import get_calib_inputs
   from utils import get_artifacts_folder
 
+  if batch_size != 0:
+    os.environ["TIDL_RELAY_MAX_BATCH_SIZE"] = str(batch_size)
+
   # Obtain model and convert to Relay
-  mod, params = get_relay_model(model_name)
+  mod, params = get_relay_model(model_name, batch_size)
 
   # Get inputs to use for calibraton (required for TIDL offload)
-  calibration_input_list = get_calib_inputs(model_name)
+  calibration_input_list = get_calib_inputs(model_name, batch_size)
 
   # Generate a name for the artifacts folder based on the model and other parameters
   artifacts_folder = get_artifacts_folder(model_name, platform, compile_for_device,
-                                          enable_tidl_offload, enable_c7x_codegen)
+                                          enable_tidl_offload, enable_c7x_codegen,
+                                          batch_size)
 
   # Compile the model using TVM and place the output in the artifacts_folder
   result = compile.compile_relay(mod, params, calibration_input_list, platform, compile_for_device,
@@ -91,6 +100,9 @@ def parse_args():
   parser.add_argument('--noc7x', action='store_false',
                       dest="c7x",
                       help="Disable C7x code generation")
+  parser.add_argument('--batch_size', action='store',
+                      default=0, type=int,
+                      help='Overwrite default batch size in the model, 0 means no overwrite')
   args = parser.parse_args()
 
   assert(args.model_name is not None), "Please specify a model name"
@@ -103,13 +115,15 @@ if __name__ == "__main__":
   args = parse_args()
   ret = False
   try:
-    ret = compile_model(args.model_name, args.platform, args.target, args.tidl, args.c7x)
+    ret = compile_model(args.model_name, args.platform, args.target, args.tidl, args.c7x,
+                        args.batch_size)
   except Exception as ex:
     print(ex)
     ret = False
 
   print(f"compile_model {'succeed' if ret else 'fail'}ed: {args.model_name} {args.platform} "
         f"{'target' if args.target else 'host'} {'tidl' if args.tidl else 'notidl'} "
-        f"{'c7x' if args.c7x else 'noc7x'}")
+        f"{'c7x' if args.c7x else 'noc7x'}"
+        f"{(' bs'+str(args.batch_size)) if args.batch_size != 0 else ''}")
   sys.exit(0 if ret else 1)
 
