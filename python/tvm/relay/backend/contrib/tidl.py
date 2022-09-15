@@ -2127,6 +2127,9 @@ class TIDLCompiler:
         # re-build the C7x deployable module and the Arm deployable module,
         # reusing the existing source in the tempDir from the previous compilation.
         if self.c7x_codegen > 0 and os.environ.get("TIDL_REBUILD_ONLY") != None:
+            # bind_params will remove weights from arguments of main(), so that
+            #     main() function API will be the same in TIDL_REBUILD_ONLY path.
+            mod_orig['main'] = relay.build_module.bind_params_by_name(mod_orig['main'], params)
             return enable_c7x_mod(self, mod_orig, mod_orig, params, 0), 0
 
         # (Backward compatible) if single calibration image/data/dict, convert to list
