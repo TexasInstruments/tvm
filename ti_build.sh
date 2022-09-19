@@ -55,6 +55,9 @@ function build_aarch64_ge {
 
     cmake -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/ti_dl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} -DCMAKE_TOOLCHAIN_FILE=../cmake/modules/contrib/ti-aarch64-linux-gcc-toolchain.cmake ..
     make -j$(nproc) runtime
+
+    # Initialize the ssh connection to EVM, save EVM into .known_hosts
+    ssh -o "StrictHostKeyChecking no" root@${EVM_IP} 'uname -a'
     scp libtvm_runtime.so root@${EVM_IP}:
     cd -
 }
@@ -121,7 +124,10 @@ function run_tvm_tidl_tests {
     # Set up environment variables for TVM+TIDL compilation
     # ARM64_GCC_PATH already set in build_aarch64_ge
     export TIDL_TOOLS_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/tidl_tools)
-    export CGT7X_ROOT=$(ls -d ${PSDKR_PATH}/ti-cgt-c7000_*)
+    # In PSDK 8.4, TI C7x compiler 3.0.0.STS contains a known bug that generates an illegal
+    # VSUBSP instruction on scalar A side registers.  It is fixed in a future release.
+    # For now, use 2.1.1.LTS in the previous PSDK 8.2.
+    export CGT7X_ROOT=$(ls -d ${PSDKR_PATH}/../ti-processor-sdk-rtos-j721e-evm-08_02_00_05/ti-cgt-c7000_*)
     pip3 install pytest opencv-python
 
     # Run compilation tests
