@@ -74,6 +74,9 @@ typedef struct
 } TIDL_subgraph_instance;
 
 
+// Extern functions in TIDL RT
+EXTERN_C TIDLRT_PrintMetaData(TIDL_outArgs *outArgs);
+
 // Helper functions
 static int32_t init_inbufs(TIDL_subgraph_instance *instance);
 static void    free_inbufs(TIDL_subgraph_instance *instance);
@@ -306,6 +309,12 @@ EXTERN_C int32_t process_tidl_subgraph(void *instance_,
   // Call IALG deactivate API to release TIDL's ownership.
   //   TIDL_deactivate
   handle->fxns->ialg.algDeactivate((IALG_Handle)(instance->handle));
+
+  // Dump layer perf info
+  if (instance->inArgs->enableLayerPerfTraces > 0)
+  {
+    TIDLRT_PrintMetaData(instance->outArgs);
+  }
 
   return status;
 }

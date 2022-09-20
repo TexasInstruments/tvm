@@ -41,17 +41,32 @@ SOURCES = bundle_static.c \
 HEADERS := $(shell find . -name "*.h")
 OBJS  = $(patsubst %.c,$(BUILD_DIR)/%.obj,$(SOURCES))
 OBJS += $(BUILD_DIR)/ti_mem_manager.obj
+OBJS += $(BUILD_DIR)/tidl_rt_ovx_debug_utils.obj
 
 all: $(LIB_NAME)
 
 $(LIB_NAME): $(OBJS)
 	$(QUIET)$(AR) -r $@ $^
 
+$(BUILD_DIR)/%.obj: $(USE_TIDL_RT_PATH)/src/%.c $(HEADERS)
+
 $(BUILD_DIR)/%.obj: %.c $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
 
 $(BUILD_DIR)/%.obj: $(TIDL_COMMON_PATH)/ti_mem_manager.c $(HEADERS)
+	$(QUIET)$(MKDIR_P) $(dir $@)
+	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
+
+# tidl_rt_ovx_debug_utils.c uses "%llu" to print 32-bit integer, which does not work on C7x.
+# Patch the released code in PSDK 8.4 to use "%u".
+# Once the TIDL RT src code is fixed, remove this rule and use TIDL RT src directly.
+$(BUILD_DIR)/tidl_rt_ovx_debug_utils.c: $(USE_TIDL_RT_PATH)/src/tidl_rt_ovx_debug_utils.c
+	$(QUIET)$(MKDIR_P) $(dir $@)
+	cp $< $@
+	sed -i 's/llu,/u,/' $@
+
+$(BUILD_DIR)/tidl_rt_ovx_debug_utils.obj: $(BUILD_DIR)/tidl_rt_ovx_debug_utils.c $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
 
