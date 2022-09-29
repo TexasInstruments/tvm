@@ -47,7 +47,6 @@ class CopyIntrinInjector : public StmtMutator {
       // TI Begin
       // If the copy loop pattern does not conform to the pattern required for copy intrinsics,
       // return the original copy loop body.
-      expected_block_size = op->value.as<IntImmNode>()->value;
       Stmt ret;
       if (MatchCopyPattern(op->body, &ret) == false)
         return op->body;
@@ -161,17 +160,6 @@ class CopyIntrinInjector : public StmtMutator {
     // If the flower function does not create the correct statement, return false
     if (!out->defined())
       return false;
-    // If TVM analyzed block size != expected block size when inserting dma pragma, return false
-    int actual_block_size = 1;
-    for (const PrimExpr &e : dst_shape)
-    {
-      if (const IntImmNode *ie = e.as<IntImmNode>())
-        actual_block_size *= ie->value;
-      else
-        return false;
-    }
-    if (actual_block_size != expected_block_size)
-      return false;
     // TI End
 
     return true;
@@ -183,9 +171,6 @@ class CopyIntrinInjector : public StmtMutator {
   const PackedFunc& flower_copy_fromto_;
   // arith analyzer
   arith::Analyzer analyzer_;
-  // TI Begin
-  int expected_block_size;
-  // TI End
 };
 
 Stmt InjectCopyIntrin(Stmt stmt, const std::string& pragma_key,

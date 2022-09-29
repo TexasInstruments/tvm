@@ -264,7 +264,9 @@ class DoubleBuffer : public BufferBase<DoubleBuffer<Layout_>>
 };
 
 //---------------------------------------------------------------------------------
+#if DEBUG && MODEL_DMA
 class APSim;  // forward declaration
+#endif
 
 // An AccessPattern is a canonical way of expressing the sequence of
 // accesses in a multidimensional array, a la streaming engine or DMA.
@@ -292,8 +294,12 @@ public:
   int naxes = 0;
   // sync_axis: delimits blocks, for blocked (multi-stage) transfers
   int sync_axis = -1;
+  // buffer offset where the transfer starts
+  int offset = 0;
+  #if DEBUG && MODEL_DMA
   // Access pattern simulator, for testing
   APSim *sim = nullptr;
+  #endif
 
 public:
   AccessPattern() {}
@@ -358,6 +364,7 @@ public:
 
 //---------------------------------------------------------------------------------
 // APSim: simulate an access pattern, for testing
+#if DEBUG && MODEL_DMA
 class APSim
 {
   int i0 = 0;
@@ -384,31 +391,32 @@ public:
     {
       // advance i0
       if (i0++ < AP.axes[0].count)
-	nbytes += AP.axes[0].stride;
+        nbytes += AP.axes[0].stride;
       else
       {
         // advance i1
-	if (AP.sync_axis == 0) sync = true;
-	i0 = 0;
+        if (AP.sync_axis == 0) sync = true;
+          i0 = 0;
         if (++i1 >= AP.axes[1].count)
-	{
-	  // advance i2
-	  if (AP.sync_axis == 1) sync = true;
-	  i1 = 0;
+        {
+          // advance i2
+          if (AP.sync_axis == 1) sync = true;
+          i1 = 0;
           if (++i2 >= AP.axes[2].count)
-	  {
-	    // advance i3
-	    if (AP.sync_axis == 2) sync = true;
-	    i2 = 0;
-	    if (++i3 >= AP.axes[3].count)
-	      sync = true;
-	  }
-	}
+          {
+            // advance i3
+            if (AP.sync_axis == 2) sync = true;
+            i2 = 0;
+            if (++i3 >= AP.axes[3].count)
+              sync = true;
+          }
+        }
       }
       if (sync) return nbytes;
     }
   }
 };
+#endif  // DEBUG && MODEL_DMA
 
 //---------------------------------------------------------------------------------
 // DMA represents an agent to transfer data from a SrcBuffer to a DstBuffer.
@@ -419,22 +427,10 @@ public:
 template <typename SrcBuffer, typename DstBuffer>
 class DMA
 {
-public:
-   // Type of transfer, depending on types
-   enum Mode
-   {
-     Direct,     // one-shot copy, same-sized src to dst
-     LocalDst,   // blocked copy-in: external src to smaller local dst
-     LocalSrc,   // blocked copy-out: smaller local src to external dst
-     DBDst,      // double buffered copy-in
-     DBSrc,      // double buffered copy-out
-     Invalid,
-   };
 protected:
    // DMAUtils interface
    DMAContext& context;
    int channel;
-   Mode mode;
    const char *name = "";
 
    // Src and Dst
@@ -445,156 +441,35 @@ protected:
 
    // State, during transfers
    int seq = 0;
-   int wait_seq = 0;
    int dma_blocks = 1;
 public:
-   using SrcType = SrcBuffer;
-   using DstType = DstBuffer;
-   using SrcLayout = typename SrcType::Layout;
-   using DstLayout = typename DstType::Layout;
-
-   // Setup a DMA channel to copy SrcBuffer to DstBuffer. This only depends
-   // on the buffer layouts; it could/should be done at init time. With
-   // this construction, actual buffer instances need to be supplied
-   // separately (via 'bind')
-   DMA(DMAContext &ctx, const char* n="") :
-     context(ctx), mode(Invalid), channel(ctx.allocate_channel()), name(n)
+   // Setup, with buffers and dma paramaters supplied
+   DMA(DMAContext &ctx, SrcBuffer& s, DstBuffer& d,
+           int num_blocks, int sync_axis, int soffset, int doffset,
+           int sicnt0, int sicnt1, int sicnt2, int sicnt3, int sstride1, int sstride2, int sstride3,
+           int dicnt0, int dicnt1, int dicnt2, int dicnt3, int dstride1, int dstride2, int dstride3,
+           const char* n="") :
+     context(ctx), channel(ctx.allocate_channel()), name(n), dma_blocks(num_blocks)
    {
-     // Determine access patterns based on types
-     initAP();
-   }
+     srcAP.sync_axis = sync_axis;
+     srcAP.offset = soffset;
+     srcAP.axes[0].count = sicnt0;
+     srcAP.axes[1].count = sicnt1;
+     srcAP.axes[2].count = sicnt2;
+     srcAP.axes[3].count = sicnt3;
+     srcAP.axes[1].stride = sstride1;
+     srcAP.axes[2].stride = sstride2;
+     srcAP.axes[3].stride = sstride3;
+     dstAP.offset = doffset;
+     dstAP.axes[0].count = dicnt0;
+     dstAP.axes[1].count = dicnt1;
+     dstAP.axes[2].count = dicnt2;
+     dstAP.axes[3].count = dicnt3;
+     dstAP.axes[1].stride = dstride1;
+     dstAP.axes[2].stride = dstride2;
+     dstAP.axes[3].stride = dstride3;
 
-   // Setup, with buffers supplied now
-   DMA(DMAContext &ctx, SrcType& s, DstType& d, const char* n="") :
-     context(ctx), mode(Invalid), channel(ctx.allocate_channel()), name(n)
-   {
-     initAP();
      bind(s,d);
-   }
-
-   // Setup access patterns for src and dst based on layouts
-   // TODO: Could use compile-time specializations here (enable-if
-   // instead of 'if')
-   void initAP()
-   {
-     if (SrcLayout::ElemSize != DstLayout::ElemSize)
-       mode = Invalid;
-
-     // Same-size buffers: one-shot direct copy
-     else if (SrcLayout::size == DstLayout::size)
-     {
-       mode = Direct;
-       // Use simple raster access pattern.
-       // Cast null to buffer type so AP constructor can infer type
-       srcAP = AccessPattern(static_cast<const SrcLayout *>(nullptr));
-       dstAP = AccessPattern(static_cast<const DstLayout *>(nullptr));
-     }
-
-     // Different size buffers. The assumption is the larger(external) buffer
-     // is split on some axis, forming the shape of the smaller(local) buffer.
-     // The copy will occur in blocks corresponding to the local buffer.
-     // Analyze the cases and dermine which buffer is which.
-     else if (SrcLayout::size < DstLayout::size)
-     {
-       // src is local, dst is ext
-       mode = SrcType::isDB ? DBSrc : LocalSrc;
-       initBlockedAP<DstType, SrcType>(dstAP, srcAP);
-     }
-
-     else // (SrcLayout::size > DstLayout::size)
-     {
-       // dst is local, src is ext
-       mode = DstType::isDB ? DBDst : LocalDst;
-       initBlockedAP<SrcType, DstType>(srcAP, dstAP);
-     }
-     #if MODEL_DMA
-     // Initialize simulator, for modeling
-     srcAP.sim = new APSim(srcAP);
-     dstAP.sim = new APSim(dstAP);
-     #endif
-   }
-
-   // Initialize access patterns (APs) for block-by-block DMA between an
-   // external buffer and a local one. The local buffer's layout must be a
-   // subset of the external one. That is, dimensions must agree until the
-   // local's last dimension, which must evenly divide.
-   template<typename ExtType, typename LocalType>
-   Mode initBlockedAP(AccessPattern &extAP, AccessPattern &locAP)
-   {
-     using ExtLayout   = typename ExtType::Layout;
-     using LocalLayout = typename LocalType::Layout;
-     // xaxes=external  laxes=local
-     int xaxes[4] = { ExtLayout::Dim0, ExtLayout::Dim1,
-		      ExtLayout::Dim2, ExtLayout::Dim3 };
-     int laxes[4] = { LocalLayout::Dim0, LocalLayout::Dim1,
-		      LocalLayout::Dim2, LocalLayout::Dim3 };
-
-     // printf("init_APs: ext:"); ExtLayout::dump();
-     // printf("          loc:"); LocalLayout::dump();
-
-     // Scan dimensions looking for the split axis
-     for(int i = 0; i < 4; ++i)
-     {
-       uint32_t stride = (i == 0) ? ExtLayout::ElemSize
-				  : extAP.current_extent();
-       if (laxes[i] == xaxes[i])
-       {
-	 extAP.add_dim(xaxes[i], stride);
-	 locAP.add_dim(laxes[i], stride);
-	 // printf("add_dim(%d,%d);\n", laxes[i], stride);
-	 // dump();
-	 continue;
-       }
-       // Make sure the smaller axis evenly divides the larger one, and
-       // that the local buffer has no more dimensions
-       else if (xaxes[i] % laxes[i] != 0 ||
-                laxes[i] * locAP.current_extent() != LocalLayout::size)
-	 return (mode = Invalid);
-
-       // Split the current axis of ext.
-       // Example: ext[100][16][16], loc[25][16][16]
-       //   ext splits to [4][25][16][16]
-       uint32_t newdim = laxes[i];             // 25
-       uint32_t nblocks = xaxes[i] / newdim;   // 4
-       extAP.add_dim(newdim, stride);
-       locAP.add_dim(newdim, stride);
-       uint32_t block_size = extAP.current_extent();
-       // printf("(split: [%d]-->[%d][%d])\n", xaxes[i], nblocks, newdim);
-       // printf("add_dim(%d,%d);\n", newdim, stride);
-       // dump();
-
-       // Mark the split point. This will cause the DMA to sync after
-       // this axis.
-       extAP.add_sync();
-       locAP.add_sync();
-       // printf("----\n");
-
-       dma_blocks = nblocks;
-       extAP.add_dim(nblocks, block_size);
-
-       // For double-buffering, add an additional [2] dimension
-       if (LocalType::isDB)
-       {
-	 locAP.add_dim(2, block_size);
-	 nblocks = (nblocks+1)/2;
-       }
-       // The local buffer rewinds after the split
-       locAP.add_dim(nblocks, 0);
-       // printf("after split\n");
-       // dump();
-
-       // Add remaining dimensions from ext buffer to both APs
-       while (++i < 4)
-       {
-	 stride = extAP.current_extent();
-	 locAP.add_dim(xaxes[i], 0);
-	 extAP.add_dim(xaxes[i], stride);
-	 dma_blocks *= xaxes[i];
-       }
-       // printf("final\n");
-       // dump();
-     }
-     return mode;
    }
 
    // Attach actual buffer instances to this DMA object.
@@ -618,7 +493,7 @@ public:
 
      tvm_tidl_configure_channel(
        context.get_dmaUtilsContext(), channel, context.get_pTrMem(),
-       (uint8_t*)src->get(), (uint8_t*)dst->get(), sync,
+       (uint8_t*)src->get() + srcAP.offset, (uint8_t*)dst->get() + dstAP.offset, sync,
        srcAP.axes[0].count,
        srcAP.axes[1].count,
        srcAP.axes[2].count,
@@ -692,7 +567,7 @@ public:
      if (seq == 0)
      {
         dst->sync();
-	trigger();
+        trigger();
      }
      // wait for current block
      wait();
@@ -725,29 +600,11 @@ public:
    void *src_ptr() { return src->get(); }
    void *dst_ptr() { return dst->get(); }
 
-   const char *mode_name(Mode mode)
-   {
-     switch(mode)
-     {
-       default: break;
-       case Direct: return "Direct";
-       case LocalSrc: return "LocalSrc";
-       case LocalDst: return "LocalDst";
-       case DBSrc: return "DBSrc";
-       case DBDst: return "DBDst";
-       case Invalid: return "Invalid";
-     }
-     return "unknown";
-   }
    void dump()
    {
      #if DEBUG
       printf("\nDMA config:\n");
-      printf("src layout: ");
-      SrcLayout::dump();
-      printf("dst layout: ");
-      DstLayout::dump();
-      printf("mode=%s nblocks=%d\n", mode_name(mode), dma_blocks);
+      printf("nblocks=%d\n", dma_blocks);
       printf("src AccessPattern\n");
       srcAP.dump();
       printf("dst AccessPattern\n");
@@ -759,9 +616,16 @@ public:
 // DMA factory function -- enables type inference for construction
 template <typename SrcBuffer, typename DstBuffer>
 DMA<SrcBuffer, DstBuffer>
-create_DMA(DMAContext &ctx, SrcBuffer& s, DstBuffer& d, const char* n="")
+create_DMA(DMAContext &ctx, SrcBuffer& s, DstBuffer& d,
+           int num_blocks, int sync_axis, int soffset, int doffset,
+           int sicnt0, int sicnt1, int sicnt2, int sicnt3, int sstride0, int sstride1, int sstride2,
+           int dicnt0, int dicnt1, int dicnt2, int dicnt3, int dstride0, int dstride1, int dstride2,
+           const char* n="")
 {
-  return DMA<SrcBuffer, DstBuffer>(ctx, s, d, n);
+  return DMA<SrcBuffer, DstBuffer>(ctx, s, d, num_blocks, sync_axis, soffset, doffset,
+           sicnt0, sicnt1, sicnt2, sicnt3, sstride0, sstride1, sstride2,
+           dicnt0, dicnt1, dicnt2, dicnt3, dstride0, dstride1, dstride2,
+           n);
 }
 
 //---------------------------------------------------------------------------------

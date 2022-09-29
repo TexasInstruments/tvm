@@ -73,11 +73,13 @@ ops_do_not_dma = ['T_strided_slice', 'T_concat', 'T_reshape']
 # 5. Total block size for input: (g(i,j,k) over (ri, rj, rk)), this may or may NOT be the
 #    same as input Var's size, as we see in T_strided_slice's case
 #    How do we catch this case:
-#    - (Schedule) From tensor size, compute expected blocksize, store in pragma
-#    - (InjectCopyIntrin) Check if TVM analyzed blocksize matches expected blocksize.
-#                         Do not turn the loop nest into c7x_dma_copy intrinsic if no match
-#    - (DMAPass) Is it possible to compute the actual portion of input tensor being used
-#                and use those information to configure the DMA(global_dims, local_dims)? (TODO)
+#    - (Schedule) Insert dma pragma on copy in and copy out loops
+#    - (InjectCopyIntrin) Compute the ICNTs, STRIDEs for the inner loops (copying loops),
+#                         store information in the "c7x_dma_copy" intrinsic.
+#                         Do not turn the loop nest into c7x_dma_copy intrinsic if ICNTs, STRIDEs
+#                         are not integer constants.
+#    - (DMAPass) Compute the ICNTs, STRIDEs for the outer loops (loops contains the c7x_dma_copy),
+#                store the information in the "c7x_dma_setup" intrinsic.
 # 6. Local block size for input over (irj, rk), similarly to output, it is reflected correctly
 #    in the local block Var's shape, which is used in DMA config.
 
@@ -369,21 +371,17 @@ def double_buffer_with_dma(s: te.Schedule,
         logging.debug("after sink")
         print_schedule(s)
 
-    # mark local<->ext copies as using dma.  Encode each dma transfer size for verifying later.
-    total_blocks = nblocks
-    if baxis > 1:
-        for dim_size in dims[:baxis-1]:
-            total_blocks *= dim_size
+    # mark local<->ext copies as using dma.
     for t, is_placeholder in local_inputs:
         # AutoInlineInjective can push compute into the copy loops - such loops
         # cannot be annotated with the dma pragma.
         #dump(t)
-        if is_placeholder and tensor_size(t) % total_blocks == 0:
-            s[t].pragma(s[t].op.axis[0], "dma", tensor_size(t)//total_blocks)
+        if is_placeholder:
+            s[t].pragma(s[t].op.axis[0], "dma")
     if cc != C:
         #dump(cc)
         # if no split above, block is outer loop
-        s[C].pragma(block, "dma", tensor_size(C)//total_blocks)
+        s[C].pragma(block, "dma")
 
     return (s, cc, baxis, inner)
 

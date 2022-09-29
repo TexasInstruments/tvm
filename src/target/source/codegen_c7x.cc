@@ -1393,19 +1393,32 @@ void CodeGenC7x::PrintDMASetup(const VarNode* dma_var, const CallNode* call) {
   };
   // Signature is:
   // @tir.call_extern("c7x_dma_setup", src_var, dim3, dim2, dim1, dim0,
-  //                                   dst_var, dim3, dim2, dim1, dim0)
+  //                                   dst_var, dim3, dim2, dim1, dim0,
+  //                                   num_blocks, sync_axis, soffset, doffset,
+  //                                   sicnt0, sicnt1,   sicnt2,   sicnt3,
+  //                                           sstride1, sstride2, sstride3,
+  //                                   dicnt0, dicnt1,   dicnt2,   dicnt3,
+  //                                           dstride1, dstride2, dstride3)
   const VarNode* src = Downcast<Var>(call->args[1]).get();
   const VarNode* dst = Downcast<Var>(call->args[6]).get();
   const VarNode* src_buf = declare_buffer(src, 1);
   const VarNode* dst_buf = declare_buffer(dst, 6);
 
-  // auto A_dma = create_DMA(DMAContext, A_buffer, A_local_buffer);
+  // auto A_dma = create_DMA(DMAContext, A_buffer, A_local_buffer,
+  //                                   num_blocks, sync_axis, soffset, doffset,
+  //                                   sicnt0, sicnt1,   sicnt2,   sicnt3,
+  //                                           sstride1, sstride2, sstride3,
+  //                                   dicnt0, dicnt1,   dicnt2,   dicnt3,
+  //                                           dstride1, dstride2, dstride3);
   this->PrintIndent();
   std::string dma_var_name = AllocVarID(dma_var);
   stream << "auto " << dma_var_name
          << " = create_DMA(DMAContext, "
          << GetVarID(src_buf) << ", "
-         << GetVarID(dst_buf) << ");\n";
+         << GetVarID(dst_buf);
+  for (int i = 11; i <= 28; i++)
+    stream << ", " << call->args[i].as<IntImmNode>()->value;
+  stream << ");\n";
 
   // For local (allocated) buffers, initialize the TVM variable using the
   // accessor of the DMA object:

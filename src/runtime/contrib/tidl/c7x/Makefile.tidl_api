@@ -48,8 +48,6 @@ all: $(LIB_NAME)
 $(LIB_NAME): $(OBJS)
 	$(QUIET)$(AR) -r $@ $^
 
-$(BUILD_DIR)/%.obj: $(USE_TIDL_RT_PATH)/src/%.c $(HEADERS)
-
 $(BUILD_DIR)/%.obj: %.c $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)

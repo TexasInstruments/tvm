@@ -75,7 +75,7 @@ typedef struct
 
 
 // Extern functions in TIDL RT
-EXTERN_C TIDLRT_PrintMetaData(TIDL_outArgs *outArgs);
+EXTERN_C void TIDLRT_PrintMetaData(TIDL_outArgs *outArgs);
 
 // Helper functions
 static int32_t init_inbufs(TIDL_subgraph_instance *instance);

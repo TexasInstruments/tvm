@@ -755,17 +755,105 @@ def C7xSEPass():
         SETransform, opt_level=0, name="tir.c7x.C7xSEPass"
     )
 
+# C7X DMA can only support dma transfers up to 4 dimensions
+MAX_C7X_DMA_DIMS = 4
+
 #----------------------------------------------------------------
-# Naive "Injector" for dma intrinsic
+# transferring a single block
+def c7x_dma_add_inner_dims(axis, elem_bytes, loop_bounds, src_strides, dst_strides,
+                           src_dma_icnts, src_dma_strides, dst_dma_icnts, dst_dma_strides):
+    num_loops = len(loop_bounds)
+    # from innermost loop to outermost loop
+    for i in range(num_loops-1, -1, -1):
+      #   if previous (inner) loop count * stride == current loop stride,
+      #   then current loop can be merged into previous loop transfer,
+      #   otherwise, we have to increase axis and use a separate stride.
+      #   The first inner loop needs a new axis too (no previous axis).
+      if (i == num_loops-1 or
+          src_strides[i] != src_strides[i+1] * loop_bounds[i+1] or
+          dst_strides[i] != dst_strides[i+1] * loop_bounds[i+1]):
+        axis += 1
+        if (axis >= MAX_C7X_DMA_DIMS):
+            return axis
+        # for fisrt dim/axis, elem_bytes is encoded in the ICNT[0] because STRIDE[0] is not used
+        src_dma_icnts[axis]   = loop_bounds[i] * (1 if axis > 0 else elem_bytes)
+        dst_dma_icnts[axis]   = loop_bounds[i] * (1 if axis > 0 else elem_bytes)
+        src_dma_strides[axis] = src_strides[i] * (elem_bytes if axis > 0 else 1)
+        dst_dma_strides[axis] = dst_strides[i] * (elem_bytes if axis > 0 else 1)
+      else:
+        src_dma_icnts[axis]   *= loop_bounds[i]
+        dst_dma_icnts[axis]   *= loop_bounds[i]
+    return axis
+
+#----------------------------------------------------------------
+# transferring blocks between double-bufferred on-chip buffer and off-chip buffer
+def c7x_dma_add_outer_dims(axis, elem_bytes, num_blocks, loop_bounds, off_strides,
+                           on_dma_icnts, on_dma_strides, off_dma_icnts, off_dma_strides):
+    num_loops = len(loop_bounds)
+    on_dma_icnts[axis+1]   = 2    # double buffering
+    on_dma_strides[axis+1] = (on_dma_icnts[axis] * on_dma_strides[axis])
+    # when num_blocks is odd, use [2, (num_blocks+1)/2] for the on_chip ICNTs, the off_chip
+    # ICNTs are still configured to be num_blocks to ensure correct number of transfers.
+    on_dma_icnts[axis+2]   = (num_blocks + 1) // 2
+
+    # from innermost loop to outermost loop
+    for i in range(num_loops-1, -1, -1):
+        #   if previous (inner) loop count * stride == current loop stride,
+        #   then current loop can be merged into previous loop transfer,
+        #   otherwise, we have to increase axis and use a separate stride.
+        #   The first outer loop needs a new axis too (should not merge with inner block).
+        if (i != num_loops-1 and off_strides[i] == loop_bounds[i+1] * off_strides[i+1]):
+            off_dma_icnts[axis] *= loop_bounds[i]
+        else:
+            axis += 1
+            if (axis >= MAX_C7X_DMA_DIMS):
+                return axis
+            off_dma_icnts[axis]   = loop_bounds[i]
+            off_dma_strides[axis] = off_strides[i] * elem_bytes
+    return axis
+
+#----------------------------------------------------------------
+# "Injector" for dma intrinsic, called by inject_copy_intrin.cc
 #
-# Adapted from vta/transform.py
+# Turning a loop nest copying between src and dst into a C7x dma intrinsic,
+# passing information to downstream passes (C7xDMAPass, CodeGenC7x)
 def c7x_dma_injector(src : tvm.tir.Buffer, 
                      dst : tvm.tir.Buffer, pad_before, pad_after, pad_value):
     '''
     This function is called by the InjectCopyIntrin pass to insert code 
     to replace the copy-in/copy-out code for a local buffer
     '''
-    expr = tvm.tir.call_extern("int32", "c7x_dma_copy", src.data, dst.data);
+    num_loops = len(dst.shape)
+    # if non-constant shape or strides, cannot dma. Returning None will keep original copying code
+    if any(not isinstance(x, tvm.tir.IntImm) for x in [*dst.shape, *src.strides, *dst.strides]):
+      logging.debug(f"DMA disqualified for non-constant shape: {dst.shape} or strides: {src.strides}, {dst.strides}")
+      return None
+
+    # compute the dma icnts and strides for the inner loops (this copying loop nest)
+    elem_bytes = tvm.runtime.DataType(src.dtype).bits // 8
+    loop_bounds = [ x.value for x in dst.shape ]
+    src_strides = [ x.value for x in src.strides ]
+    dst_strides = [ x.value for x in dst.strides ]
+
+    src_dma_icnts   = [1, 1, 1, 1]
+    src_dma_strides = [0, 0, 0, 0]   # 0th entry not used by C7x DMA
+    dst_dma_icnts   = [1, 1, 1, 1]
+    dst_dma_strides = [0, 0, 0, 0]   # 0th entry not used by C7x DMA
+
+    sync_axis = c7x_dma_add_inner_dims(-1, elem_bytes, loop_bounds, src_strides, dst_strides,
+                                        src_dma_icnts, src_dma_strides,
+                                        dst_dma_icnts, dst_dma_strides)
+
+    # C7x DMA can only support 4 dimensions, limit block sync to dim/axis 0 or 1,
+    #   because dim/axis 2 and 3 will be used for double buffering [2, num_blocks/2]
+    if (sync_axis > 1):
+      logging.debug(f"DMA disqualified for sync_axis={sync_axis} (>1), cannot double buffer")
+      return None
+
+    expr = tvm.tir.call_extern("int32", "c7x_dma_copy", src.data, dst.data,
+                               elem_bytes, sync_axis, src.elem_offset, dst.elem_offset,
+                               *src_dma_icnts, *src_dma_strides,
+                               *dst_dma_icnts, *dst_dma_strides)
     stmt = tvm.tir.Evaluate(expr)
     return stmt
 
@@ -789,6 +877,10 @@ def C7xDMATransform(f, mod, ctx):
     dma_buffers = []
     # list of c7x_dma_calls
     dma_copy_calls = []
+    # map from "c7x_dma_copy" op to list of outer loops
+    outer_loops_info = {}
+    # Stack of ForStmt visited
+    loop_nest = []
 
     # pre-order walk: keep track of variables and operations involved 
     # in dma copies
@@ -796,10 +888,13 @@ def C7xDMATransform(f, mod, ctx):
         builtin_call_extern = tvm.ir.Op.get("tir.call_extern")
         if isinstance(op, tvm.tir.Allocate):
             local_var_info[op.buffer_var] = { 'alloc' : op }
+        elif isinstance(op, tvm.tir.For):
+            loop_nest.append(op)
         elif op.op.same_as(builtin_call_extern) and \
              op.args[0].value == "c7x_dma_copy":
             dma_copy_calls.append(op)
             dma_buffers.extend([op.args[1], op.args[2]])
+            outer_loops_info[op] = loop_nest.copy()
 
     # post-order walk: remove allocation statements from inner loop;
     # they will be re-generated at outer loop level
@@ -807,6 +902,8 @@ def C7xDMATransform(f, mod, ctx):
         if isinstance(op, tvm.tir.Allocate):
             if op.buffer_var in dma_buffers:
                 return op.body
+        elif isinstance(op, tvm.tir.For):
+            loop_nest.pop()
 
     # helper function to determine dimensions of dma var
     def _get_dims(var):
@@ -830,7 +927,7 @@ def C7xDMATransform(f, mod, ctx):
     # Run the pre/post passes above
     stmt = tvm.tir.stmt_functor.ir_transform(
         f.body, _dma_pre, _dma_post,
-        ["tir.Allocate", "tir.Call"])
+        ["tir.Allocate", "tir.Call", "tir.For"])
 
     stmts = []   # hoisted statements
     for dma_call in dma_copy_calls:
@@ -849,10 +946,57 @@ def C7xDMATransform(f, mod, ctx):
             if var in local_var_info:
                 alloc = local_var_info[var]['alloc']
                 stmts.append(alloc)
+
         # let dma_object = c7x_dma_setup(src, dim3, dim2, dim1, dim0,
-        #                                dst, dim3, dim2, dim1, dim0)
+        #                                dst, dim3, dim2, dim1, dim0,
+        #                                num_blocks, sync_axis, src_offset, dst_offset,
+        #                                src_icnts[4], src_strides[3], dst_icnts[4], dst_strides[3])
+        elem_bytes = dma_call.args[3].value
+        sync_axis  = dma_call.args[4].value
+        src_inner_offset = dma_call.args[5]
+        dst_inner_offset = dma_call.args[6]
+        src_dma_icnts   = dma_call.args[7:11]
+        src_dma_strides = dma_call.args[11:15]
+        dst_dma_icnts   = dma_call.args[15:19]
+        dst_dma_strides = dma_call.args[19:23]
+
+        outer_loops = outer_loops_info[dma_call]
+        outer_loops_vars = [x.loop_var for x in outer_loops]
+        num_outer_loops = len(outer_loops)
+        outer_loop_bounds = [(x.extent - x.min) for x in outer_loops]
+        src_outer_strides = tvm.arith.detect_linear_equation(src_inner_offset, outer_loops_vars)
+        dst_outer_strides = tvm.arith.detect_linear_equation(dst_inner_offset, outer_loops_vars)
+        # Can only handle constant integer bounds and strides for outer loops, for now
+        assert all(isinstance(x, tvm.tir.IntImm)
+                   for x in [*outer_loop_bounds, *src_outer_strides, *dst_outer_strides])
+
+        # args: num_blocks, OFFSET[2]
+        num_blocks = 1
+        for bound in outer_loop_bounds:
+            num_blocks *= bound
+        src_dma_offset = src_outer_strides[num_outer_loops] * elem_bytes
+        dst_dma_offset = dst_outer_strides[num_outer_loops] * elem_bytes
+
+        # Add outer loops, do double buffering
+        if (num_outer_loops > 0):
+            # The on-chip block's indexing expression only depends on inner block loop variables.
+            # If the index expr depends on the outer loop vars, then it is off-chip.
+            if (src_outer_strides[num_outer_loops-1] != 0):  # copying in, dst is on-chip
+                axis = c7x_dma_add_outer_dims(sync_axis, elem_bytes, num_blocks,
+                                outer_loop_bounds, src_outer_strides,
+                                dst_dma_icnts, dst_dma_strides, src_dma_icnts, src_dma_strides)
+            else:                                            # copying out, src is on-chip
+                axis = c7x_dma_add_outer_dims(sync_axis, elem_bytes, num_blocks,
+                                outer_loop_bounds, dst_outer_strides,
+                                src_dma_icnts, src_dma_strides, dst_dma_icnts, dst_dma_strides)
+        assert (axis < MAX_C7X_DMA_DIMS)
+        logging.debug(f"dma params: blocks={num_blocks} sync_axis={sync_axis} src_offset={src_dma_offset} dst_offset={dst_dma_offset}")
+        logging.debug(f"            src_icnts={src_dma_icnts}, src_strides={src_dma_strides}, dst_icnts={dst_dma_icnts}, dst_strides={dst_dma_strides}")
+
         setup = tvm.tir.call_extern("handle", 
-                      "c7x_dma_setup", src, *src_dims, dst, *dst_dims)
+                      "c7x_dma_setup", src, *src_dims, dst, *dst_dims,
+                      num_blocks, sync_axis, src_dma_offset, dst_dma_offset,
+                      *src_dma_icnts, *src_dma_strides[1:], *dst_dma_icnts, *dst_dma_strides[1:])
         setup = tvm.tir.LetStmt(dma, setup, tvm.tir.Evaluate(1))   # dummy body
         stmts.append(setup)
 
