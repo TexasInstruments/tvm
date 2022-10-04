@@ -350,10 +350,10 @@ def SETransform(f, mod, ctx):
             extents = [l.extent for l in self.nest]
             coeffs = tvm.arith.detect_linear_equation(index, loop_vars)
             # The current model is that streaming only applies to accesses that 
-            # advance on the innermost axis, with a coefficent of 1. This is
-            # because the SE/SA assume dim0 == 1.
-            if not coeffs or len(coeffs) < 2 or coeffs[-2:] != [1,0]:
-                #logging.debug(f"streamify fail, coeffs[-2:] are {coeffs[-2:]}")
+            # advance on the innermost axis, with a coefficent of 1 or more.
+            # coefficient 1 means continguous access, more means strided access.
+            if not coeffs or len(coeffs) < 2 or coeffs[-2] == 0 or coeffs[-1] != 0:
+                logging.debug(f"streamify fail, coeffs are {coeffs}")
                 return False
             # extents[] should contain integer constants only, disqualify non-constant ones
             # e.g. mxnet yolo3_mobilenet1.0_coco: extents=[6, nkeep[0], 1], coeffs=[1, 6, 0]
@@ -482,6 +482,12 @@ def SETransform(f, mod, ctx):
                 #logging.debug("folded")
                 if ndims == 1:
                     self.flatten01 = True
+            elif ndims == 0 and dim > 1:
+                # For non-contiguous access (dim>1), insert the [1, icnt] and [1, dim]
+                # This is because the SE/SA assume dim0 == 1.
+                # For contiguous access (dim==1), insert the [icnt] and [1]
+                self.icnts.extend([1, icnt])
+                self.dims.extend([1, dim])
             else:
                 self.icnts.append(icnt)
                 self.dims.append(dim)
