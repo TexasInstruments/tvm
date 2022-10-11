@@ -31,6 +31,8 @@ ASM_SOURCES = $(wildcard *_embed.asm)
 OBJS     =$(patsubst %.c,%.obj,$(SOURCES))
 OBJS    +=$(patsubst %.asm,%.obj,$(ASM_SOURCES))
 
+CGT7X_EXT_LIBS ?=
+
 all: $(EXE_NAME)
 
 model_%.obj: model_%.c
@@ -47,6 +49,7 @@ $(EXE_NAME): $(OBJS)
                   $(TVM_C7X_ROOT)/dsp_syms.out.obj \
             -z -l $(TVM_C7X_ROOT)/tidl_api.lib \
                -l $(TVM_C7X_ROOT)/tvm_crt.lib \
+                  $(CGT7X_EXT_LIBS) \
                -l $(TVM_C7X_ROOT)/c7x_tvm.cmd \
             -o $@ -m $@.map
 	$(QUIET)$(STRIP) $@

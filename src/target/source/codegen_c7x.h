@@ -290,6 +290,8 @@ class CodeGenC7x final : public CodeGenC {
   void PrintStorageScope(const std::string& scope, std::ostream& os);  // NOLINT(*)
   void PrintDMASetup(const VarNode* dma_var, const CallNode* call);
   void PrintStreamConfig(const VarNode* config_var);
+  std::string PrintDLTensor(const CallNode* make_array, std::ostream& os);
+  std::string MangleExternCallFuncName(String func_name, const CallNode* call=nullptr);
 
   /*!
    * \brief Print ternary conditional operator implementing binary `op`

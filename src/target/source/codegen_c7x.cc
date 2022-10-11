@@ -424,6 +424,26 @@ void CodeGenC7x::InitFuncState(const PrimFunc& f) {
   CodeGenC::InitFuncState(f);
 }
 
+// Extern C/C++ function cannot handle "." in func names, replace with "_"
+std::string CodeGenC7x::MangleExternCallFuncName(String fname, const CallNode* call/*=nullptr*/) {
+  std::string c_func_name = fname;
+
+  // "tvm.contrib.sort.topk" func could return 1 or 2 tensors depending on the <what_to_return>,
+  //    mangle the <what_to_return> ("both", "values", "indices") into the function name
+  // <what_to_return> may be the 5th or 6th argument, but it is always at the position (num_args-2)
+  // e.g.  @tir.tvm_call_packed("tvm.contrib.sort.topk", in_t, val_t, ind_t, k, -1, "both", False)
+  // e.g.  @tir.tvm_call_packed("tvm.contrib.sort.topk", in_t, val_t, k, -1, "values", False)
+  // e.g.  @tir.tvm_call_packed("tvm.contrib.sort.topk", in_t, ind_t, k, -1, "indices", False)
+  if (c_func_name == "tvm.contrib.sort.topk") {
+    ICHECK(call != nullptr);
+    std::string what_to_return = Downcast<StringImm>(call->args[call->args.size() - 2])->value;
+    c_func_name += "." + what_to_return;
+  }
+
+  std::replace(c_func_name.begin(), c_func_name.end(), '.', '_');
+  return c_func_name;
+}
+
 // When a kernel is split between host and device (via tir.SplitHostDevice),
 // the host kernel uses the packed_func protocol to call the device
 // kernel. We disable packed call lowering (by disabling tir.LowerTVMBuiltin)
@@ -437,7 +457,7 @@ void CodeGenC7x::DeclarePackedCalls(const PrimFunc& f) {
 
   // declare the callees
   for(const CallNode *call : packed_calls) {
-    std::string fname = Downcast<StringImm>(call->args[0])->value;
+    std::string fname = MangleExternCallFuncName(Downcast<StringImm>(call->args[0])->value, call);
     PrintIndent();
     stream << "extern \"C\" ";
     PrintType(call->dtype, stream);
@@ -911,7 +931,7 @@ void CodeGenC7x::PrintCallExtern(Type ret_type, String global_symbol,
   // dma copy call handled by EvaluateNode, so ignore here
   if (global_symbol == "c7x_dma_copy")
     ;
-  else if (global_symbol == "tvm.contrib.sort.argsort_nms") {
+  else if (global_symbol == "tvm_contrib_sort_argsort_nms") {
     const CallNode *compute  = args[1].as<CallNode>();
     const CallNode *sort_num = args[2].as<CallNode>();
     const CallNode *output   = args[3].as<CallNode>();
@@ -931,15 +951,92 @@ void CodeGenC7x::PrintCallExtern(Type ret_type, String global_symbol,
     os << ")";
   }
   else {
-    os << global_symbol << "(";
+    /*
+    If an argument is tvm_stack_make_array(), turn it into DLTensor on stack
+       and pass the DLTensor into the function call as argument.  E.g.
+    @tir.tvm_call_packed("tvm.contrib.sort.topk",
+      @tir.tvm_stack_make_array(placeholder, @tir.tvm_stack_make_shape(1, 1, 1, 4096, dtype=handle), 0, 4, 0f32, 0, dtype=handle),
+      @tir.tvm_stack_make_array(topk_cpu, @tir.tvm_stack_make_shape(1, 1, 1, k, dtype=handle), 0, 4, 0f32, 0, dtype=handle),
+      @tir.tvm_stack_make_array(topk_cpu_1, @tir.tvm_stack_make_shape(1, 1, 1, k, dtype=handle), 0, 4, 0, 0, dtype=handle),
+      k, -1, "both", False, dtype=int32)
+    becomes C7x C/C++ code:
+    int64_t tmp_shape[4] = {1,1,1,4096,};
+    DLTensor tmp_tensor = { (void*)placeholder, {kDLCPU,0}, 4, {2,32,1}, tmp_shape, nullptr, 0};
+    int64_t tmp_shape1[4] = {1,1,1,{k|k>=0},};
+    DLTensor tmp_tensor1 = { (void*)topk_cpu, {kDLCPU,0}, 4, {2,32,1}, tmp_shape1, nullptr, 0};
+    int64_t tmp_shape2[4] = {1,1,1,{k|k>=0},};
+    DLTensor tmp_tensor2 = { (void*)topk_cpu1, {kDLCPU,0}, 4, {0,32,1}, tmp_shape2, nullptr, 0};
+    (void)tvm_contrib_sort_topk_both((void*)&tmp_tensor, (void*)&tmp_tensor1, (void*)&tmp_tensor2,
+                                     (int)k, (int)-1, (void*)"both", (bool)(bool)0);
+    */
+    std::vector<std::string> dltensors;
     for (size_t i = static_cast<size_t>(skip_first_arg); i < args.size(); ++i) {
-      this->PrintExpr(args[i], os);
+      if (args[i]->IsInstance<CallNode>() &&
+          args[i].as<CallNode>()->op.same_as(builtin::tvm_stack_make_array()))
+      {
+        dltensors.emplace_back(PrintDLTensor(args[i].as<CallNode>(), os));
+      }
+    }
+
+    os << global_symbol << "(";
+    int tensor_count = 0;
+    for (size_t i = static_cast<size_t>(skip_first_arg); i < args.size(); ++i) {
+      // print cast
+      os << "(";
+      PrintType(args[i].dtype(), os);
+      os << ")";
+
+      // print arg
+      if (args[i]->IsInstance<CallNode>() &&
+          args[i].as<CallNode>()->op.same_as(builtin::tvm_stack_make_array()))
+      {
+        os << "&" << dltensors[tensor_count++];
+      } else {
+        this->PrintExpr(args[i], os);
+      }
       if (i < args.size() - 1) {
-	os << ", ";
+        os << ", ";
       }
     }
     os << ")";
   }
+}
+
+// Construct a DLTensor on stack, so that it can be passed into external function call
+// E.g.
+// @tir.tvm_stack_make_array(placeholder, @tir.tvm_stack_make_shape(1, 1, 1, 4096, dtype=handle), 0, 4, 0f32, 0, dtype=handle),
+// becomes C7x C/C++ code:
+// int64_t tmp_shape[4] = {1,1,1,4096,};
+// DLTensor tmp_tensor = { (void*)placeholder, {kDLCPU,0}, 4, {2,32,1}, tmp_shape, nullptr, 0};
+std::string CodeGenC7x::PrintDLTensor(const CallNode *make_array, std::ostream& os)
+{
+  const PrimExpr   data  = make_array->args[0];
+  const CallNode  *shape = make_array->args[1].as<CallNode>();
+  const PrimExpr strides = make_array->args[2];
+  const IntImmNode *ndim = make_array->args[3].as<IntImmNode>();
+  const PrimExpr   dtype = make_array->args[4];
+  const PrimExpr elem_offset = make_array->args[5];
+  ICHECK(data.get() != nullptr && ndim != nullptr && dtype.get() != nullptr);
+  ICHECK(shape != nullptr && shape->op.same_as(builtin::tvm_stack_make_shape()));
+  ICHECK(Downcast<IntImm>(strides)->value == 0);
+  DataType dt = dtype.dtype();
+
+  this->PrintIndent();
+  std::string shape_var = GetUniqueName("tmp_shape");
+  this->stream << "int64_t " << shape_var << "[" << ndim->value << "] = {";
+  for (auto &dim : shape->args)
+    this->stream << dim << ",";
+  this->stream << "};\n";
+
+  this->PrintIndent();
+  std::string tensor_var = GetUniqueName("tmp_tensor");
+  this->stream << "DLTensor " << tensor_var << " = { (void*)";
+  this->PrintExpr(data, this->stream);
+  this->stream << ", {kDLCPU,0}, " << ndim->value << ", "
+               << "{" << dt.code() << "," << dt.bits() << "," << dt.lanes() << "}, "
+               << shape_var << ", " << "nullptr, " << elem_offset
+               << "};\n";
+  return tensor_var;
 }
 
 // verbatim from CodegenC
@@ -1074,8 +1171,8 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
     this->PrintFuncCall(packed_func_name, num_args);
   } else if (op->op.same_as(builtin::tvm_call_packed())) {
     const StringImmNode* s = op->args[0].as<StringImmNode>();
-    std::string func_name = s->value;
-    this->PrintCallExtern(GetType(GetRef<PrimExpr>(op)), s->value, op->args, true, os);
+    std::string func_name = MangleExternCallFuncName(s->value, op);
+    this->PrintCallExtern(GetType(GetRef<PrimExpr>(op)), func_name, op->args, true, os);
   } else if (op->op.same_as(builtin::tvm_throw_last_error())) {
     this->PrintIndent();
     this->stream << "return -1;\n";

@@ -73,6 +73,8 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
   if gen_new_data:
     import tvm
     output = tvm.relay.create_executor(kind="graph", mod=mod).evaluate()(**inputs, **weights)
+    if isinstance(output, List):
+      output = output[0]
     np.save(get_data_file(artifacts_dir, "ref_out"), output.numpy())
 
   outputs["ref_out"] = np.load(get_data_file(artifacts_dir, "ref_out"))
