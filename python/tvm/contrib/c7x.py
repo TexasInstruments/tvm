@@ -995,7 +995,7 @@ def C7xDMATransform(f, mod, ctx):
                 axis = c7x_dma_add_outer_dims(sync_axis, elem_bytes, num_blocks,
                                 outer_loop_bounds, dst_outer_strides,
                                 src_dma_icnts, src_dma_strides, dst_dma_icnts, dst_dma_strides)
-        assert (axis < MAX_C7X_DMA_DIMS)
+            assert (axis < MAX_C7X_DMA_DIMS)
         logging.debug(f"dma params: blocks={num_blocks} sync_axis={sync_axis} src_offset={src_dma_offset} dst_offset={dst_dma_offset}")
         logging.debug(f"            src_icnts={src_dma_icnts}, src_strides={src_dma_strides}, dst_icnts={dst_dma_icnts}, dst_strides={dst_dma_strides}")
 
