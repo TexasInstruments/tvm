@@ -726,6 +726,50 @@ class ConvertMaxMinToClip(ExprMutator):
                                                                        max_val.item())
         return super().visit_call(call)
 
+class ConvertBroadcastAddtoBiasAdd(ExprMutator):
+
+    def get_broadcasting_constant_axis(self, call : relay.expr.Call):
+        """
+        Get constant (flattened) and axis if op is broadcasting over a single channel
+        return None if not applicable
+        """
+        arg0 = call.args[0]
+        arg1 = call.args[1]
+        if isinstance(arg1, relay.Constant):
+            const_shape = arg1.checked_type.shape
+            tensor_shape = arg0.checked_type.shape
+
+            # Ensure there is only one axis with size != 1 and find its size
+            const_size = 1
+            for i in range(len(const_shape)-1, -1, -1):
+                if const_shape[i] != 1:
+                    if const_size == 1:
+                        const_size = const_shape[i]
+                    else:  # there can only be one dimension to be scaled channel-wise
+                        return None, None
+
+            if const_size == 1:
+                return None, None
+
+            # Ensure the constant axis size matches the tenor size
+            # If it matches, flatten and return the constant and the axis
+            val = None
+            for i in range(len(tensor_shape)-1, -1, -1):
+                if tensor_shape[i] == const_size:
+                    val, axis = arg1.data.numpy().flatten(), i
+            if val is not None:
+                return relay.const(val), axis
+
+        return None, None
+
+    def visit_call(self, call):
+        if call.op.name == "add":
+            val, axis = self.get_broadcasting_constant_axis(call)
+            if val is not None and axis is not None:
+                return relay.nn.bias_add(super().visit(call.args[0]), val, axis=axis)
+
+        return super().visit_call(call)
+
 class ConvertArgMaxToKeepDims(ExprMutator):
     """
     Convert argmax() that reduces dims to argmax that keeps dims plus squeeze()
@@ -2176,6 +2220,8 @@ class TIDLCompiler:
         mod['main'] = RemoveTrainingOperators().visit(mod['main'])
         mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
         mod['main'] = ConvertArgMaxToKeepDims().visit(mod['main'])
+        mod = relay.transform.InferType()(mod)
+        mod['main'] = ConvertBroadcastAddtoBiasAdd().visit(mod['main'])
         if has_qnn_ops:
             mod = relay.transform.InferType()(mod)
             mod['main'] = RemoveIdentityClip().visit(mod['main'])
