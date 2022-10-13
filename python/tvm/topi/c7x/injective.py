@@ -405,13 +405,6 @@ def find_split(dims, elem_bytes, limit):
             nblocks = int(blocksize/limit)
             while int(dim/nblocks) * nblocks != dim:
                 nblocks += 1
-            iter_range = int(blocksize/nblocks/elem_bytes)
-
-            # If block split results in odd number of iterations, do not split
-            # Downstream passes cannot handle loops with odd iteration counts
-            if iter_range % 2 != 0:
-                #print(f"Invalid blocksize resulting in odd range: {iter_range}")
-                return (0, 1, 0)
 
             return (axis+1, nblocks, int(blocksize/nblocks))
 
