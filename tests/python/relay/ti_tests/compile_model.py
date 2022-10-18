@@ -44,7 +44,7 @@ def compile_relay(mod_orig, params, input_list,
   ------
   True for success, False for failure
   """
-  from tvm.relay.backend.contrib import tidl
+  from tvm.relay.backend.contrib.tidl import tidl
   from tvm import relay
 
   def get_tidl_tools_path():

@@ -14,5 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Contributed relay backend modules."""
-from . import tidl
+"""TI Deep Learning Library codegen modules for Relay."""
+from . import *
+from .reduce_subgraph_size import *

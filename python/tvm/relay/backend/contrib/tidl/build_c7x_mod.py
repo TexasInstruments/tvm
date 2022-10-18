@@ -316,9 +316,9 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
     print("Building C7x tvm deployable module: building... (log in c7x_deploy_mod.log)")
     # if script from python package:      tvm/relay/backend/contrib/tidl_build_c7x_mod.py
     # if script from dev repo: tvm/python/tvm/relay/backend/contrib/tidl_build_c7x_mod.py
-    tvm_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+    tvm_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
     if not os.path.exists(os.path.join(tvm_root, "src/runtime/contrib/tidl/c7x")):
-        tvm_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+        tvm_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
     tvm_c7x_root = os.path.join(tvm_root, "src/runtime/contrib/tidl/c7x")
     abs_temp_folder = os.path.abspath(tidl_compiler.temp_folder)
     log_file = os.path.join(abs_temp_folder, "c7x_deploy_tvm.log")

@@ -157,10 +157,6 @@ def parse_args():
     parser.add_argument('--host', action='store_false',
                         dest="target",
                         help='generate code for host emulation (e.g. x86_64 core)')
-    parser.add_argument('--deny', dest='denylist', action='append',
-                        help='force Relay operator to be unsupported by TIDL, comma-separated string')
-    parser.add_argument('--nooffload', action='store_true',
-                        help='produce a host-only deployable module without TIDL offload')
 
     # Inference arguments
     parser.add_argument('--dlr', action='store_true',
