@@ -116,11 +116,7 @@ function test_tvm {
     return $retval
 }
 
-function run_tvm_tidl_tests {
-    # Use TVM to compile a unit test
-    local TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests
-    cd $TEST_DIR
-
+function setup_tvm_tidl_tests {
     # Set up environment variables for TVM+TIDL compilation
     # ARM64_GCC_PATH already set in build_aarch64_ge
     export TIDL_TOOLS_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/tidl_tools)
@@ -129,6 +125,34 @@ function run_tvm_tidl_tests {
     # For now, use 2.1.1.LTS in the previous PSDK 8.2.
     export CGT7X_ROOT=$(ls -d ${PSDKR_PATH}/../ti-processor-sdk-rtos-j721e-evm-08_02_00_05/ti-cgt-c7000_*)
     pip3 install pytest opencv-python
+
+    # Export workspace dir and mount it on EVM
+    ssh root@${EVM_IP} 'mkdir -p /home/sdomcbld; mount -t nfs sdomc-build4.dhcp.ti.com:/home/sdomcbld /home/sdomcbld'
+}
+
+function run_tvm_tidl_unit_tests {
+    # Use TVM to compile a unit test
+    local TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests/unit_tests
+    cd $TEST_DIR
+
+    # Run compilation tests on host
+    python3 ./run_unit_tests.py
+    retval=$?
+    if [ $retval -ne 0 ]; then
+        return $retval
+    fi
+
+    # Run inference tests on EVM (export workspace dir and mount it on EVM)
+    ssh root@${EVM_IP} 'cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/unit_tests; python3 ./run_unit_tests.py'
+    retval=$?
+
+    return $retval
+}
+
+function run_tvm_tidl_tests {
+    # Use TVM to compile a unit test
+    local TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests
+    cd $TEST_DIR
 
     # Run compilation tests
     python3 ./test_compile.py
@@ -147,7 +171,6 @@ function run_tvm_tidl_tests {
     fi
 
     # Run inference tests on EVM (export workspace dir and mount it on EVM)
-    ssh root@${EVM_IP} 'mkdir -p /home/sdomcbld; mount -t nfs sdomc-build4.dhcp.ti.com:/home/sdomcbld /home/sdomcbld'
     ssh root@${EVM_IP} 'cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests; python3 ./test_infer.py'
     retval=$?
 
@@ -164,8 +187,13 @@ retval=$?
 
 # If test_tvm succeeds, run TVM+TIDL tests in tests/python/relay/ti_tests
 if [ $retval -eq 0 ]; then
-    run_tvm_tidl_tests
+    setup_tvm_tidl_tests
+    run_tvm_tidl_unit_tests
     retval=$?
+    if [ $retval -eq 0 ]; then
+        run_tvm_tidl_tests
+        retval=$?
+    fi
 fi
 
 exit $retval
