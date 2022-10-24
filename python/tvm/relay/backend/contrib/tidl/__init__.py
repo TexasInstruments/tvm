@@ -16,4 +16,5 @@
 # under the License.
 """TI Deep Learning Library codegen modules for Relay."""
 from . import *
+from .tidl import *
 from .reduce_subgraph_size import *
