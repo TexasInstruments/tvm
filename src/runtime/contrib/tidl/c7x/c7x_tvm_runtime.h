@@ -187,80 +187,64 @@ private:
 
 
 //---------------------------------------------------------------------------------
-// Layout represents the type of a multi-dimensional tensor in memory. It's a completely
-// compile-time representation -- there is no runtime state.
-template<typename Elem, int D3=1, int D2=1, int D1=1, int D0=1>
-class Layout
-{
-public:
-   using ElementType = Elem;
-   static const int ElemSize = sizeof(Elem);
-   static const int Dim3 = D3;
-   static const int Dim2 = D2;
-   static const int Dim1 = D1;
-   static const int Dim0 = D0;
-   static const int size = ElemSize * D0 * D1 * D2 * D3;
-   static void dump()
-   {
-     #if DEBUG
-     printf("Layout: [%d][%d][%d][%d] ElemSize=%d\n",
-            D3, D2, D1, D0, ElemSize);
-     #endif
-   }
-};
-
-//---------------------------------------------------------------------------------
-// A Buffer combines a Layout with an actual location. There are two buffer
+// A Buffer models elem type, num elems and an actual location. There are two buffer
 // types: a single buffer, and a double buffer which is two adjacent single
 // buffers.
 // BufferBase is the base class common to both types.
-template<typename BufferType>
+template<typename ElemType_>
 class BufferBase
 {
 public:
-  using Type = BufferType;
+  using ElemType = ElemType_;
   // The constructor binds the buffer to an actual location.
-  BufferBase(void *p) : ptr(p) {}
-  BufferBase() : ptr(nullptr) {}
-  void* get() { return ptr; }
+  BufferBase(uint32_t num_elems, void *ptr) : num_elems_(num_elems), ptr_(ptr) {}
+  void* get() { return ptr_; }
   // This method is called after the DMA completes each block of a transfer.
   virtual void sync() {}
 protected:
-  void* ptr = nullptr;
+  uint32_t num_elems_ = 0;
+  void* ptr_ = nullptr;
 };
 
 // Single buffer
-template<typename Layout_>
-class Buffer : public BufferBase<Buffer<Layout_>>
+template<typename ElemType_>
+class Buffer : public BufferBase<Buffer<ElemType_>>
 {
   public:
-  using Layout = Layout_;
-  using Base = BufferBase<Buffer<Layout>>;
+  using ElemType = ElemType_;
+  using Base = BufferBase<Buffer<ElemType_>>;
   using Base::Base;
   static const bool isDB = false;
-  Buffer() : Base() {}
-  Buffer(void *p) : Base(p) {}
-  static const int size = Layout::size;
+
+  Buffer(uint32_t num_elems, void *ptr) : Base(num_elems, ptr) { }
 };
 
 // Double buffer. The state member indicates the ping/pong status.
-template<typename Layout_>
-class DoubleBuffer : public BufferBase<DoubleBuffer<Layout_>>
+template<typename ElemType_>
+class DoubleBuffer : public BufferBase<DoubleBuffer<ElemType_>>
 {
   public:
-  using Layout = Layout_;
-  using Base = BufferBase<DoubleBuffer<Layout>>;
+  using ElemType = ElemType_;
+  using Base = BufferBase<DoubleBuffer<ElemType_>>;
   using Base::Base;
   static const bool isDB = true;
-  static const int size = 2 * Layout::size;
+
+  DoubleBuffer(uint32_t num_block_elems, void *ptr) :
+      Base(num_block_elems * 2, ptr),
+      block_size_(num_block_elems * sizeof(ElemType)) {}
+  DoubleBuffer(uint32_t num_block_elems, AllocL2Context& l2) :
+      Base(num_block_elems * 2, l2.allocate(num_block_elems * sizeof(ElemType) * 2)),
+      block_size_(num_block_elems * sizeof(ElemType)) {}
+
   void* get()
   {
-    return (state == 0) ? Base::ptr
-                        : (void *)((char *)Base::ptr + Layout::size);
+    return (state == 0) ? Base::ptr_
+                        : (void *)((char *)Base::ptr_ + block_size_);
   }
   void sync() { state ^= 1; }
   private:
   int state = 0;
+  uint32_t block_size_ = 0;
 };
 
 //---------------------------------------------------------------------------------
@@ -303,50 +287,6 @@ public:
 
 public:
   AccessPattern() {}
-
-  // Construct default access pattern, given a layout. This results in a simple
-  // linear access pattern. Generally this will flatten to a single dimension
-  // unless some of the dimensions are too big to represent.
-  template<typename Layout>
-  AccessPattern(const Layout* layout)
-  {
-     add_dim(Layout::Dim0, Layout::ElemSize);
-     add_dim(Layout::Dim1, Layout::Dim0 * Layout::ElemSize);
-     add_dim(Layout::Dim2, Layout::Dim1 * Layout::Dim0 * Layout::ElemSize);
-     add_dim(Layout::Dim3, Layout::Dim2 * Layout::Dim1 *
-                           Layout::Dim0 * Layout::ElemSize);
-  }
-
-  // Add an additional dimension to the AP. Dimensions should be added
-  // from inner to outer.
-  void add_dim(uint32_t count, uint32_t stride)
-  {
-    // First dimension has implied stride of 1 byte, so adjust count
-    if (naxes == 0)
-    {
-      count *= stride;
-      stride = 1;
-    }
-    // If new dimension's stride matches previous dimension's extent, and
-    // the count does not overflow, flatten the new dimension into the
-    // previous one.
-    if (naxes > 0 && (naxes-1) != sync_axis &&
-        stride == axes[naxes-1].extent &&
-	count * axes[naxes-1].count <= USHRT_MAX)
-    {
-      axes[naxes-1].count *= count;
-      axes[naxes-1].extent *= count;
-    }
-    else if (naxes+1 == maxaxes)
-       // error
-       ;
-    else
-      axes[naxes++] = APAxis(count, stride);
-  }
-  void add_sync() { if (naxes >0) sync_axis = naxes-1; }
-
-  // total extent (== extent of last dimension)
-  uint64_t current_extent() { return naxes ? axes[naxes-1].extent : 0; }
 
   void dump()
   {

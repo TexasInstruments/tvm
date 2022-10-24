@@ -1348,10 +1348,8 @@ void CodeGenC7x::VisitExpr_(const SelectNode* op, std::ostream& os) {  // NOLINT
 // which manages the transfers.
 // For example:
 //
-//  Buffer<Layout<float, 1, 672, 14, 14>>
-//      A_buffer(A);
-//  DoubleBuffer<Layout<float, 1, 8, 14, 14>>
-//       A_local_buffer(L2Context.allocate(A_local_buffer.size));
+//  Buffer<float>       A_buffer(1*672*14*14, A);
+//  DoubleBuffer<float> A_local_buffer(1*8*14*14, L2Context);
 //  auto A_dma = create_DMA(DMAContext, A_buffer, A_local_buffer);
 
 void CodeGenC7x::PrintDMASetup(const VarNode* dma_var, const CallNode* call) {
@@ -1370,23 +1368,25 @@ void CodeGenC7x::PrintDMASetup(const VarNode* dma_var, const CallNode* call) {
 	    prim_type = ptr_type->element_type.as<PrimTypeNode>();
       ICHECK(prim_type);
 
-      // example output: Buffer<Layout<float, 1, 672, 14, 14>> A_buffer(A);
+      // example output: Buffer<float> A_buffer(1*672*14*14, A);
       this->PrintIndent();
       stream << buffer_type << "<";
-      stream << "Layout<";
       PrintType(prim_type->dtype, stream);
+      stream << "> " << buffer_name << "(";
       // If we do "stream << call->args[n+i], we are using tir's representation printer
       //     (ReprPrint), which will print "(int64)1" for 64-bit IntImm of value 1, which
       //     will cause cl7x compilation error.  So, we print out IntImm value for C7x code,
       //     which will simply be "1" for the above case.
       for (int i = 1; i <= 4; ++i)
-	    stream << ", " << Downcast<IntImm>(call->args[n+i]).get()->value;
-      stream << ">> " << buffer_name << "(";
+      {
+	      stream << Downcast<IntImm>(call->args[n+i]).get()->value;
+        if (i != 4) stream << "*";
+      }
       // If this is a local buffer, call the allocator to initialize it
       if (is_local)
-	    stream << "L2Context.allocate(" << buffer_name << ".size)";
+	      stream << ", L2Context";
       else
-	    stream << GetVarID(buffer_ptr);
+	      stream << ", " << GetVarID(buffer_ptr);
       stream << ");\n";
 
       return buffer_var.get();
