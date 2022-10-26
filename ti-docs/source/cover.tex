@@ -1,0 +1,31 @@
+\definecolor{TIRed}{cmyk}{0.0, 1.0, 1.0, 0.0} % Pantone 485 C
+\definecolor{TIGray}{cmyk}{0.0, 0.0, 0.0, 0.40} % Pantone Cool Gray 8C
+\definecolor{TIBlack}{cmyk}{0.0, 0.0, 0.0, 1.0} % Process Black
+\definecolor{TIWhite}{cmyk}{0.0, 0.0, 0.0, 0.0} % Process White
+\definecolor{keywordtype}{cmyk}{0.0, 1.0, 1.0, 0.0} % Comments
+
+\newcommand{\heading}[1]{\bfseries #1}
+\def\copyrightmark{Copyright {\copyright} ${copyright}}
+
+\TPGrid{8500}{11000}
+\begin{titlepage}
+        \begin{textblock}{6750}(875,250)
+        \end{textblock}
+	    \includegraphics[width=\paperwidth]{../../source/images/ti_red_bar.pdf}
+        \begin{textblock}{6750}(875,2000)
+	    \raggedright\Huge\bfseries{\color{TIBlack}${title}}
+        \end{textblock}
+        \begin{textblock}{6750}(875,2500)
+	    \raggedright\Huge{\color{TIBlack}${revision}}
+        \end{textblock}
+        \begin{textblock}{6750}(700,7000)
+	    \small{\color{TIBlack}\copyrightmark}
+        \end{textblock}
+        \begin{textblock}{6750}(700,7400)
+        \small{Online HTML version available }{\href{https://software-dl.ti.com/codegen/docs/tvm/${guide}/index.html}{here}}
+        \end{textblock}
+	    \ \\ % This keeps the frontmatter from getting put on the cover page!
+
+\end{titlepage}
+
+
