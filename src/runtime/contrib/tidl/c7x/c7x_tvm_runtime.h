@@ -621,13 +621,14 @@ template <> struct SA_veclen_flag<64>
    { static const __SA_VECLEN val = __SA_VECLEN_64ELEMS; };
 
 // SE Configuration: Full dimmensionality support for C7x {ICNT0:ICNT5} and {DIM1:DIM5}
-template <typename Type, int Veclen,
-  unsigned icnt0, unsigned icnt1, unsigned icnt2, unsigned icnt3, unsigned icnt4,
-  unsigned icnt5, unsigned dim1, unsigned dim2, unsigned dim3, unsigned dim4, unsigned dim5>
+template <typename Type, int Veclen>
 class SEConfig
 {
 public:
-  SEConfig() : se_params(__gen_SE_TEMPLATE_v1())
+  SEConfig(unsigned icnt0,
+           unsigned icnt1, unsigned icnt2, unsigned icnt3, unsigned icnt4, unsigned icnt5,
+           unsigned dim1,  unsigned dim2,  unsigned dim3,  unsigned dim4,  unsigned dim5
+          ) : se_params(__gen_SE_TEMPLATE_v1())
   {
     se_params.ELETYPE  = SE_element_type_flag<sizeof(Type)>::val;
     se_params.VECLEN   = SE_veclen_flag<Veclen>::val;
@@ -650,14 +651,14 @@ private:
 };
 
 // SA Configuration: Full dimmensionality support for C7x {ICNT0:ICNT5} and {DIM1:DIM5}
-template <typename Type, int Veclen,
-          unsigned icnt0, unsigned icnt1, unsigned icnt2, unsigned icnt3,
-          unsigned icnt4, unsigned icnt5,  unsigned dim1, unsigned dim2, unsigned dim3,
-          unsigned dim4, unsigned dim5>
+template <typename Type, int Veclen>
 class SAConfig
 {
 public:
-  SAConfig() : sa_params(__gen_SA_TEMPLATE_v1())
+  SAConfig(unsigned icnt0,
+           unsigned icnt1, unsigned icnt2, unsigned icnt3, unsigned icnt4, unsigned icnt5,
+           unsigned dim1,  unsigned dim2,  unsigned dim3,  unsigned dim4,  unsigned dim5
+          ) : sa_params(__gen_SA_TEMPLATE_v1())
   {
     sa_params.VECLEN   = SA_veclen_flag<Veclen>::val;
     sa_params.DIMFMT   = __SA_DIMFMT_6D; // assigning to 6D always has no h/w overhead

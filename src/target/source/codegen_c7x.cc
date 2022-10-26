@@ -1442,20 +1442,21 @@ void CodeGenC7x::PrintStreamConfig(const VarNode* config_var) {
   const std::string vid = AllocVarID(config_var);
   const StreamDesc& desc = stream_info_.GetDesc(config_var);
 
-  // SEConfig<type, veclen, icnt0, icnt1, icnt2, icnt3, dim0, dim1, dim2> vid;
+  // SEConfig<type, veclen> vid(icnt0, icnt1, ..., icnt5, dim1, ..., dim5);
   this->PrintIndent();
   stream << desc.kind << "Config<";
   PrintType(desc.dtype, stream);
   stream << ", " << desc.veclen;
+  stream << "> " << vid << "(";
   for (int i = 0; i < 6; ++i) { // generate six params since ICNT5 is max for SE/SA
-    stream << ", ";
     this->PrintExpr(desc.icnts[i], stream);
+    stream << ", ";
   }
   for (int i = 0; i < 5; ++i) { // generate five params since DIM0=1 by default and DIM5 is max for SE/SA
-    stream << ", ";
+    if (i != 0)  stream << ", ";
     this->PrintExpr(desc.dims[i], stream);
   }
-  stream << "> " << vid << ";\n";
+  stream << ");\n";
 }
 
 // adapted from CodegenC
