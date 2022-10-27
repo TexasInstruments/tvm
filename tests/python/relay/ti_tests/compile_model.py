@@ -20,111 +20,7 @@
 import os
 import sys
 
-def compile_relay(mod_orig, params, input_list,
-                  platform, is_target, w_tidl, w_c7x, artifacts_folder, tidl_bits=8):
-  """ Compile a model in Relay IR graph for a single (platform, target, tidl, c7x) config
-
-  Parameters
-  ----------
-  mod_orig : tvm.relay.Module
-      Original Relay IR graph
-  params : dict of str to tvm.NDArray
-      The parameter dict to be used by relay
-  platform : str
-      in ["J7", "J721S2", "AM672A"]
-  input_list : list of dictionary for multiple calibration data
-      A dictionary where the key in input name and the value is input tensor
-  is_target : bool
-      building for target or host (emulation)
-  w_tidl : bool
-      with TIDL offload or not
-  w_c7x : bool
-      with c7x code generation for layers not offloaded to TIDL or not
-  Return
-  ------
-  True for success, False for failure
-  """
-  from tvm.relay.backend.contrib.tidl import tidl
-  from tvm import relay
-
-  def get_tidl_tools_path():
-    tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
-    if tidl_tools_path is None:
-      raise Exception("Environment variable TIDL_TOOLS_PATH is not set!")
-    relay_import_lib = os.path.join(tidl_tools_path, "tidl_model_import_relay.so")
-    if not os.path.exists(relay_import_lib):
-      raise Exception("${TIDL_TOOLS_PATH}/tidl_model_import_relay.so does not exist!")
-    return tidl_tools_path
-
-  def get_arm_compiler():
-    arm_gcc_path = os.getenv("ARM64_GCC_PATH")
-    if arm_gcc_path is None:
-        raise Exception("Environment variable ARM64_GCC_PATH is not set!")
-    arm_gcc = os.path.join(arm_gcc_path, "bin", "aarch64-none-linux-gnu-g++")
-    if not os.path.exists(arm_gcc):
-        raise Exception("${ARM64_GCC_PATH}/aarch64-none-linux-gnu-g++ does not exist!")
-    return arm_gcc
-
-  def get_c7x_compiler_path():
-    cgt7x_root = os.getenv("CGT7X_ROOT")
-    if cgt7x_root is None:
-        raise Exception("Environment variable CGT7X_ROOT is not set!")
-    cl7x_bin = os.path.join(cgt7x_root, "bin", "cl7x")
-    if not os.path.exists(cl7x_bin):
-        raise Exception("${CGT7X_ROOT}/cl7x does not exist!")
-    return cgt7x_root
-
-
-  try:
-    tidl_tools_path = get_tidl_tools_path()
-    if is_target:
-      arm_gcc = get_arm_compiler()
-    if w_c7x:
-      cgt7x_root = get_c7x_compiler_path()
-  except Exception as ex:
-    print(f"{__file__}: Skip compilation because: {ex}")
-    return False
-
-  os.makedirs(artifacts_folder, exist_ok = True)
-  path_lib = os.path.join(artifacts_folder, "deploy_lib.so")
-  path_graph = os.path.join(artifacts_folder, "deploy_graph.json")
-  path_params = os.path.join(artifacts_folder, "deploy_param.params")
-  [os.path.exists(f) and os.remove(f) for f in [path_lib, path_graph, path_params]]
-
-  tidl_compiler = tidl.TIDLCompiler(platform=platform, version="7.3",
-                                    tidl_tools_path=tidl_tools_path,
-                                    artifacts_folder=artifacts_folder,
-                                    tensor_bits=tidl_bits,
-                                    max_num_subgraphs=((64 if w_c7x else 16) if w_tidl else 0),
-                                    deny_list="",
-                                    c7x_codegen=(1 if w_c7x else 0),
-                                    accuracy_level=(1 if (tidl_bits == 8) else 0),
-                                    advanced_options={'calibration_iterations': 10}
-                                   )
-
-  if w_tidl or w_c7x:
-    mod, status = tidl_compiler.enable(mod_orig, params, input_list)
-  else:
-    mod, status = mod_orig, 0
-
-  target = "llvm -device=arm_cpu -mtriple=aarch64-linux-gnu" if is_target else "llvm"
-
-  with tidl.build_config(tidl_compiler=tidl_compiler):
-    graph, lib, params = relay.build_module.build(mod, target=target, params=params)
-  tidl.remove_tidl_params(params)
-
-  if is_target:
-    lib.export_library(path_lib, cc=arm_gcc)
-  else:
-    lib.export_library(path_lib)
-  with open(path_graph, "w") as fo:
-    fo.write(graph)
-  with open(path_params, "wb") as fo:
-    fo.write(relay.save_param_dict(params))
-
-  print("Artifacts can be found at " + artifacts_folder)
-  return True
-
+from tvm.contrib.tidl import compile
 
 def compile_model(model_name, platform, is_target, w_tidl, w_c7x):
   """ Compile a model for a single (platform, target, tidl, c7x) config """
@@ -135,8 +31,8 @@ def compile_model(model_name, platform, is_target, w_tidl, w_c7x):
   mod, params = get_relay_model(model_name)
   input_list = get_calib_inputs(model_name)
   artifacts_folder = get_artifacts_folder(model_name, platform, is_target, w_tidl, w_c7x)
-  ret = compile_relay(mod, params, input_list, platform, is_target, w_tidl, w_c7x,
-                      artifacts_folder, tidl_bits=get_tidl_bits(model_name))
+  ret = compile.compile_relay(mod, params, input_list, platform, is_target, w_tidl, w_c7x,
+                      artifacts_folder, tidl_tensor_bits=get_tidl_bits(model_name))
   return ret
 
 

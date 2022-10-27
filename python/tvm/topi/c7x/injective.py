@@ -23,7 +23,7 @@ import tvm
 from tvm import te
 from tvm import tir
 from tvm.runtime import DataType
-from tvm.contrib.c7x import register_c7x_local_mem
+from tvm.contrib.tidl.c7x import register_c7x_local_mem
 from .. import utils, tag
 
 logging = logging.getLogger("c7x_injective")

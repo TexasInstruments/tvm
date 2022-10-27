@@ -20,7 +20,7 @@ import os
 import sys
 import subprocess
 import tvm
-import tvm.contrib.c7x as c7x
+import tvm.contrib.tidl.c7x as c7x
 from tvm import relay
 from tvm import transform
 from tvm.relay.expr_functor import ExprMutator

@@ -40,7 +40,6 @@ class c7x_target_config():
       self.target.__exit__(type, value, traceback)
       self.pass_context.__exit__(type, value, traceback)
 
-# in python/tvm/contrib/c7x.py
 # Create custom PassContext, used by tvm.lower and tvm.build.
 # Used within a 'with' statement, the context is saved in persistent state and available
 # via PassContext.current().

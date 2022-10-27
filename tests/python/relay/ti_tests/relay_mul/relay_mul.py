@@ -16,7 +16,7 @@ def compile_model(model_name, args) -> List:
     import tvm
     from tvm import relay
 
-    from compile_model import compile_relay
+    from tvm.contrib.tidl.compile import compile_relay
 
     # define graph in relay
     a_shape = (672, 14, 14)
@@ -43,7 +43,8 @@ def compile_model(model_name, args) -> List:
 
     artifacts_folder = "./artifacts_" + model_name +  ("_target" if args.target else "_host")
     status = compile_relay(mod, params, input_dict_list, "J7",
-                          is_target=True, w_tidl=False, w_c7x=True, artifacts_folder=artifacts_folder, tidl_bits=8)
+                           compile_for_device=True, enable_tidl_offload=False, enable_c7x_codegen=True,
+                           artifacts_folder=artifacts_folder, tidl_tensor_bits=8)
 
     if status != 1:
         print("TIDL compilation failed")
