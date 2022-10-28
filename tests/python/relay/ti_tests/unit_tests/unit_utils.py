@@ -114,3 +114,17 @@ def check_occurrence(pattern:str, text_file:str) -> int:
   return count
 
 
+def build_and_set_ext_lib(src_name, src_dir, build_dir):
+  import subprocess
+  build_dir = os.path.abspath(build_dir)
+  try:
+    subprocess.run(["make", "-f", "Makefile.ext_lib", f"NAME={src_name}",
+                    f"SRC_DIR={src_dir}", f"BUILD_DIR={build_dir}"], check=True)
+  except:
+    print(f"Build external library for {model_name} failed")
+    return False
+  ext_libs = os.environ.get("CGT7X_EXT_LIBS", "")
+  ext_libs += f" -l {build_dir}/{src_name}.lib"
+  os.environ["CGT7X_EXT_LIBS"] = ext_libs
+  return True
+
