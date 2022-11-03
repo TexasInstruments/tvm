@@ -62,7 +62,10 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
 
   if gen_new_data:
     for var, shape in input_shapes + weight_shapes:
-      data = np.random.randint(0, 255, size=shape).astype('float32') / 256.0
+      if var.endswith("_s7"):
+        data = np.arange(-7.0, 7.0, 14.0 / np.prod(shape), dtype=float).reshape(shape)
+      else:
+        data = np.random.randint(0, 255, size=shape).astype('float32') / 256.0
       np.save(get_data_file(artifacts_dir, var), data)
 
   for var, _ in input_shapes:
@@ -82,7 +85,7 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
   return inputs, weights, outputs
 
 
-def check_reference(tvm_outputs, artifacts_dir:str) -> bool:
+def check_reference(tvm_outputs, artifacts_dir:str, maxdiff_threshold=None) -> bool:
   """Check tvm inference results agains reference
   """
   # Check results
@@ -94,9 +97,11 @@ def check_reference(tvm_outputs, artifacts_dir:str) -> bool:
   print("Diff:", diff.min(), diff.max(), np.argmax(diff))
 
   maxdiff = np.fmax(np.fabs(diff.min()), np.fabs(diff.max()))
-  maxval  = np.fmax(np.fabs(ref_out.min()), np.fabs(ref_out.max()))
-  ratio = 0.00001
-  if (maxdiff >= maxval * ratio):
+  if maxdiff_threshold is None:
+    maxval  = np.fmax(np.fabs(ref_out.min()), np.fabs(ref_out.max()))
+    ratio = 0.00001
+    maxdiff_threshold = maxval * ratio
+  if (maxdiff >= maxdiff_threshold):
     print("FAIL: maxdiff exceeded allowed threshold\n")
     return False
   else:
