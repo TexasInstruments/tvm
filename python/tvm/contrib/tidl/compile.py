@@ -136,6 +136,9 @@ def compile_relay(mod: tvm.IRModule,
 def prepare_output_directory(output_dir: str):
   """Create and clean the output directory"""
 
+  if os.environ.get("TIDL_REBUILD_ONLY", None) is not None:
+    return
+
   # create the directory if its not already preset
   os.makedirs(output_dir, exist_ok=True)
 
