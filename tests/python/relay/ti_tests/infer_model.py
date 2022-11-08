@@ -23,20 +23,20 @@ from platform import processor
 
 
 def run_model(artifacts_folder: str, input_dict, use_dlr: bool):
-  """ Run model with given input using DLR or TVM Runtime
+  """ Run model with given input using DLR or TVM Runtime.
+
   Parameters
   ----------
   artifacts_folder:
-      Folder containing compilation artifacts
+      Folder containing compilation artifacts.
   input_dict:
-      Dictionary of input name (str) to input data (numpy.ndarray)
+      Dictionary of input name (str) to input data (numpy.ndarray).
   use_dlr:
-      True => Use DLR runtime
-      False => Use TVM runtime
+      If True, use DLR. If False, use the TVM runtime directly.
 
   Return
   ------
-  results: list of result tensors
+  results: List of result tensors.
   """
 
   if use_dlr:

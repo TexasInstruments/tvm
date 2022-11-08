@@ -38,28 +38,26 @@ def compile_relay(mod: tvm.IRModule,
   Parameters
   ----------
   mod :
-      Input Relay IR module
+      Input Relay IR module.
   params :
-      The parameter dict to be used by relay
+      The parameter dict used by Relay.
   platform :
       in ["J7", "J721S2"]
   calibration_input_list :
-      A dictionary where the key is input name and the value is input tensor
+      A dictionary where the key is input name and the value is input tensor.
   compile_for_device:
-      True => Compile module for device (aarch64)
-      False => Compile module for host (x86)
+      True => Compile module for inference on device (aarch64).
+      False => Compile module for inference on host (x86).
   enable_tidl_offload:
-      with TIDL offload or not
+      Set to True to enable TIDL offload.
   enable_c7x_codegen:
-      True => Enable c7x code generation for layers not offloaded to TIDL
-              i.e. entire network runs on the C7x
-      False => Enable Arm code generation for layers not offloaded to TIDL
-               Unsupported layers are run on Arm (aarch64)
+      True => Enable c7x code generation for layers not offloaded to TIDL. i.e. entire network runs on the C7x.
+      False => Enable Arm code generation for layers not offloaded to TIDL. Unsupported layers are run on Arm (aarch64).
   tidl_tensor_bits:
-      Number of bits used to TIDL tensors and weights.
+      Number of bits used to represent TIDL tensors and weights.
   Return
   ------
-  True for success, False for failure
+  True for success, False for failure.
   """
 
   assert tidl_tensor_bits in [8, 16, 32]

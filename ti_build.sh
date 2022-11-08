@@ -85,6 +85,9 @@ function test_tvm {
     pip3 install tflite==2.4.0 onnx==1.9.0 mxnet==1.7.0.post2 gluoncv==0.8.0 torch==1.10.2 tensorflow==1.14.0 timm==0.5.4
     pip3 install --no-deps torchvision==0.11.2
 
+    # Required for building docs
+    pip3 install sphinx
+
     # Initialize the ssh connection to EVM, save EVM into .known_hosts
     ssh -o "StrictHostKeyChecking no" root@${EVM_IP} 'uname -a'
 
@@ -112,6 +115,19 @@ function test_tvm {
     fi
     scp -rq artifacts_relay_mul_c7x_target relay_mul root@${EVM_IP}:
     ssh root@${EVM_IP} 'LD_LIBRARY_PATH=. ./relay_mul'
+    if [ $retval -ne 0 ]
+    then
+        return $retval
+    fi
+
+    # Build docs
+    local DOCS_DIR=${WORKSPACE}/ti-docs
+    cd $DOCS_DIR
+    make clean; make
+    if [ $retval -ne 0 ]
+    then
+        return $retval
+    fi
 
     return $retval
 }
@@ -184,6 +200,11 @@ build_aarch64_ge
 # Run test_tvm and exit with return value from test_tvm
 test_tvm
 retval=$?
+
+# If VALIDATE is set to 0, skip running tests
+if [ "$VALIDATE" -eq "0" ]; then
+    exit $retval
+fi
 
 # If test_tvm succeeds, run TVM+TIDL tests in tests/python/relay/ti_tests
 if [ $retval -eq 0 ]; then

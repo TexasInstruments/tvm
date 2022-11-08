@@ -53,16 +53,12 @@ if __name__ == '__main__':
     # compare two tensors
     print(f"tvm:  min={np.amin(tvm_tensor)}, max={np.amax(tvm_tensor)}, average={np.average(tvm_tensor)}")
     print(f"tidl: min={np.amin(tidl_tensor)}, max={np.amax(tidl_tensor)}, average={np.average(tidl_tensor)}")
+    diff = tvm_tensor.flatten() - tidl_tensor.flatten()
+    print(f"diff: min={np.amin(diff)}, max={np.amax(diff)}")
 
     # plot two tensors
     print(f"plotting tvm and tidl tensors together, close window or press q to continue...")
     plt.plot(tvm_tensor.flatten(),  'b.', tidl_tensor.flatten(), 'r+')
     plt.title('tvm: blue dot(.)   tidl: red plus (+)')
-    plt.show()
-
-    # plot differences
-    print(f"plotting differences of tvm and tidl tensors, close window or press q to continue...")
-    plt.plot(tvm_tensor.flatten() - tidl_tensor.flatten(), 'x', color='purple')
-    plt.title('(tvm - tidl): purple cross (x)')
     plt.show()
 

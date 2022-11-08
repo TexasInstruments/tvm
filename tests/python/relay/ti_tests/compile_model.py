@@ -24,30 +24,27 @@ from tvm.contrib.tidl import compile
 def compile_model(model_name: str, platform: str,
                   compile_for_device: bool, enable_tidl_offload: bool, enable_c7x_codegen: bool,
                   batch_size:int=0):
-  """ Compile a model based on the parameters specified
-
+  """ Compile a model based on the parameters specified.
   Parameters
   ----------
   model_name :
-      name of the model as specified in models.py (E.g. mv2_onnx)
+      name of the model as specified in models.py (E.g. mv2_onnx).
   platform :
-      in ["J7", "J721S2"]
+      in ["J7", "J721S2"].
   compile_for_device:
-      True => Compile module for device (aarch64)
-      False => Compile module for host (x86)
+      True => Compile module for inference on device (aarch64).
+      False => Compile module for inference on host (x86).
   enable_tidl_offload:
-      with TIDL offload or not
+      Set to True to enable TIDL offload.
   enable_c7x_codegen:
-      True => Enable c7x code generation for layers not offloaded to TIDL
-              i.e. entire network runs on the C7x
-      False => Enable Arm code generation for layers not offloaded to TIDL
-               Unsupported layers are run on Arm (aarch64)
+      True => Enable c7x code generation for layers not offloaded to TIDL. i.e. entire network runs on the C7x.
+      False => Enable Arm code generation for layers not offloaded to TIDL. i.e. Unsupported layers are run on Arm (aarch64).
   batch_size:
       0: use the batch size that comes with the model
       otherwise: override the default batch size
   Return
   ------
-  True for success, False for failure
+  True for success, False for failure.
   """
 
   from models import get_relay_model, get_tidl_bits
