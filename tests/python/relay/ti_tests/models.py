@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Models tested for TVM+TIDL compilation/inference."""
+"""Helper functions to convert TensorFlow, TFLite, PyTorch, ONNX and MXNet models to Relay"""
 
 
 import os
@@ -119,7 +119,7 @@ models = {
 
 
 def get_tidl_bits(model_name):
-  """ Retuen the number of tensor bits used for TIDL import """
+  """ Return the number of tensor bits used for TIDL import """
   if 'tidl_bits' in models[model_name]:
     return models[model_name]['tidl_bits']
   return 8
@@ -167,6 +167,8 @@ def get_model_file(model_name):
 
 
 def get_relay_model(model_name : str):
+  """Obtain model and convert to Relay"""
+
   from tvm import relay
   from utils import disable_outputs, restore_outputs
 
@@ -244,6 +246,7 @@ def get_relay_model(model_name : str):
 
   model_file = get_model_file(model_name)
 
+  # Convert the model to Relay
   if model_name.endswith("_tf"):
     return from_tf(model_file, model_name)
   elif model_name.endswith("_tfl"):
@@ -254,4 +257,6 @@ def get_relay_model(model_name : str):
     return from_mxnet(model_file, model_name)
   elif model_name.endswith("_pth"):
     return from_pytorch(model_file, model_name)
+  else:
+    return None, None
 

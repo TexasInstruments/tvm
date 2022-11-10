@@ -68,7 +68,7 @@ def run_model():
   inputs, weights, output = gen_reference(None, artifacts_data_dir, input_shapes, weight_shapes,
                                           gen_new_data=False)
 
-  tvm_outputs = run_model(artifacts_dir, inputs, is_dlr=True)
+  tvm_outputs = run_model(artifacts_dir, inputs, use_dlr=True)
 
   return check_reference(tvm_outputs, artifacts_data_dir)
 

@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-""" Infer a model defined in "models" using deployable module from compilation """
+""" Run inference using DLR or TVM Runtime """
 
 
 import os
@@ -22,28 +22,26 @@ import sys
 from platform import processor
 
 
-def run_model(artifacts_folder, input_dict, is_dlr):
-  """ Run model with given input data
+def run_model(artifacts_folder: str, input_dict, use_dlr: bool):
+  """ Run model with given input using DLR or TVM Runtime
   Parameters
   ----------
-  artifacts_folder: str
+  artifacts_folder:
       Folder containing compilation artifacts
-  input_dict: dict of {input_name : input_data}
-      Input data (str : NDArray) used for inference
-  is_dlr: bool
-      Use neo-ai DLR runtime vs TVM runtime
+  input_dict:
+      Dictionary of input name (str) to input data (numpy.ndarray)
+  use_dlr:
+      True => Use DLR runtime
+      False => Use TVM runtime
 
   Return
   ------
   results: list of result tensors
   """
-  if is_dlr:
-    from dlr import DLRModel
-  else:
-    import tvm
-    from tvm.contrib import graph_executor as runtime
 
-  if is_dlr:
+  if use_dlr:
+    from dlr import DLRModel
+
     module = DLRModel(artifacts_folder)
     results = module.run(input_dict)
 
@@ -53,6 +51,9 @@ def run_model(artifacts_folder, input_dict, is_dlr):
       print(perf_data)
 
   else:
+    import tvm
+    from tvm.contrib import graph_executor as runtime
+
     loaded_json = open(artifacts_folder + "/deploy_graph.json").read()
     loaded_lib = tvm.runtime.load_module(artifacts_folder + "/deploy_lib.so")
     loaded_params = bytearray(open(artifacts_folder + "/deploy_param.params", "rb").read())
@@ -73,7 +74,7 @@ def run_model(artifacts_folder, input_dict, is_dlr):
     # get output
     results = []
     for i in range(module.get_num_outputs()):
-        results.append(module.get_output(i).asnumpy())
+      results.append(module.get_output(i).asnumpy())
 
     # get optional tidl info, run with TIDL_RT_PERFSTATS=1
     if os.environ.get("TIDL_RT_PERFSTATS"):
@@ -95,7 +96,6 @@ def run_model(artifacts_folder, input_dict, is_dlr):
 
 def infer_model(model_name, platform, is_target, is_dlr, w_tidl, w_c7x):
   """ Run model model inference for a single (platform, target, tidl, c7x) config """
-  from models import models
   from prepostproc import get_test_inputs, check_test_results
   from utils import get_artifacts_folder
 
@@ -120,22 +120,22 @@ def parse_args():
                       help='Compile model for which platform (J7, J721S2)')
   parser.add_argument('--dlr', action='store_true',
                       default=True,
-                      help="Using neo-ai DLR runtime")
+                      help="Use DLR runtime for inference")
   parser.add_argument('--tvm', action='store_false',
                       dest='dlr',
-                      help="Using TVM runtime")
+                      help="Use TVM runtime for inference")
   parser.add_argument('--tidl', action='store_true',
                       default=True,
-                      help="With TIDL offload")
+                      help="Enable TIDL offload")
   parser.add_argument('--notidl', action='store_false',
                       dest="tidl",
-                      help="Without TIDL offload")
+                      help="Disable TIDL offload")
   parser.add_argument('--c7x', action='store_true',
                       default=False,
-                      help="With C7x code generation")
+                      help="Enable C7x code generation")
   parser.add_argument('--noc7x', action='store_false',
                       dest="c7x",
-                      help="Without C7x code generation")
+                      help="Disable C7x code generation")
   args = parser.parse_args()
 
   assert(args.model_name is not None), "Please specify a model name"
@@ -159,4 +159,3 @@ if __name__ == "__main__":
         f"{'target' if is_target else 'host'} {'dlr' if args.dlr else 'tvm'} "
         f"{'tidl' if args.tidl else 'notidl'} {'c7x' if args.c7x else 'noc7x'}")
   sys.exit(0 if ret else 1)
-

@@ -72,7 +72,7 @@ def run_model():
                                           gen_new_data=False)
 
   os.environ["TVM_RT_DEBUG"] = "2"
-  tvm_outputs = run_model(artifacts_dir, inputs, is_dlr=True)
+  tvm_outputs = run_model(artifacts_dir, inputs, use_dlr=True)
 
   if not check_reference(tvm_outputs, artifacts_data_dir):
     return False

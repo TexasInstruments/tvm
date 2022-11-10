@@ -60,16 +60,16 @@ def parse_args():
                       help="Compile for host (emulation)")
   parser.add_argument('--tidl', action='store_true',
                       default=False,
-                      help="With TIDL offload")
+                      help="Enable TIDL offload")
   parser.add_argument('--notidl', action='store_true',
                       default=False,
-                      help="Without TIDL offload")
+                      help="Disable TIDL offload")
   parser.add_argument('--c7x', action='store_true',
                       default=False,
-                      help="With C7x code generation")
+                      help="Enable C7x code generation")
   parser.add_argument('--noc7x', action='store_true',
                       default=False,
-                      help="Without C7x code generation")
+                      help="Disable C7x code generation")
   args = parser.parse_args()
 
   return args

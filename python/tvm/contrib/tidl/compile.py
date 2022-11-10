@@ -18,32 +18,33 @@
 
 
 import os
-from typing import Tuple
+from typing import Tuple, Dict, List
 
 import tvm
 from tvm import relay
+from tvm.runtime import NDArray
 
 def compile_relay(mod: tvm.IRModule,
-                  params,
-                  input_list,
+                  params: Dict[str, NDArray],
+                  calibration_input_list: List[Dict[str, NDArray]],
                   platform: str,
                   compile_for_device: bool,
                   enable_tidl_offload: bool,
                   enable_c7x_codegen: bool,
                   artifacts_folder: str,
                   tidl_tensor_bits: int = 8) -> bool:
-  """ Compile a model in Relay IR graph for a single (platform, target, tidl, c7x) config
+  """ Compile Relay IR module based on the parameters specified
 
   Parameters
   ----------
-  mod_orig : tvm.relay.Module
-      Original Relay IR graph
-  params : dict of str to tvm.NDArray
+  mod :
+      Input Relay IR module
+  params :
       The parameter dict to be used by relay
-  platform : str
+  platform :
       in ["J7", "J721S2"]
-  input_list : list of dictionary for multiple calibration data
-      A dictionary where the key in input name and the value is input tensor
+  calibration_input_list :
+      A dictionary where the key is input name and the value is input tensor
   compile_for_device:
       True => Compile module for device (aarch64)
       False => Compile module for host (x86)
@@ -54,7 +55,7 @@ def compile_relay(mod: tvm.IRModule,
               i.e. entire network runs on the C7x
       False => Enable Arm code generation for layers not offloaded to TIDL
                Unsupported layers are run on Arm (aarch64)
-  tidl_bits:
+  tidl_tensor_bits:
       Number of bits used to TIDL tensors and weights.
   Return
   ------
@@ -83,6 +84,24 @@ def compile_relay(mod: tvm.IRModule,
   if enable_tidl_offload or enable_c7x_codegen:
     from tvm.relay.backend.contrib.tidl import tidl
 
+    # Calibration options corresponding to quantized tensor bits
+    advanced_options = {
+      8 : {
+        'calibration_iterations' : 10,
+        # Following options take effect only at accuracy level 9, are ignored otherwise
+        'activation_clipping' : 1,
+        'weight_clipping' : 1,
+        'bias_calibration' : 1,
+        'channel_wise_quantization' : 0,
+      },
+      16 : {
+        'calibration_iterations' : 1,
+      },
+      32 : {
+        'calibration_iterations' : 1,
+      }
+    }
+
     tidl_compiler = tidl.TIDLCompiler(platform=platform, # TI device category (E.g. J7)
                                       version="8.4", # Processor SDK version, currently unused
                                       tidl_tools_path=tidl_tools_path,
@@ -92,10 +111,10 @@ def compile_relay(mod: tvm.IRModule,
                                       deny_list="",
                                       c7x_codegen=(1 if enable_c7x_codegen else 0),
                                       accuracy_level=(1 if (tidl_tensor_bits == 8) else 0),
-                                      advanced_options={'calibration_iterations': 10})
+                                      advanced_options=advanced_options[tidl_tensor_bits])
 
     # Perform partitioning
-    mod, _ = tidl_compiler.enable(mod, params, input_list)
+    mod, _ = tidl_compiler.enable(mod, params, calibration_input_list)
 
     # Build the Relay module to run on the Graph Executor
     fmod: relay.backend.executor_factory.GraphExecutorFactoryModule
@@ -108,8 +127,8 @@ def compile_relay(mod: tvm.IRModule,
     tidl.remove_tidl_params(params)
 
   else:
-      fmod = relay.build(mod, target=target, params=params)
-      params = fmod.get_params()
+    fmod = relay.build(mod, target=target, params=params)
+    params = fmod.get_params()
 
   lib = fmod.get_lib()
 

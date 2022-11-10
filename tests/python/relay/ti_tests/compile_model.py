@@ -14,26 +14,56 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-""" Compile a model defined in "models" to TVM deployable module """
+""" Compile a model from models.py to a TVM deployable module """
 
-
-import os
 import sys
 
 from tvm.contrib.tidl import compile
 
-def compile_model(model_name, platform, is_target, w_tidl, w_c7x):
-  """ Compile a model for a single (platform, target, tidl, c7x) config """
+def compile_model(model_name: str, platform: str,
+                  compile_for_device: bool, enable_tidl_offload: bool, enable_c7x_codegen: bool):
+  """ Compile a model based on the parameters specified
+
+  Parameters
+  ----------
+  model_name :
+      name of the model as specified in models.py (E.g. mv2_onnx)
+  platform :
+      in ["J7", "J721S2"]
+  compile_for_device:
+      True => Compile module for device (aarch64)
+      False => Compile module for host (x86)
+  enable_tidl_offload:
+      with TIDL offload or not
+  enable_c7x_codegen:
+      True => Enable c7x code generation for layers not offloaded to TIDL
+              i.e. entire network runs on the C7x
+      False => Enable Arm code generation for layers not offloaded to TIDL
+               Unsupported layers are run on Arm (aarch64)
+  Return
+  ------
+  True for success, False for failure
+  """
+
   from models import get_relay_model, get_tidl_bits
   from prepostproc import get_calib_inputs
   from utils import get_artifacts_folder
 
+  # Obtain model and convert to Relay
   mod, params = get_relay_model(model_name)
-  input_list = get_calib_inputs(model_name)
-  artifacts_folder = get_artifacts_folder(model_name, platform, is_target, w_tidl, w_c7x)
-  ret = compile.compile_relay(mod, params, input_list, platform, is_target, w_tidl, w_c7x,
-                      artifacts_folder, tidl_tensor_bits=get_tidl_bits(model_name))
-  return ret
+
+  # Get inputs to use for calibraton (required for TIDL offload)
+  calibration_input_list = get_calib_inputs(model_name)
+
+  # Generate a name for the artifacts folder based on the model and other parameters
+  artifacts_folder = get_artifacts_folder(model_name, platform, compile_for_device,
+                                          enable_tidl_offload, enable_c7x_codegen)
+
+  # Compile the model using TVM and place the output in the artifacts_folder
+  result = compile.compile_relay(mod, params, calibration_input_list, platform, compile_for_device,
+                                 enable_tidl_offload, enable_c7x_codegen,
+                                 artifacts_folder, tidl_tensor_bits=get_tidl_bits(model_name))
+  return result
 
 
 def parse_args():
@@ -51,16 +81,16 @@ def parse_args():
                       help="Compile for host (emulation)")
   parser.add_argument('--tidl', action='store_true',
                       default=True,
-                      help="With TIDL offload")
+                      help="Enable TIDL offload")
   parser.add_argument('--notidl', action='store_false',
                       dest="tidl",
-                      help="Without TIDL offload")
+                      help="Disable TIDL offload")
   parser.add_argument('--c7x', action='store_true',
                       default=False,
-                      help="With C7x code generation")
+                      help="Enable C7x code generation")
   parser.add_argument('--noc7x', action='store_false',
                       dest="c7x",
-                      help="Without C7x code generation")
+                      help="Disable C7x code generation")
   args = parser.parse_args()
 
   assert(args.model_name is not None), "Please specify a model name"
