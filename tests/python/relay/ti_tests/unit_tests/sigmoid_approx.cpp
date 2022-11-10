@@ -36,7 +36,6 @@
 
 extern "C" int sigmoid_approx(DLTensor *t_in, DLTensor *t_out)
 {
-  CriticalSectionContext csContext;
   AllocL2Context L2Context;
 
   // load look up table from ddr into L2

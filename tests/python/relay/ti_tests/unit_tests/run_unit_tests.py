@@ -8,6 +8,7 @@ unit_tests = [
 "broadcast_mul_odd_blocks_odd_iters.py",
 "topk_ext_call.py",
 "sigmoid_approx.py",
+"resize_nchw_1x2.py",
 ]
 
 failed_tests = []

@@ -126,7 +126,7 @@ def build_and_set_ext_lib(src_name, src_dir, build_dir):
     subprocess.run(["make", "-f", "Makefile.ext_lib", f"NAME={src_name}",
                     f"SRC_DIR={src_dir}", f"BUILD_DIR={build_dir}"], check=True)
   except:
-    print(f"Build external library for {model_name} failed")
+    print(f"Build external library for {src_name} failed")
     return False
   ext_libs = os.environ.get("CGT7X_EXT_LIBS", "")
   ext_libs += f" -l {build_dir}/{src_name}.lib"
