@@ -36,11 +36,11 @@ class RemoveMultiplyByOne(ExprMutator):
             if isinstance(call.args[1], tvm.relay.expr.Constant):
                 data = call.args[1].data.asnumpy()
                 if data.shape == () and data.item() == 1.0:
-                    return call.args[0]
+                    return super().visit(call.args[0])
             if isinstance(call.args[0], tvm.relay.expr.Constant):
                 data = call.args[0].data.asnumpy()
                 if data.shape == () and data.item() == 1.0:
-                    return call.args[1]
+                    return super().visit(call.args[1])
         return super().visit_call(call)
 
 
@@ -54,8 +54,23 @@ class RemoveTrainingOperators(ExprMutator):
         if t.index == 0  and \
            isinstance(expr, relay.expr.Call) and \
            expr.op.name in ["nn.dropout", "nn.dropout_raw"]:
-            return expr.args[0]
+            return super().visit(expr.args[0])
         return super().visit_tuple_getitem(t)
+
+
+class RemoveIdentityResize(ExprMutator):
+    """
+    Removes resize2d to the same size as input
+    """
+    def visit_call(self, call):
+        if call.op.name == "image.resize2d":
+            new_h, new_w = call.attrs.size
+            old_shape = call.args[0].checked_type.shape
+            old_h, old_w = old_shape[2:4] if call.attrs.layout == "NCHW" else old_shape[1:3]
+            if old_h == new_h and old_w == new_w:
+               return super().visit(call.args[0])
+        return super().visit_call(call)
+
 
 class ConvertMaxMinToClip(ExprMutator):
     """
@@ -136,7 +151,7 @@ class ConvertArgMaxToKeepDims(ExprMutator):
         if call.op.name == "argmax" and \
            (not call.attrs.keepdims) and (not call.attrs.exclude) and \
            call.attrs.axis != None and len(call.attrs.axis) == 1:
-            argmax = tvm.relay.argmax(call.args[0], axis=call.attrs.axis,
+            argmax = tvm.relay.argmax(super().visit(call.args[0]), axis=call.attrs.axis,
                                       keepdims=True, exclude=False)
             return tvm.relay.squeeze(argmax, axis=call.attrs.axis)
         return super().visit_call(call)
@@ -172,6 +187,8 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod['main'] = RemoveTrainingOperators().visit(mod['main'])
     mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
     mod['main'] = ConvertArgMaxToKeepDims().visit(mod['main'])
+    mod = relay.transform.InferType()(mod)
+    mod['main'] = RemoveIdentityResize().visit(mod['main'])
     mod = relay.transform.InferType()(mod)
     mod['main'] = ConvertBroadcastAddtoBiasAdd().visit(mod['main'])
 

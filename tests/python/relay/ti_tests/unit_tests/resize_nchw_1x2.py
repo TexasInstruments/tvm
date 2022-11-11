@@ -27,12 +27,15 @@ artifacts_data_dir = artifacts_dir + '_data'
 # Customize c7x resize strategy to call an extern function, "resize_1_2_nchnw"
 #   for special case: nchw, half_pixel, linear, scale_h=1, scale_w=2.
 # Otherwise, still use the C7x default resize strategy.
+# Note that the example cpp implementation here only handles the float tensor.
+#   It is not meant to be a generic implementation.
 def add_c7x_resize_strategy():
   import tvm
   from tvm import relay
   from tvm import topi
   from tvm import te
   from tvm.relay.op import op as reg
+  from tvm.relay.op import strategy as _strategy
   from tvm.relay.op.op import OpStrategy, OpPattern
 
   def compute_c7x_resize(attrs, inputs, out_type):
@@ -43,12 +46,6 @@ def add_c7x_resize_strategy():
     )
     return [out]
 
-  def wrap_c7x_resize_schedule(topi_schedule):
-    def wrapper(attrs, outs, target):
-      with target:
-        return topi_schedule(outs)
-    return wrapper
-
   def resize_strategy_c7x(attrs, inputs, out_type, target):
     strategy = OpStrategy()
     if attrs['layout'] == "NCHW" and attrs['method'] == "linear" and \
@@ -56,17 +53,12 @@ def add_c7x_resize_strategy():
        inputs[0].shape[2] == attrs['size'][0] and inputs[0].shape[3] * 2 == attrs['size'][1]:
       strategy.add_implementation(
         compute_c7x_resize,
-        wrap_c7x_resize_schedule(topi.generic.schedule_extern),
+        _strategy.wrap_topi_schedule(topi.generic.schedule_extern),
         name="resize_c7x",
         plevel=15
       )
     else:
-      strategy.add_implementation(
-        reg.get("image.resize2d").get_attr("FTVMCompute"),
-        wrap_c7x_resize_schedule(topi.c7x.schedule_injective),
-        name="resize_c7x",
-        plevel=10
-      )
+      strategy = _strategy.c7x.resize2d_strategy(attrs, inputs, out_type, target)
     return strategy
 
   reg.get("image.resize2d").get_attr("FTVMStrategy").register(resize_strategy_c7x,
@@ -121,7 +113,7 @@ def run_model():
                                           gen_new_data=False)
 
   os.environ["TVM_RT_DEBUG"] = "2"
-  tvm_outputs = run_model(artifacts_dir, inputs, is_dlr=True)
+  tvm_outputs = run_model(artifacts_dir, inputs, use_dlr=True)
 
   if not check_reference(tvm_outputs, artifacts_data_dir):
     return False

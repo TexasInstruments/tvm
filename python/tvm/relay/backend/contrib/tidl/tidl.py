@@ -1841,6 +1841,9 @@ class TIDLAnnotation:
     def allow_func(self, op_name, expr):
         """ Allow function: constraint checking is delegated to the import library """
 
+        if op_name == "image.resize2d" and not self._check_tidl_optimized_resize(expr):
+            return False
+
         if self.import_lib is None:
             # For CI testing which doesn't have import library - still run TVM passes
             return True
@@ -1849,6 +1852,23 @@ class TIDLAnnotation:
         #print(f"Invoking TIDL Relay Import allow function for {op_name}")
         allow_fn = tvm.get_global_func("TIDL_relayAllowNode")
         return allow_fn(expr)
+
+    # Check if an image.resize2d case is optimized by TIDL
+    # Will be moved to TIDL import library once we agree on what TIDL should allow
+    def _check_tidl_optimized_resize(self, expr):
+        attrs, args = expr.attrs, expr.args
+        old_shape = args[0].checked_type.shape
+        new_h, new_w = attrs.size
+        old_h, old_w = old_shape[2:4] if attrs.layout == "NCHW" else old_shape[1:3]
+        scale_h = float(new_h.value) / float(old_h.value)
+        scale_w = float(new_w.value) / float(old_w.value)
+        # TIDL has only optimized symmetric resize with power of 2 scaling factor
+        #   all other cases are supported with natural C code (slow)
+        if scale_h != scale_w or not scale_h.is_integer():
+            return False
+        scale = int(scale_h)
+        return (scale > 1 and (scale & (scale -1)) == 0)
+
 
 class TIDLCompiler:
     """TIDL compiler module.

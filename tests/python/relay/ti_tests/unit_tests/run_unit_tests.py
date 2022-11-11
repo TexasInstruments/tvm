@@ -9,6 +9,7 @@ unit_tests = [
 "topk_ext_call.py",
 "sigmoid_approx.py",
 "resize_nchw_1x2.py",
+"resize_index_simplify.py",
 ]
 
 failed_tests = []
