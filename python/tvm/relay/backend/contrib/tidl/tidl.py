@@ -1198,7 +1198,21 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_et
 
     if platform in ["J7", "J721S2"]:
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
-        import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_flags,
+        try:
+          # TIDL is adding model_group_id to the interface to indicate which
+          # networks can share the DDR buffers.  If the change ends up in the
+          # PSDK 8.5 release, we need to pass the additional argument.
+          # For now, try both ways for the max compatibility.  Will remove once
+          # we get a definitive answer.
+          model_group_id = 0
+          import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_flags,
+                                            tidl_bias_calib_iters,
+                                            output_feature_16bit_names_list,
+                                            params_16bit_names_list,
+                                            mixed_precision_factor,
+                                            model_group_id)
+        except:
+          import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_flags,
                                             tidl_bias_calib_iters,
                                             output_feature_16bit_names_list,
                                             params_16bit_names_list,
