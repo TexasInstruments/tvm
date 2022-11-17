@@ -24,11 +24,17 @@ CRT_CONFIG  ?= .
 DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
 BUILD_DIR   ?= build
 
-TIDL_COMMON_PATH = $(USE_TIDL_RT_PATH)/../../common
+TI_MEM_MANAGER_SRC = $(USE_TIDL_RT_PATH)/../../common/ti_mem_manager.c
+# new path after moving ti_dl/rt to arm-tidl/rt
+ifeq ("$(wildcard $(TI_MEM_MANAGER_SRC))", "")
+  TI_MEM_MANAGER_SRC = $(USE_TIDL_RT_PATH)/test/src/ti_mem_manager.c
+endif
 
 CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
 CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG) -I $(USE_TIDL_RT_PATH)/inc
 CFLAGS += -I $(USE_TIDL_RT_PATH)/../inc -I $(USE_TIDL_RT_PATH)/../../common
+# new path after moving ti_dl/rt to arm-tidl/rt
+CFLAGS += -I $(USE_TIDL_RT_PATH)/inc -I $(USE_TIDL_RT_PATH)/test/src
 CFLAGS += -I $(IVISION_PATH)
 CFLAGS += -I $(PDK_PATH)/packages
 
@@ -52,7 +58,7 @@ $(BUILD_DIR)/%.obj: %.c $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
 
-$(BUILD_DIR)/%.obj: $(TIDL_COMMON_PATH)/ti_mem_manager.c $(HEADERS)
+$(BUILD_DIR)/%.obj: $(TI_MEM_MANAGER_SRC) $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
 
