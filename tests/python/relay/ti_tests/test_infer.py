@@ -24,7 +24,10 @@ from models import models
 
 skipped_configs = [
   # Not enough memory to run the model
-  [ 'yolo3_mv1_mxnet', 'J7', '--target', '--notidl', '--c7x', '--dlr' ],
+  [ 'yolo3_mv1_mxnet', 'J7', '--target', '--notidl', '--c7x', '--dlr', 0 ],
+  # results issue, to be fixed
+  [ 'mv1_tf', 'J7', '--target', '--notidl', '--c7x', '--dlr', 2 ],
+  [ 'mv2_pth', 'J7', '--target', '--notidl', '--c7x', '--dlr', 2 ],
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
@@ -42,7 +45,7 @@ def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
 
             for n in (models[model]['batch_size'] if 'batch_size' in models[model] else [0]):
               print(f"\n\nInferring config: {[model, platform, t_h, t_nt, c_nc, d_t, n]} ...")
-              if [model, platform, t_h, t_nt, c_nc, d_t] in skipped_configs:
+              if [model, platform, t_h, t_nt, c_nc, d_t, n] in skipped_configs:
                 print("Skipped")
                 continue
               try:

@@ -22,6 +22,7 @@ from tvm import topi
 from tvm.te import SpecializedCondition
 from .generic import *
 from .. import op as _op
+from .. import strategy as _strategy
 
 logger = logging.getLogger('strategy')
 
@@ -42,6 +43,32 @@ def schedule_concatenate(attrs, outs, target):
     """Schedule concatenate op for c7x"""
     with target:
         return topi.c7x.schedule_injective(outs)
+
+
+def max_pool2d_1x1_pool_size_strategy(attrs, inputs, out_type, target):
+    """C7x max_pool2d strategy"""
+    strategy = _op.OpStrategy()
+    if attrs.pool_size[0] == 1 and attrs.pool_size[1] == 1 and attrs.layout == 'NCHW' and \
+       attrs.dilation[0] == 1 and attrs.dilation[1] == 1 and \
+       attrs.padding[0] == 0 and attrs.padding[1] == 0:
+        strategy.add_implementation(
+            topi.c7x.pooling.compute_max_pool2d_1x1_pool_size,
+            schedule_injective_c7x,
+            name="c7x_max_pool2d_1x1_pool_size",
+            plevel=15,
+        )
+    else:
+        strategy.add_implementation(
+            _op.get("nn.max_pool2d").get_attr("FTVMCompute"),
+            schedule_pool_c7x,
+            name="c7x_max_pool2d",
+            plevel=10,
+        )
+    return strategy
+# We need the default strategy first, then register the customized one for c7x
+from tvm.relay.op.nn import max_pool2d as max_pool2d
+_op.get("nn.max_pool2d").get_attr("FTVMStrategy").register(max_pool2d_1x1_pool_size_strategy,
+                                                           "c7x", allow_override=True)
 
 
 def resize2d_strategy(attrs, inputs, out_type, target):

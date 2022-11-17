@@ -19,6 +19,23 @@
 from tvm import te
 from .. import tag
 
+
+def compute_max_pool2d_1x1_pool_size(attrs, inputs, out_type):
+    stride_h = attrs['strides'][0]
+    stride_w = attrs['strides'][1]
+    data_shape = inputs[0].shape
+    out_attrs = { 'layout' : attrs['layout'] }
+    # compute output tensor shape base on input tensor shape and strides
+    # - 1x1 pool size, no dilation, so the out shape only depends on the strides
+    # - for each h, always output the first input pixel, then output 1 pixel for every stride_h
+    #   pixels in the rest of (input_height-1) pixels.  Same holds for each w.
+    out_shape = (data_shape[0], data_shape[1], 1 + te.indexdiv(data_shape[2]-1, stride_h),
+                                               1 + te.indexdiv(data_shape[3]-1, stride_w))
+    out = te.compute(out_shape, lambda n, c, h, w: inputs[0][n, c, h*stride_h, w*stride_w],
+                     name="c7x_max_pool2d_1x1", attrs=out_attrs)
+    return [out]
+
+
 def _parallel_sch(sch, oshape, do_vectorize=False):
     def vectorize(fused_axis, num_parallel_axis, vectorize_limit=16):
         """Internal vectorization utility function."""

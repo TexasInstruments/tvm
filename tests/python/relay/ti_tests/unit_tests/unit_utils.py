@@ -85,7 +85,8 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
   return inputs, weights, outputs
 
 
-def check_reference(tvm_outputs, artifacts_dir:str, maxdiff_threshold=None) -> bool:
+def check_reference(tvm_outputs, artifacts_dir:str, maxdiff_threshold=None,
+                    maxdiff_ratio=0.00001) -> bool:
   """Check tvm inference results agains reference
   """
   # Check results
@@ -99,8 +100,7 @@ def check_reference(tvm_outputs, artifacts_dir:str, maxdiff_threshold=None) -> b
   maxdiff = np.fmax(np.fabs(diff.min()), np.fabs(diff.max()))
   if maxdiff_threshold is None:
     maxval  = np.fmax(np.fabs(ref_out.min()), np.fabs(ref_out.max()))
-    ratio = 0.00001
-    maxdiff_threshold = maxval * ratio
+    maxdiff_threshold = maxval * maxdiff_ratio
   if (maxdiff >= maxdiff_threshold):
     print("FAIL: maxdiff exceeded allowed threshold\n")
     return False

@@ -83,6 +83,14 @@ ops_do_not_dma = ['T_strided_slice', 'T_concat', 'T_reshape']
 # 6. Local block size for input over (irj, rk), similarly to output, it is reflected correctly
 #    in the local block Var's shape, which is used in DMA config.
 
+# Special ops that can be treated as injective and use the injective schedule,
+# e.g. max_pool2d with 1x1 pool_size, the computation has reduced to injective op
+# For such cases, we can explicitly call injective schedule
+ops_treat_as_injective = ['c7x_max_pool2d_1x1' ]
+
+# SE vector does not directly support strided access, c7x_max_pool2d_1x1 might have strided access
+ops_do_not_vectorize = ['c7x_max_pool2d_1x1' ]
+
 #----------------------------------------------------------------
 # Experimental C7x-specific schedule for injective (elementwise) ops.
 def schedule_injective(outs: Union[te.tensor.Tensor, List[te.tensor.Tensor]]) -> te.Schedule:
@@ -233,7 +241,8 @@ def schedule_injective_from_existing(s: te.Schedule,
     #     complicated vector masks
     # - For broadcast/elemwise ops, output tensor and input tensor always have the same axis
     #   ordering.
-    if is_unsupported_op(tensor=C, is_invalid_op=(lambda t: not tag.is_broadcast(s[t].op.tag))):
+    if is_unsupported_op(tensor=C, is_invalid_op=(lambda t: not tag.is_broadcast(s[t].op.tag) and \
+                                                  s[t].op.name not in ops_treat_as_injective)):
         return s
 
     # schedule transformations only apply to dimensioned operations
@@ -247,6 +256,9 @@ def schedule_injective_from_existing(s: te.Schedule,
 
     # Transform to use double buffering, local buffers and DMA
     s, cc, baxis, inner = double_buffer_with_dma(s, C)
+
+    if (s[C].op.name in ops_do_not_vectorize):
+        return s
 
     # Attempt to vectorize the schedule
     s = vectorize(s, C, cc, baxis, inner)
