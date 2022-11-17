@@ -10,6 +10,7 @@ unit_tests = [
 "sigmoid_approx.py",
 "resize_nchw_1x2.py",
 "resize_index_simplify.py",
+"conv2d_1x2_stride.py",
 ]
 
 failed_tests = []

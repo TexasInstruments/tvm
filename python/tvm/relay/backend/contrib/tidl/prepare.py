@@ -172,6 +172,19 @@ class RemoveIdentityClip(ExprMutator):
                 return super().visit_call(call.args[0])
         return super().visit_call(call)
 
+class ConvertConvStride(ExprMutator):
+    """
+    Converts a conv2d with stride=[1,2] to conv2d with stride=[1,1], followed by a maxpool with stride [1,2].
+    """
+    def visit_call(self, call):
+        if call.op.name == 'nn.conv2d':
+            if list(call.attrs.strides) == [1,2]:
+                attrs = {key: call.attrs[key] for key in call.attrs.keys() if key != 'strides'}
+                attrs["strides"] = [1,1]
+                conv2d = relay.nn.conv2d(super().visit(call.args[0]), super().visit(call.args[1]), **attrs)
+                return relay.nn.max_pool2d(conv2d, pool_size=[1,1], strides=[1,2])
+        return super().visit_call(call)
+
 
 def prepare_graph_for_partitioning(mod_orig: tvm.IRModule, 
                                   has_qnn_ops: bool, 
@@ -191,6 +204,7 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod['main'] = RemoveIdentityResize().visit(mod['main'])
     mod = relay.transform.InferType()(mod)
     mod['main'] = ConvertBroadcastAddtoBiasAdd().visit(mod['main'])
+    mod['main'] = ConvertConvStride().visit(mod['main'])
 
     if has_qnn_ops:
         mod = relay.transform.InferType()(mod)
