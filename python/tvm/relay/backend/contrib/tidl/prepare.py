@@ -185,6 +185,18 @@ class ConvertConvStride(ExprMutator):
                 return relay.nn.max_pool2d(conv2d, pool_size=[1,1], strides=[1,2])
         return super().visit_call(call)
 
+class Power2ToMultiply(ExprMutator):
+    """
+    Converts all instances of power(in, 2) to multiply(in, in)
+    """
+    def visit_call(self, call):
+        if call.op.name == 'power':
+            if isinstance(call.args[1], tvm.relay.expr.Constant):
+                data = call.args[1].data.asnumpy()
+                if data.shape == () and data.item() == 2.0:
+                    arg = super().visit(call.args[0])
+                    return relay.multiply(arg, arg)
+        return super().visit_call(call)
 
 def prepare_graph_for_partitioning(mod_orig: tvm.IRModule, 
                                   has_qnn_ops: bool, 
@@ -197,6 +209,7 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod['main'] = relay.build_module.bind_params_by_name(mod['main'], params)
     mod = relay.transform.FoldConstant()(mod)
     mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
+    mod['main'] = Power2ToMultiply().visit(mod['main'])
     mod['main'] = RemoveTrainingOperators().visit(mod['main'])
     mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
     mod['main'] = ConvertArgMaxToKeepDims().visit(mod['main'])
