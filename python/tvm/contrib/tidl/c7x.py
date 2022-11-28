@@ -458,6 +458,7 @@ def SETransform(f, mod, ctx):
         max_dim = 0x10000
         max_dims = 4
         def __init__(self, kind, dtype, extents, coeffs):
+            self.MAX_NDIMS = 6
             self.kind = kind
             self.icnts = []
             self.dims = []
@@ -496,20 +497,21 @@ def SETransform(f, mod, ctx):
         def validate(self):
             # TODO
             # first dim must be 1
-            # max 4 dims
             # no dim >= 0x10000
+            if self.ndims() > self.MAX_NDIMS:
+                return False
             return True
         def get_config_call(self):
             ''' Return a config call to produce the curent configuration '''
-            # pad to 6 axes
-            # Updating to support 6 ICNTS and 5 DIMS for SE/SA
+            # pad to MAX_NDIMS axes
+            # Updating to support MAX_NDIMS ICNTS and MAX_NDIMS-1 DIMS for SE/SA
             # DIM0 is always set to 1
-            if self.ndims() < 6:
-               self.icnts = self.icnts + ([1] * (6-self.ndims()))
-               self.dims = self.dims + ([0] * (6-self.ndims()))
+            if self.ndims() < self.MAX_NDIMS:
+               self.icnts = self.icnts + ([1] * (self.MAX_NDIMS-self.ndims()))
+               self.dims  = self.dims  + ([0] * (self.MAX_NDIMS-self.ndims()))
             config_call = tvm.tir.call_extern("handle", "c7x_stream_config", 
                                 self.kind, self.dtype,
-                                *self.icnts[0:6], *self.dims[1:6])
+                                *self.icnts[0:self.MAX_NDIMS], *self.dims[1:self.MAX_NDIMS])
             return config_call
         def __str__(self):
             return f"SEConfig: kind={self.kind} dtype={self.dtype} "+\

@@ -25,9 +25,6 @@ from models import models
 skipped_configs = [
   # Not enough memory to run the model
   [ 'yolo3_mv1_mxnet', 'J7', '--target', '--notidl', '--c7x', '--dlr', 0 ],
-  # results issue, to be fixed
-  [ 'mv1_tf', 'J7', '--target', '--notidl', '--c7x', '--dlr', 2 ],
-  [ 'mv2_pth', 'J7', '--target', '--notidl', '--c7x', '--dlr', 2 ],
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):

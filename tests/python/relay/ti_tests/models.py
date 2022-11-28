@@ -75,7 +75,8 @@ models = {
     'file': ["url", "https://github.com/onnx/models/raw/cbda9ebd037241c6c6a0826971741d5532af8fa4/vision/classification/mobilenet/model/mobilenetv2-7.onnx", "mobilenetv2-7.onnx", "mobilenetv2-7.onnx"],
     'input_info': {**inputs_224, 'name':"data"},
     'calib_data': ['cat', 'cat2', 'airshow'],
-    'test': {**test_top5, 'in_top5':[[895, 403], [278, 282]]},
+    'test': {**test_top5, 'in_top5':[[895, 403], [278]]},
+    'batch_size': [0, 2],
   },
 
   'mv3_large_mxnet' : {
