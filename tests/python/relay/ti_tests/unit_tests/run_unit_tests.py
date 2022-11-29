@@ -12,6 +12,7 @@ unit_tests = [
 "resize_index_simplify.py",
 "conv2d_1x2_stride.py",
 "sigmoid_tidl.py",
+"scatter_nd.py",
 ]
 
 failed_tests = []

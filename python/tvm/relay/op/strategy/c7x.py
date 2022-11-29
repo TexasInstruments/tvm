@@ -45,6 +45,18 @@ def schedule_concatenate(attrs, outs, target):
         return topi.c7x.schedule_injective(outs)
 
 
+@scatter_nd_strategy.register(["c7x"])
+def scatter_nd_strategy_c7x(attrs, inputs, out_type, target):
+    """scatter_nd generic strategy"""
+    strategy = _op.OpStrategy()
+    strategy.add_implementation(
+        wrap_compute_scatter_nd(topi.c7x.scatter_nd),
+        wrap_topi_schedule(topi.generic.schedule_extern),
+        name="scatter_nd.c7x",
+    )
+    return strategy
+
+
 def max_pool2d_1x1_pool_size_strategy(attrs, inputs, out_type, target):
     """C7x max_pool2d strategy"""
     strategy = _op.OpStrategy()

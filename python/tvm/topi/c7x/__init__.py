@@ -20,3 +20,4 @@
 from .pooling import schedule_pool, schedule_adaptive_pool
 from .injective import schedule_injective
 from .resize import compute_resize2d
+from .scatter import scatter_nd
