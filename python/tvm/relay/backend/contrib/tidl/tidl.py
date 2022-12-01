@@ -60,7 +60,7 @@ def find_data_layout(mod):
     all_nodes = {}
     traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
     relay.analysis.post_order_visit(mod['main'], traverse_func)
-    data_layout = None
+    data_layout = "NCHW"
     for node in all_nodes:
         if isinstance(node, relay.expr.Call) and (node.op.name == 'nn.conv2d' or
                                                   node.op.name == 'qnn.conv2d'):
@@ -1761,6 +1761,7 @@ class TIDLAnnotation:
         self._register_constrained_op("clip")
         self._register_supported_op("nn.leaky_relu")
         self._register_supported_op("nn.prelu")
+        self._register_supported_op("sigmoid")
         self._register_constrained_op("nn.upsampling")
         self._register_constrained_op("nn.upsampling3d")
         self._register_constrained_op("qnn.conv2d")
