@@ -64,6 +64,8 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
     for var, shape in input_shapes + weight_shapes:
       if var.endswith("_s7"):
         data = np.arange(-7.0, 7.0, 14.0 / np.prod(shape), dtype=float).reshape(shape)
+      elif var.endswith("_s"):
+        data = np.random.randint(-128, 127, size=shape).astype('float32') / 128.0
       else:
         data = np.random.randint(0, 255, size=shape).astype('float32') / 256.0
       np.save(get_data_file(artifacts_dir, var), data)

@@ -11,6 +11,7 @@ unit_tests = [
 "resize_nchw_1x2.py",
 "resize_index_simplify.py",
 "conv2d_1x2_stride.py",
+"sigmoid_tidl.py",
 ]
 
 failed_tests = []
