@@ -30,7 +30,7 @@ def compile_model(model_name: str, platform: str,
   model_name :
       name of the model as specified in models.py (E.g. mv2_onnx).
   platform :
-      in ["J7", "J721S2"].
+      in ["J7", "J721S2"", "AM62A"]
   compile_for_device:
       True => Compile module for inference on device (aarch64).
       False => Compile module for inference on host (x86).
@@ -103,7 +103,7 @@ def parse_args():
   args = parser.parse_args()
 
   assert(args.model_name is not None), "Please specify a model name"
-  assert(args.platform in ["J7", "J721S2"]), f"Platform {args.platform} is not supported"
+  assert(args.platform in ["J7", "J721S2", "AM62A"]), f"Platform {args.platform} is not supported"
 
   return args
 

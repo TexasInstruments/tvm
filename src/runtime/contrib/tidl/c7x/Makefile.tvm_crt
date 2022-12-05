@@ -17,12 +17,12 @@
 
 include make.inc
 
-LIB_NAME = tvm_crt.lib
+LIB_NAME = $(SILICON_VERSION)/tvm_crt.lib
 
 CRT_ROOT    ?= $(TVM_ROOT)/src/runtime/crt
 CRT_CONFIG  ?= .
 DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
-BUILD_DIR   ?= build
+BUILD_DIR   ?= $(SILICON_VERSION)/build
 
 CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
 CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG)
@@ -50,7 +50,7 @@ $(LIB_NAME): $(COMMON_O_FILES) $(GRAPHRT_O_FILES) $(MEMORY_O_FILES)
 
 
 clean:
-	$(QUIET)$(RMDIR) "$(BUILD_DIR)" $(LIB_NAME)
+	$(QUIET)$(RMDIR) "$(BUILD_DIR)" $(LIB_NAME) $(SILICON_VERSION)
 
 .PHONY: all
 .DEFAULT_GOAL: all

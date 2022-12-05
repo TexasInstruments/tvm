@@ -12,14 +12,14 @@ import logging
 from typing import List
 import numpy as np
 
-from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence
+from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence, platform, artifacts_folders
 from unit_utils import build_and_set_ext_lib
 
 model_name = "sigmoid_approx"
-artifacts_dir = "artifacts_" + model_name
+artifacts_dir , artifacts_data_dir = artifacts_folders(model_name)
+
 input_shapes = [ ("i0_s7", (1, 1, 1, 14 * 256)) ]
 weight_shapes = []
-artifacts_data_dir = artifacts_dir + '_data'
 
 sigmoid_precision = 0.002
 
@@ -121,7 +121,7 @@ def compile_model():
     return False
 
   # Compile relay module
-  status = compile_relay(mod, weights, inputs, "J7",
+  status = compile_relay(mod, weights, inputs, platform,
                          compile_for_device=True, enable_tidl_offload=False,
                          enable_c7x_codegen=True,
                          artifacts_folder=artifacts_dir, tidl_tensor_bits=8)

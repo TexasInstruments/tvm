@@ -42,7 +42,7 @@ def compile_relay(mod: tvm.IRModule,
   params :
       The parameter dict used by Relay.
   platform :
-      in ["J7", "J721S2"]
+      in ["J7", "J721S2", "AM62A"]
   calibration_input_list :
       A dictionary where the key is input name and the value is input tensor.
   compile_for_device:
@@ -61,7 +61,7 @@ def compile_relay(mod: tvm.IRModule,
   """
 
   assert tidl_tensor_bits in [8, 16, 32]
-  assert platform in ["J7", "J721S2"]
+  assert platform in ["J7", "J721S2", "AM62A"]
 
   tidl_tools_path, arm_gcc, status = setup_tool_paths(enable_tidl_offload, enable_c7x_codegen,
                                                       compile_for_device)

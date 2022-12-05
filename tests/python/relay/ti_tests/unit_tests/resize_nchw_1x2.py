@@ -11,17 +11,17 @@ import logging
 from typing import List
 import numpy as np
 
-from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence
+from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence, platform, artifacts_folders
 from unit_utils import build_and_set_ext_lib
 
 #logging.basicConfig(level=logging.DEBUG)
 #os.environ["TVM_LOG_DEBUG"] = "1"
 
 model_name = "resize_nchw_1x2"
-artifacts_dir = "artifacts_" + model_name
+artifacts_dir , artifacts_data_dir = artifacts_folders(model_name)
+
 input_shapes = [ ("i0", (1, 8, 64, 800)) ]
 weight_shapes = []
-artifacts_data_dir = artifacts_dir + '_data'
 
 
 # Customize c7x resize strategy to call an extern function, "resize_1_2_nchnw"
@@ -93,7 +93,7 @@ def compile_model():
     return False
 
   # Compile relay module
-  status = compile_relay(mod, weights, inputs, "J7",
+  status = compile_relay(mod, weights, inputs, platform,
                          compile_for_device=True, enable_tidl_offload=False,
                          enable_c7x_codegen=True,
                          artifacts_folder=artifacts_dir, tidl_tensor_bits=8)

@@ -19,24 +19,24 @@ include make.inc
 
 EXE_NAME = dsp_syms.out
 
-BUILD_DIR   ?= build
+BUILD_DIR   ?= $(SILICON_VERSION)/build
 
-all: $(EXE_NAME) $(EXE_NAME).obj
+all: $(SILICON_VERSION)/$(EXE_NAME) $(SILICON_VERSION)/$(EXE_NAME).obj
 
 $(BUILD_DIR)/dsp_syms.obj: dsp_syms.c
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< --output_file $@
 
-dsp_syms.out: $(BUILD_DIR)/dsp_syms.obj
-	$(QUIET)$(CC) $^ -z --dynamic=exe --no_entry_point --soname=$@ -o $@
+$(SILICON_VERSION)/dsp_syms.out: $(BUILD_DIR)/dsp_syms.obj
+	$(QUIET)$(CC) $^ -z --dynamic=exe --no_entry_point --soname=$(notdir $@) -o $@
 	$(QUIET)$(STRIP) $@
 
-$(BUILD_DIR)/dsp_syms.out.asm: dsp_syms.out
+$(BUILD_DIR)/dsp_syms.out.asm: $(SILICON_VERSION)/dsp_syms.out
 	python3 ./gen_c7x_sect.py $< $@
 
-dsp_syms.out.obj: $(BUILD_DIR)/dsp_syms.out.asm
+$(SILICON_VERSION)/dsp_syms.out.obj: $(BUILD_DIR)/dsp_syms.out.asm
 	$(QUIET)$(CC) $(CFLAGS) $< --output_file $@
 
 clean:
-	$(QUIET)$(RMDIR) $(EXE_NAME) $(EXE_NAME).obj $(BUILD_DIR)
+	$(QUIET)$(RMDIR) $(EXE_NAME) $(EXE_NAME).obj $(BUILD_DIR) $(SILICON_VERSION)
 

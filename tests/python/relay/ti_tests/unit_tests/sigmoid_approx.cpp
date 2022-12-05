@@ -32,6 +32,9 @@
 #include <dlpack/dlpack.h>
 #include <c7x_tvm_runtime.h>
 #include "sigmoid_approx.h"
+#include <c7x_scalable.h>
+
+using namespace c7x;
 
 
 extern "C" int sigmoid_approx(DLTensor *t_in, DLTensor *t_out)
@@ -39,17 +42,19 @@ extern "C" int sigmoid_approx(DLTensor *t_in, DLTensor *t_out)
   AllocL2Context L2Context;
 
   // load look up table from ddr into L2
-  // use streaming engine to load a vector of 16 floats at a time, then store into L2
+  // use streaming engine to load a vector of veclen floats at a time, then store into L2
   float * __restrict__ local_lut = (float *) L2Context.allocate(sigmoid_lut_len * sizeof(float));
-  SEConfig<float, 16> SE_Config1(sigmoid_lut_len, 1, 1, 1, 1, 1,  0, 0, 0, 0, 0);
-  SAConfig<float, 16> SA_Config1(sigmoid_lut_len, 1, 1, 1, 1, 1,  0, 0, 0, 0, 0);
+  const int veclen = max_simd<float>::value;
+  SEConfig<float, veclen> SE_Config1(sigmoid_lut_len, 1, 1, 1, 1, 1,  0, 0, 0, 0, 0);
+  SAConfig<float, veclen> SA_Config1(sigmoid_lut_len, 1, 1, 1, 1, 1,  0, 0, 0, 0, 0);
   __SE0_OPEN((void *)(sigmoid_lut), SE_Config1.params());
   __SA0_OPEN(SA_Config1.params());
-  for (int i = 0; i < (sigmoid_lut_len + 15)/ 16;  i++)
+  for (int i = 0; i < (sigmoid_lut_len + veclen - 1)/ veclen;  i++)
   {
-    float16 value = __SE0ADV(float16);
-    __vpred pred = __SA0_VPRED(float16);
-    __vstore_pred(pred, __SA0ADV(float16, local_lut), value);
+    float_vec value = strm_eng<0, float_vec>::get_adv(); 
+    __vpred pred = strm_agen<0, float_vec>::get_vpred();
+    float_vec* addr = strm_agen<0, float_vec>::get_adv(local_lut);
+    __vstore_pred(pred, addr, value);
   }
   __SA0_CLOSE();
   __SE0_CLOSE();

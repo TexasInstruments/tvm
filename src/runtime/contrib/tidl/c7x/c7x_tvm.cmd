@@ -34,7 +34,6 @@
 -ldsp_syms.obj
 --dynamic=exe
 */
--lrts7100_le.lib
 --relocatable
 --no_entry_point
 --warn_sections

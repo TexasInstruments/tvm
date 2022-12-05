@@ -42,7 +42,11 @@
  *         - Define max allocation entries to be 2048 (adjustable)
  */
 
-#if defined(__C7100__) && ! defined(HOST_EMULATION)
+#if defined(__C7100__) || defined(__C7504__)
+#define C7X_TARGET
+#endif
+
+#if defined(C7X_TARGET) && ! defined(HOST_EMULATION)
   #define CRT_MEMORY_NUM_PAGES (1 * 1024 * 8)
   #define CRT_MEMORY_PAGE_SIZE_LOG2 7
   #define CRT_MEMORY_SIZE (CRT_MEMORY_NUM_PAGES * (1 << CRT_MEMORY_PAGE_SIZE_LOG2))
@@ -56,6 +60,7 @@
   static uint8_t g_crt_memory[CRT_MEMORY_SIZE];
   static MemoryManagerInterface* g_memory_manager;
 #endif
+
 
 #define CRT_MEMORY_DEFAULT_ALIGN (8U)
 #define MAX_PTR_SIZE_MAP_SIZE (8192U)
@@ -101,7 +106,7 @@ TVM_DLL void* tvm_runtime_create(const char* json_data, const char* params_data,
   dev.device_id = device_id;
 
   // get pointers
-#if defined(__C7100__) && ! defined(HOST_EMULATION)
+#if defined(C7X_TARGET) && ! defined(HOST_EMULATION)
   g_crt_memory = (uint8_t *) appMemAlloc(APP_MEM_HEAP_DDR, CRT_MEMORY_SIZE,
                                          (1 << CRT_MEMORY_PAGE_SIZE_LOG2));
   tvmcrt_alloc_size_map = (AllocPtrSizeMap_t *) appMemAlloc(APP_MEM_HEAP_DDR,
@@ -366,7 +371,7 @@ tvmcrt_free_all()
     appMemFree(APP_MEM_HEAP_DDR, tvmcrt_alloc_size_map, sizeof(AllocPtrSizeMap_t));
     tvmcrt_alloc_size_map = NULL;
   }
-#if defined(__C7100__) && ! defined(HOST_EMULATION)
+#if defined(C7X_TARGET) && ! defined(HOST_EMULATION)
   if (g_crt_memory != NULL)
   {
     appMemFree(APP_MEM_HEAP_DDR, g_crt_memory, CRT_MEMORY_SIZE);

@@ -31,6 +31,27 @@ import numpy as np
 from platform import processor
 from typing import List
 
+def parse_args():
+  import argparse
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--platform', action='store',
+                      dest='platform',
+                      default='J7',
+                      help='Compile models for which platforms (J7, J721S2, AM62A)')
+  args = parser.parse_args()
+  assert(args.platform in ["J7", "J721S2", "AM62A"]), f"Platform {args.platform} is not supported"
+  return args
+
+args = parse_args()
+platform = args.platform
+
+def artifacts_folders(model_name):
+  artifacts_dir = f"artifacts_{model_name}_{platform}"
+
+  # Use a separate directory for data because compile_relay will delete the
+  # contents of artifacts_dir
+  artifacts_data_dir = artifacts_dir + '_data'
+  return artifacts_dir, artifacts_data_dir
 
 def is_on_target():
   return processor() == "aarch64"
@@ -124,9 +145,10 @@ def check_occurrence(pattern:str, text_file:str) -> int:
 def build_and_set_ext_lib(src_name, src_dir, build_dir):
   import subprocess
   build_dir = os.path.abspath(build_dir)
+  silicon_version = "7504" if platform == "AM62A" else "7100"
   try:
     subprocess.run(["make", "-f", "Makefile.ext_lib", f"NAME={src_name}",
-                    f"SRC_DIR={src_dir}", f"BUILD_DIR={build_dir}"], check=True)
+                    f"SRC_DIR={src_dir}", f"BUILD_DIR={build_dir}", f"SILICON_VERSION={silicon_version}"], check=True)
   except:
     print(f"Build external library for {src_name} failed")
     return False

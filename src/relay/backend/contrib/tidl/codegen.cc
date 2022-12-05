@@ -609,7 +609,7 @@ class TIDLJ7C7xModuleCodeGen : public CSourceModuleCodegenBase {
  */
 runtime::Module TIDLCompiler(const ObjectRef& ref) {
   TIDLContext ctx = TIDLContext::Current();
-  if (ctx->platform == "J7" || ctx->platform == "J721S2") {
+  if (ctx->platform == "J7" || ctx->platform == "J721S2" || ctx->platform == "AM62A") {
     if (ctx->c7x_codegen_enabled > 0)
     {
       if (ctx->gen_c7x_mod_enabled == 1)

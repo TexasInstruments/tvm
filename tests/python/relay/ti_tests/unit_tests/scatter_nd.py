@@ -10,16 +10,12 @@ import logging
 from typing import List
 import numpy as np
 
-from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence
+from unit_utils import is_on_target, gen_reference, check_reference, platform, artifacts_folders
 
 model_name = "scatter_nd"
-artifacts_dir = "artifacts_" + model_name
-artifacts_dir2 = "artifacts_" + model_name + "_2"
-
-# Use a separate directory for data because compile_relay will delete the
-# contents of artifacts_dir
-artifacts_data_dir = artifacts_dir + '_data'
-artifacts_data_dir2 = artifacts_dir2 + '_data'
+artifacts_dir , artifacts_data_dir = artifacts_folders(model_name)
+artifacts_dir2 = artifacts_dir + "_2"
+artifacts_data_dir2 = artifacts_data_dir + '_2'
 
 input_shapes = [("data", (64, 1, 1, 32, 32)), ("updates", (64, 1017))]
 weight_shapes = []
@@ -69,14 +65,14 @@ def compile_model():
                                      gen_new_data=gen_new_data)
 
   # Compile relay module
-  status = compile_relay(mod, weights, inputs, "J7",
+  status = compile_relay(mod, weights, inputs, platform,
                          compile_for_device=True, enable_tidl_offload=True, enable_c7x_codegen=True,
                          artifacts_folder=artifacts_dir, tidl_tensor_bits=8)
   if status != 1:
     print("TIDL compilation failed")
     return False
 
-  status = compile_relay(mod2, weights2, inputs2, "J7",
+  status = compile_relay(mod2, weights2, inputs2, platform,
                          compile_for_device=True, enable_tidl_offload=True, enable_c7x_codegen=True,
                          artifacts_folder=artifacts_dir2, tidl_tensor_bits=8)
   if status != 1:

@@ -143,7 +143,7 @@ def parse_args():
   args = parser.parse_args()
 
   assert(args.model_name is not None), "Please specify a model name"
-  assert(args.platform in ["J7", "J721S2"]), f"Platform {args.platform} is not supported"
+  assert(args.platform in ["J7", "J721S2", "AM62A"]), f"Platform {args.platform} is not supported"
 
   return args
 

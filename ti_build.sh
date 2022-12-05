@@ -140,7 +140,7 @@ function setup_tvm_tidl_tests {
     # In PSDK 8.4, TI C7x compiler 3.0.0.STS contains a known bug that generates an illegal
     # VSUBSP instruction on scalar A side registers.  It is fixed in a future release.
     # For now, use 2.1.1.LTS in the previous PSDK 8.2.
-    export CGT7X_ROOT=$(ls -d ${PSDKR_PATH}/../ti-processor-sdk-rtos-j721e-evm-08_02_00_05/ti-cgt-c7000_*)
+    export CGT7X_ROOT=$(ls -d ${PSDKR_PATH}/../ti-cgt-c7000_3.1.0B1/)
     pip3 install pytest opencv-python
 
     # Export workspace dir and mount it on EVM

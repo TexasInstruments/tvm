@@ -46,10 +46,12 @@ model_%.obj: model_%.c
 
 $(EXE_NAME): $(OBJS)
 	$(QUIET)$(CC) $(CFLAGS) $(OBJS) \
-                  $(TVM_C7X_ROOT)/dsp_syms.out.obj \
-            -z -l $(TVM_C7X_ROOT)/tidl_api.lib \
-               -l $(TVM_C7X_ROOT)/tvm_crt.lib \
-                  $(CGT7X_EXT_LIBS) \
+                  $(TVM_C7X_ROOT)/$(SILICON_VERSION)/dsp_syms.out.obj \
+            -z -i $(TVM_C7X_ROOT)/$(SILICON_VERSION) \
+               -l tidl_api.lib \
+               -l tvm_crt.lib \
+               -l rts$(SILICON_VERSION)_le.lib \
+               $(CGT7X_EXT_LIBS) \
                -l $(TVM_C7X_ROOT)/c7x_tvm.cmd \
             -o $@ -m $@.map
 	$(QUIET)$(STRIP) $@

@@ -11,14 +11,10 @@ import logging
 from typing import List
 import numpy as np
 
-from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence
+from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence, platform, artifacts_folders
 
 model_name = "bmul_odd"
-artifacts_dir = "artifacts_" + model_name
-
-# Use a separate directory for data because compile_relay will delete the
-# contents of artifacts_dir
-artifacts_data_dir = artifacts_dir + '_data'
+artifacts_dir , artifacts_data_dir = artifacts_folders(model_name)
 
 input_shapes = [ ("i0", (1, 671, 49, 49)), ("i1", (1, 671, 1, 1)) ]
 weight_shapes = []
@@ -43,7 +39,7 @@ def compile_model():
                                      gen_new_data=gen_new_data)
 
   # Compile relay module
-  status = compile_relay(mod, weights, inputs, "J7",
+  status = compile_relay(mod, weights, inputs, platform,
                          compile_for_device=True, enable_tidl_offload=False, enable_c7x_codegen=True,
                          artifacts_folder=artifacts_dir, tidl_tensor_bits=8)
   if status != 1:
@@ -52,7 +48,7 @@ def compile_model():
 
   c_file = os.path.join(artifacts_dir, "tempDir/model_1.c")
   num_DMAs = check_occurrence("create_DMA", c_file)
-  num_SEs  = check_occurrence("SE0ADV\\(float16\\)", c_file)
+  num_SEs  = check_occurrence("SE0ADV\\(float8\\)" if platform == "AM62A" else "SE0ADV\\(float16\\)", c_file)
   if num_DMAs < 3 or num_SEs < 1:
     print(f"FAIL: num_DMAs {num_DMAs} < 3 (expected), {num_SEs} < 1 (expected)")
     return False

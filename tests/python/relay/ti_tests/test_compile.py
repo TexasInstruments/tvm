@@ -52,7 +52,7 @@ def parse_args():
                       help='Compile which model(s)')
   parser.add_argument('--platform', action='append',
                       dest='platforms',
-                      help='Compile models for which platforms (J7, J721S2)')
+                      help='Compile models for which platforms (J7, J721S2, AM62A)')
   parser.add_argument('--target', action='store_true',
                       default=False,
                       help="Compile for target")
@@ -81,7 +81,7 @@ if __name__ == "__main__":
   if not args.models:
     args.models = [k for k, v in models.items()]
   if not args.platforms:
-    args.platforms = ["J7"]
+    args.platforms = ["AM62A", "J7"]
   targets = []
   targets += ["--target"] if args.target else []
   targets += ["--host"] if args.host else []

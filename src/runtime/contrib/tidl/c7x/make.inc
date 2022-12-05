@@ -34,5 +34,7 @@ MKDIR_P = mkdir -p
 RMDIR   = rm -fr
 QUIET  ?= @
 
-PKG_CFLAGS  = -o3 -mv7100 --abi=eabi --gcc --c11 -DSOC_J721E
+SILICON_VERSION ?= 7100
+PKG_CFLAGS  = -o3 --abi=eabi --gcc --c11 -DSOC_J721E
 CFLAGS += $(PKG_CFLAGS)
+CFLAGS += -mv$(SILICON_VERSION)

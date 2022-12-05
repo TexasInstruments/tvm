@@ -45,18 +45,34 @@ list(APPEND build_env_paths "PDK_PATH=${pdk_path}")
 message("-- Build with contrib.tidl.c7x libs, path= ${build_env_paths}")
 
 add_custom_target(tidl_c7x_libs
-                  COMMAND make ${build_env_paths} -f Makefile.tvm_crt -j$(nproc)
-                  COMMAND make ${build_env_paths} -f Makefile.dsp_syms -j$(nproc)
-                  COMMAND make ${build_env_paths} -f Makefile.tidl_api -j$(nproc)
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tvm_crt -j$(nproc)
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.dsp_syms -j$(nproc)
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tidl_api -j$(nproc)
                   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                  )
 
+add_custom_target(tidl_c7x_libs_mv7504
+                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.tvm_crt -j$(nproc)
+                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.dsp_syms -j$(nproc)
+                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.tidl_api -j$(nproc)
+                 WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+                )
+
+
 # works with tvm top-level "make clean"
-list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/build)
-list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/dsp_syms.out)
-list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/dsp_syms.out.obj)
-list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/tvm_crt.lib)
-list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/build)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/dsp_syms.out)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/dsp_syms.out.obj)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/tvm_crt.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/build)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/dsp_syms.out)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/dsp_syms.out.obj)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/tvm_crt.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/)
+
 
 set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${clean_files})
 

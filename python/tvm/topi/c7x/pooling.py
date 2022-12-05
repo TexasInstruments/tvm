@@ -16,7 +16,7 @@
 # under the License.
 # pylint: disable=invalid-name, unused-variable
 """Schedule for pooling operators"""
-from tvm import te
+from tvm import te, get_global_func
 from .. import tag
 
 
@@ -60,15 +60,18 @@ def _parallel_sch(sch, oshape, do_vectorize=False):
                 _, c_i = sch.split(c, split_factor)
                 sch.vectorize(c_i)
 
+    GetCurrentTIDLContext = get_global_func("tidl.GetCurrentTIDLContext")
+    ctx = GetCurrentTIDLContext()
+    vectorize_limit = 8 if ctx.platform == "AM62A" else 16
     if len(sch.op.axis) >= 5:
         fused = sch.fuse(sch.op.axis[0], sch.op.axis[1], sch.op.axis[2])
         if do_vectorize:
-            vectorize(fused, 3)
+            vectorize(fused, 3, vectorize_limit)
 
     elif len(sch.op.axis) >= 3:
         fused = sch.fuse(sch.op.axis[0], sch.op.axis[1])
         if do_vectorize:
-            vectorize(fused, 2)
+            vectorize(fused, 2, vectorize_limit)
     else:
         sch.parallel(sch.op.axis[0])
         return

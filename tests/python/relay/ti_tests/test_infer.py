@@ -67,7 +67,7 @@ def parse_args():
                       help='Compile which model(s)')
   parser.add_argument('--platform', action='append',
                       dest='platforms',
-                      help='Compile models for which platforms (J7, J721S2)')
+                      help='Compile models for which platforms (J7, J721S2, AM62A)')
   parser.add_argument('--tvm', action='store_true',
                       default=False,
                       help="Using tvm runtime (default is using dlr runtime)")

@@ -9,13 +9,13 @@ import logging
 from typing import List
 import numpy as np
 
-from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence
+from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence, platform, artifacts_folders
 
 model_name = "sigmoid_tidl"
-artifacts_dir = "artifacts_" + model_name
+artifacts_dir , artifacts_data_dir = artifacts_folders(model_name)
+
 input_shapes = [ ("i0_s7", (1, 1, 1, 512)) ]
 weight_shapes = [ ]
-artifacts_data_dir = artifacts_dir + '_data'
 
 
 def compile_model():
@@ -45,7 +45,7 @@ def compile_model():
                                      gen_new_data=gen_new_data)
 
   # Compile relay module
-  status = compile_relay(mod, weights, inputs, "J7",
+  status = compile_relay(mod, weights, inputs, platform,
                          compile_for_device=True, enable_tidl_offload=True,
                          enable_c7x_codegen=True,
                          artifacts_folder=artifacts_dir, tidl_tensor_bits=8)

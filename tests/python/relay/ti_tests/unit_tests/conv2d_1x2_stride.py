@@ -14,14 +14,10 @@ import logging
 from typing import List
 import numpy as np
 
-from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence
+from unit_utils import is_on_target, gen_reference, check_reference, check_occurrence, platform, artifacts_folders
 
 model_name = "conv2d_1x2"
-artifacts_dir = "artifacts_" + model_name
-
-# Use a separate directory for data because compile_relay will delete the
-# contents of artifacts_dir
-artifacts_data_dir = artifacts_dir + '_data'
+artifacts_dir , artifacts_data_dir = artifacts_folders(model_name)
 
 input_shapes = [("i0", (1, 8, 224, 224)),]
 weight_shapes = [("w1", (16, 8, 3, 3)),]
@@ -50,7 +46,7 @@ def compile_model():
                                      gen_new_data=gen_new_data)
 
   # Compile relay module
-  status = compile_relay(mod, weights, inputs, "J7",
+  status = compile_relay(mod, weights, inputs, platform,
                          compile_for_device=True, enable_tidl_offload=True, enable_c7x_codegen=True,
                          artifacts_folder=artifacts_dir, tidl_tensor_bits=8)
   if status != 1:

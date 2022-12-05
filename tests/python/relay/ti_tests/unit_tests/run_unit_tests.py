@@ -3,6 +3,7 @@
 import os
 import sys
 import subprocess
+from unit_utils import platform
 
 unit_tests = [
 "broadcast_mul_odd_blocks_odd_iters.py",
@@ -20,7 +21,7 @@ failed_tests = []
 if __name__ == "__main__":
   for test in unit_tests:
     try:
-      subprocess.run(["python3", test], check=True)
+      subprocess.run(["python3", test, "--platform", platform], check=True)
     except:
       failed_tests.append(test)
 
