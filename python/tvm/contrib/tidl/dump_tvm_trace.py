@@ -48,20 +48,22 @@ def read_trace(trace_filename : str):
 
     output['oid'] = oid
     output['ndim'] = read_int(f)
-    output['type_code'] = read_int(f)
+    output['type_code'] = type_code = read_int(f)
     output['elem_bytes'] = read_int(f)
     output['num_elements'] = read_int(f)
-    output['min'] = read_float(f)
-    output['max'] = read_float(f)
-    output['sum'] = read_float(f)
-    output['fh_sum'] = read_float(f)
-
-    tensor_values = []
-    num_tensor_values = read_int(f)
-    if num_tensor_values:
-      for i in range(num_tensor_values):
-        tensor_values.append(read_float(f))
-    output['tensor_values'] = tensor_values
+    if type_code != 1:
+      output['min'] = read_float(f)
+      output['max'] = read_float(f)
+      output['sum'] = read_float(f)
+      output['fh_sum'] = read_float(f)
+      tensor_values = []
+      num_tensor_values = read_int(f)
+      if num_tensor_values:
+        for i in range(num_tensor_values):
+          tensor_values.append(read_float(f))
+      output['tensor_values'] = tensor_values
+    else:
+      output['tensor_values'] = output['min'] = output['max'] = output['sum'] = output['fh_sum'] = None
     return output
 
   def read_node(f):
