@@ -2084,6 +2084,11 @@ class TIDLCompiler:
         # (Backward compatible) if single calibration image/data/dict, convert to list
         if not isinstance(graph_input_list, list):
             graph_input_list = [ graph_input_list ]
+        mod_params_names = [ var.name_hint for var in mod_orig['main'].params ]
+        for name_val_dict in graph_input_list:
+            for name in name_val_dict.keys():
+                if name not in mod_params_names:
+                    raise Exception(f"Specified input name, {name}, is not found in the model.")
 
         #============= Find data layout of the original graph =============
         data_layout = find_data_layout(mod_orig)
