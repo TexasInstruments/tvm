@@ -76,4 +76,5 @@ __declspec(dllexport) void DmaUtilsAutoInc3d_wait() {}
 
 __declspec(dllexport) void TVM_lockInterrupts() {}
 __declspec(dllexport) void TVM_unlockInterrupts() {}
+__declspec(dllexport) void TVM_cacheWbInv() {}
 

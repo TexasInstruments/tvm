@@ -94,6 +94,7 @@ extern "C" {
   extern void tvmcrt_exit(int ecode);
   extern int32_t TVM_lockInterrupts();
   extern void    TVM_unlockInterrupts(int32_t);
+  extern void    TVM_cacheWbInv();
   extern void tvm_tidl_argsort_nms(float *input, int *sort_num, int *output);
 }
 
@@ -179,8 +180,8 @@ class AllocDDRContext
 class CriticalSectionContext
 {
 public:
-  CriticalSectionContext()  { old_state = TVM_lockInterrupts(); }
-  ~CriticalSectionContext() { TVM_unlockInterrupts(old_state); }
+  CriticalSectionContext()  { old_state = TVM_lockInterrupts();  TVM_cacheWbInv(); }
+  ~CriticalSectionContext() { TVM_cacheWbInv();  TVM_unlockInterrupts(old_state); }
 private:
   int32_t old_state;
 };

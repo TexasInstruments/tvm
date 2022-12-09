@@ -107,6 +107,7 @@ SECTIONS
 
 --import=TVM_lockInterrupts
 --import=TVM_unlockInterrupts
+--import=TVM_cacheWbInv
 
 /* workaround to prevent linking printf/puts from rts7100_le.lib */
 --symbol_map=printf=__dummy_printf
