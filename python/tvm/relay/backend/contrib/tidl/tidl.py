@@ -1857,6 +1857,10 @@ class TIDLAnnotation:
     def allow_func(self, op_name, expr):
         """ Allow function: constraint checking is delegated to the import library """
 
+        ### TIDL batch proecessing does not support all types of layers
+        if op_name in ["image.resize2d", "strided_slice"]:
+            if expr.args[0].checked_type.shape[0] > 1:
+                return False
         if op_name == "image.resize2d" and not self._check_tidl_optimized_resize(expr):
             return False
 
