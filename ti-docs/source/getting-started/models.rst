@@ -1,21 +1,23 @@
+.. _ti-tvm-gs-models:
+
 ############
 Model Basics
 ############
 
 Machine learning models usually take input data in tensor (multi-dimensional array) format
 and produce output data in tensor format.  Before compiling and inferencing a model using
-TVM, it is recommended to understand the basics of a model.
+TVM, it is recommended that you understand the basic requirements for your model:
 
-- model semantics, meanings of input and output
+- model semantics, including the meanings of input and output
 - input name, shape
 - output shape
-- a sample input data
+- sample of input data
 - expected output data corresponding to the sample input data
 
-Experimenting with pre-processing input data, running inference and post-processing input data
-can be done even without TVM setup and TI devices.  E.g. if you have an ONNX model, you can
-write a python script, import onnxruntime package, pre-process data, run inference, post-process
-data, and verify the results.
+Experimenting with pre-processing input data, running inference, and post-processing input data
+can be accomplished even without a TVM setup and TI devices. For example, if you have an ONNX model, you can
+write a Python script like the following to import the ``onnxruntime`` package, pre-process input data, run inferencing, post-process
+output data, and verify the results.
 
 .. code-block:: python
 
@@ -26,7 +28,6 @@ data, and verify the results.
   sess = onnxruntime.InferenceSession(model_file)
   output = sess.run([], {input_name : input_data})
 
-In what follows, we assume that users understand the model basics and we will focus on TVM
-related aspects.  Although we have data pre-processing, model input names and shapes, data
-post-processing in our examples, but they could be different for users models and it is users'
+In the topics that follow, we assume you understand the basics of your model, so we focus on TVM-related aspects.  Although we show data pre-processing, model input names and shapes, and data
+post-processing in our examples, the details about these steps are likely to be different for your model, so it is your
 responsibility to set them correctly.

@@ -26,6 +26,7 @@ def compile_model(model_name: str, platform: str,
                   compile_for_device: bool, enable_tidl_offload: bool, enable_c7x_codegen: bool,
                   batch_size:int=0):
   """ Compile a model based on the parameters specified.
+
   Parameters
   ----------
   model_name :

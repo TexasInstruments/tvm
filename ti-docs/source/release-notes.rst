@@ -1,3 +1,5 @@
+.. _ti-tvm-rlsn:
+
 #############
 Release Notes
 #############

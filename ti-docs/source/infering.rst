@@ -1,21 +1,28 @@
+.. _ti-tvm-infering:
+
 ===================
 Inference Explained
 ===================
 
-In this section, we will explain in more details about TVM inference.
+This section explains more details about running and debugging TVM inference. An introduction to this topic is provided in :ref:`ti-tvm-gs-inference`.
 
-There are two inference scenarios, running TIDL unsupported layers on Arm or on C7x.  They
+There are two inference scenarios:
+
+- Running TIDL unsupported layers on Arm
+- Running TIDL unsupported layers on C7x
+
+These
 correspond to compiling the model with ``c7x_codegen=0`` or ``c7x_codegen=1``.  The same
 inference script or application can be used for both scenarios.
 
-Running unsupported layers on Arm
+Running Unsupported Layers on Arm
 =================================
 
-When running unsupported layers on Arm, TVM graph runtime on Arm will look at each node
-in the graph (.json),
+When running unsupported layers on Arm, TI TVM graph runtime on Arm looks at each node
+in the graph (.json).
 
-- If it is a TIDL subgraph, it is dispatched to C7x for execution (via OpenVX),
-- If it is a non-TIDL node, it is executed with TVM generated Arm code.
+- If it is a TIDL subgraph, it is dispatched to C7x for execution (via OpenVX).
+- If it is a non-TIDL node, it is executed with TVM-generated Arm code.
 
 .. _`TVM Infer Arm`:
 .. figure:: images/TVM_Infer_Arm.png
@@ -25,16 +32,16 @@ in the graph (.json),
   Model inference with unsupported layers mapped to Arm
 
 
-Running unsupported layers on C7x
+Running Unsupported Layers on C7x
 =================================
 
-When running unsupported layers on C7x, TVM graph runtime on Arm will look at the single
-node in the wrapper graph (.json), 'tidl_tvm_0', and dispatch the whole graph to C7x (via OpenVX).
+When running unsupported layers on C7x, TI TVM graph runtime on Arm looks at the single
+node in the wrapper graph (.json), 'tidl_tvm_0', and dispatches the whole graph to C7x (via OpenVX).
 
-TVM graph runtime at C7x will look at each node in the graph,
+TI TVM graph runtime on C7x looks at each node in the graph.
 
-- If it is a TIDL subgraph, it is executed with TIDL library,
-- If it is a non-TIDL node, it is executed with TVM generated C7x code.
+- If it is a TIDL subgraph, it is executed with the TIDL library.
+- If it is a non-TIDL node, it is executed with TVM-generated C7x code.
 
 .. _`TVM Infer C7x`:
 .. figure:: images/TVM_Infer_C7x.png
@@ -47,13 +54,15 @@ TVM graph runtime at C7x will look at each node in the graph,
 Debugging Inference
 ===================
 
-We use environment variable to help debug the TVM+TIDL inference flow.  First, we introduce the
-"printf" terminal, where debug "printf" output from C7x core will show up.
+TIDL uses the TIDL_RT_DEBUG environment variable to help debug the TVM+TIDL inference flow.  
 
 Vision apps "printf" terminal
 -----------------------------
 
-Open a terminal on EVM, and run the following commands.  Run the inference in a different terminal.
+First, you need to open a 
+"printf" terminal, where debug "printf" output from C7x core is shown.
+
+Open a terminal on your EVM, and run the following commands.  Run the inference in a different terminal.
 
 .. code:: bash
 
@@ -64,11 +73,13 @@ Open a terminal on EVM, and run the following commands.  Run the inference in a 
 Debugging TIDL subgraphs
 ------------------------
 
+The available settings for the TIDL_RT_DEBUG environment variable are as follows.
+
 TIDL_RT_DEBUG=1
 ^^^^^^^^^^^^^^^
 
-When set, TIDL subgraph performance information are printed out during
-inference, either on the "printf" terminal or on the terminal where inference is running.
+When set to 1, TIDL subgraph performance information is printed out during
+inference, either on the "printf" terminal or on the terminal where inference is running. For example:
 
 .. code:: text
 
@@ -81,14 +92,14 @@ inference, either on the "printf" terminal or on the terminal where inference is
 TIDL_RT_DEBUG=2, 3
 ^^^^^^^^^^^^^^^^^^
 
-More verbose TIDL subgraph debug print outs.
+When set to 2 or 3, more verbose information about TIDL subgraphs is provided in addition to the information provided when the setting is 1. For example:
 
 .. code:: text
 
   [C7x_1 ] 1852081.872134 s: Alg Alloc for Layer # -    0
   [C7x_1 ] 1852081.872160 s: Alg Alloc for Layer # -    1
   ... ... ...
-  [C7x_1 ] 1852081.873059 s: TIDL Memory requiement
+  [C7x_1 ] 1852081.873059 s: TIDL Memory requirement
   [C7x_1 ] 1852081.873087 s: MemRecNum , Space     , Attribute ,    SizeinBytes
   [C7x_1 ] 1852081.873117 s:  0         , DDR       , Persistent,    15208
   [C7x_1 ] 1852081.873145 s:  1         , DDR       , Persistent,    136
@@ -108,23 +119,25 @@ More verbose TIDL subgraph debug print outs.
 TIDL_RT_DEBUG=4, 5
 ^^^^^^^^^^^^^^^^^^
 
-This is only supported when running TIDL unsupported layers on Arm.  When set, tensor output
-from each layer in the TIDL subgraph are dumped into the Arm Linux file system, with names
+Setting this environment variable to 4 or 5 is supported only when running TIDL unsupported layers on Arm.  When set to 4 or 5, tensor output
+from each layer in the TIDL subgraph is dumped into the Arm Linux file system, with filenames
 ``tidl_trace_subgraph_<subgraph_id>_<layer_id>_<tensor_shape>.y`` for raw data and
 ``tidl_trace_subgraph_<subgraph_id>_<layer_id>_<tensor_shape>_float.bin`` for converted float data.
 
 Debugging TVM nodes
 -------------------
 
+The TVM_RT_DEBUG, TVM_RT_TRACE_NODE, TVM_RT_TRACE_SIZE, and TVM_TRACE_NODE environment variables can be used as follows to aid in debugging TVM nodes.
+
 TVM_RT_DEBUG=1
 ^^^^^^^^^^^^^^
 
-When set, TVM runtime on Arm will collect performance statistics for each node
-in the graph and save into the Arm Linux file system, with name ``tvm_arm.trace``.  You can use
-``python/tvm/contrib/tidl/dump_tvm_trace.py`` to dump the details.
+When set to 1, TVM runtime on Arm collects performance statistics for each node
+in the graph and saves into the Arm Linux file system, with the filename ``tvm_arm.trace``.  You can use the
+``python/tvm/contrib/tidl/dump_tvm_trace.py`` script to dump the details.
 
-When TIDL unsupported layers are running on Arm, ``tvm_arm.trace`` will include execution time for
-TIDL nodes and layers running on Arm.  E.g.
+When TIDL unsupported layers are run on Arm, the ``tvm_arm.trace`` file includes the execution time for
+TIDL nodes and layers running on Arm. For example:
 
 .. code:: console
 
@@ -149,8 +162,8 @@ TIDL nodes and layers running on Arm.  E.g.
   node 17: tidl_0  1279.285 microseconds
   node 4294967295: Graph  13856.93 microseconds
 
-When TIDL unsupported layers are running on C7x, ``tvm_arm.trace`` will only include execution
-time for a single node representing the whole graph.  E.g.
+When TIDL unsupported layers are running on C7x, ``tvm_arm.trace`` includes only the execution
+time for a single node representing the whole graph. For example:
 
 .. code:: console
 
@@ -163,10 +176,10 @@ time for a single node representing the whole graph.  E.g.
 TVM_RT_DEBUG=2
 ^^^^^^^^^^^^^^
 
-When set, in addition to ``TVM_RT_DEBUG=1``, TVM runtime on C7x will also collect performance
-statistics for each node in the graph on C7x and save into the Arm Linux file system,
-with name ``tvm_c7x.trace``.  You can use ``python/tvm/contrib/tidl/dump_tvm_trace.py``
-to dump the details. 
+When set to 2, in addition to the information provided when the TVM_RT_DEBUG setting is 1, TVM runtime on C7x also collects performance
+statistics for each node in the graph on the C7x and saves them to the Arm Linux file system,
+with the filename ``tvm_c7x.trace``.  You can use the ``python/tvm/contrib/tidl/dump_tvm_trace.py`` script
+to dump the details. For example:
 
 .. code:: console
 
@@ -191,16 +204,16 @@ to dump the details.
   node 17: tidl_0  990.953 microseconds
   node 4294967295: Graph  8283.967 microseconds
 
-``tvm_c7x.trace`` is only available for the model compiled with ``c7x_codegen=1``. 
+The ``tvm_c7x.trace`` output is available only if the model was compiled with ``c7x_codegen=1``. 
 
 
 TVM_RT_DEBUG=3
 ^^^^^^^^^^^^^^
 
-When set, in addition to behavior ``TVM_RT_DEBUG=1,2``, TVM runtime on Arm and C7x will also
-collect output tensor statistics for each layer and save into the trace files.  Collected
-statistics  include minimum, maximum, sum, sum of the first half of the tensor.
-Please ignore the performance numbers in this mode as there are overhead collecting tensor
+When set to 3, in addition to the information provided when the setting is 1 or 2, TVM runtime on Arm and C7x collects output tensor statistics for each layer and saves it to the trace files. Collected
+statistics include minimum, maximum, sum, and the sum of the first half of the tensor.
+
+Please ignore performance numbers obtained in this mode; there is overhead when collecting tensor
 statistics.
 
 .. code:: console
@@ -235,18 +248,20 @@ statistics.
 TVM_RT_DEBUG=4
 ^^^^^^^^^^^^^^
 
-When set, TVM runtime on Arm and C7x will print out information about each node when each node
+When set to 4, TVM runtime on Arm and C7x prints out information about each node when each node
 is being executed, either on the terminal where inference is run or the "printf" terminal.
-This mode can be helpful to debug the model execution.
+This mode can be helpful for debugging the model's execution.
 
 
 TVM_RT_TRACE_NODE=<node_id> TVM_RT_DEBUG=3, 4
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-When set, TVM runtime on Arm and C7x will also save the tensor outputs of the specified node into
-the trace file.  ``dump_trace.py`` will save the tensor outputs into the Arm Linux file system
-as numpy files, with name ``n<node_id>_o<output_id>.npy``.  Node the ``tensor values saved in``
-lines in the following example.  Tensor outputs are saved as float values in the trace.
+When these settings are used, TVM runtime on Arm and C7x also saves the tensor outputs of the specified node into
+the trace file. The ``dump_trace.py`` script saves the tensor outputs into the Arm Linux file system
+as numpy files, with the filename ``n<node_id>_o<output_id>.npy``. For example, see the ``tensor values saved in``
+messages in the following example.  
+
+Tensor outputs are saved as float values in the trace.
 
 .. code:: console
 
@@ -270,6 +285,6 @@ lines in the following example.  Tensor outputs are saved as float values in the
 TVM_RT_TRACE_SIZE=<new_size> TVM_TRACE_NODE=<node_id> TVM_RT_DEBUG=3, 4
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-If you see ``Not enough trace memory for dumping output <node_id>`` message in the verbose
-output for a node, you can use ``TVM_RT_TRACE_SIZE`` to set a larger trace buffer to store
-the trace.  The default is set to 2*1024*1024 (2MB) bytes.
+If you see a ``Not enough trace memory for dumping output <node_id>`` message in the verbose
+output for a node, you can use ``TVM_RT_TRACE_SIZE`` to increase the size of the trace buffer that stores
+the trace.  The default is 2*1024*1024 (2MB) bytes.

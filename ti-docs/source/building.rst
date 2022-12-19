@@ -1,12 +1,17 @@
-############
+.. _ti-tvm-building:
+
+#################
+Building Packages
+#################
+
 Building TVM
-############
+==================
 
 .. note::
 
-   These steps are required only if a user intends to modify the TI TVM package. Refer to :ref:`Getting-started` for instructions on using the prebuilt packages from TI.
+   These steps described here are required only if you intend to modify the TI TVM package. Refer to :ref:`Getting-started` for instructions on using the prebuilt packages from TI.
 
-The TVM `Install from Source page <https://tvm.apache.org/docs/install/from_source.html>`_ provides instructions on installing
+The TVM `Install from Source <https://tvm.apache.org/docs/install/from_source.html>`_ page provides instructions on installing
 the dependencies required for building TVM from source.
 
 The sections below specify additional dependencies required to build TI's tidl-j7 branch.
@@ -16,11 +21,11 @@ The sections below specify additional dependencies required to build TI's tidl-j
     The TI TVM package builds on Linux only. MacOS and Windows builds are not currently supported.
 
 TI's TVM releases are synchronized with TI's `Processor SDK RTOS <https://www.ti.com/tool/download/PROCESSOR-SDK-RTOS-J721E>`_ releases.
-The following table lists the PSDK RTOS release and the corresponding TVM tag that is compatible with it.
+The following table lists the PSDK RTOS releases and the corresponding TVM tag that is compatible with each one.
 
 +--------------+--------------------+-----------------------------------------------------------+
 | PSDK release | TVM release tag    | Key features                                              |
-+--------------+--------------------+-----------------------------------------------------------+
++==============+====================+===========================================================+
 | 8.4          | TIDL_PSDK_8.4      | Bug fixes, J721S2 support, debug support                  |
 +--------------+--------------------+-----------------------------------------------------------+
 | 8.2          | TIDL_PSDK_8.2      | C7x code generation support                               |
@@ -38,29 +43,29 @@ Prerequisites
 PSDK RTOS
 +++++++++
 
-Download and install the `Processor SDK RTOS <https://www.ti.com/tool/download/PROCESSOR-SDK-RTOS-J721E>`_ release corresponding to the TVM release tag and set PSDKR_PATH to point to the installation.
-E.g.,
+* Download and install the `Processor SDK RTOS <https://www.ti.com/tool/download/PROCESSOR-SDK-RTOS-J721E>`_ release corresponding to the TVM release tag you plan to use.
+* Set the PSDKR_PATH environment variable to point to the installation. For example: 
 
-.. code-block:: bash
+  .. code-block:: bash
 
-    export PSDKR_PATH=/path/to/ti-processor-sdk-rtos-j721e-evm-08_04_00_06
+     export PSDKR_PATH=/path/to/ti-processor-sdk-rtos-j721e-evm-08_04_00_06
 
 Clang/LLVM
 ++++++++++
 
-Download and install clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04 from `LLVM github <https://github.com/llvm/llvm-project/releases/download/llvmorg-10.0.0/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04.tar.xz>`_.
+* Download and install `clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04 <https://github.com/llvm/llvm-project/releases/download/llvmorg-10.0.0/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04.tar.xz>`_ from the LLVM Git repository.
 
 Arm GCC
 +++++++
 
-If building the aarch64 TVM runtime and DLR packages, download and install the x86_64 Linux hosted cross compiler for AArch64 GNU/Linux from the `Arm GNU Toolchain download <https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-a/downloads/9-2-2019-12>`_ page.
-Set ARM64_GCC_PATH to point to the installation directory. E.g.,
+* If you are building the aarch64 TVM runtime and DLR packages, download and install the x86_64 Linux hosted cross compiler for AArch64 GNU/Linux from the `Arm GNU Toolchain download <https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-a/downloads/9-2-2019-12>`_ page.
+* Set the ARM64_GCC_PATH environment variable to point to the installation directory. For example:
 
-.. code-block:: bash
+  .. code-block:: bash
 
-    export ARM64_GCC_PATH=/path/to/gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu
+     export ARM64_GCC_PATH=/path/to/gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu
 
-TVM Compiler and Runtime for x86_64
+TVM compiler and runtime for x86_64
 -----------------------------------
 
 The steps below outline building the TVM compiler and creating the Python package for x86_64.
@@ -85,7 +90,7 @@ The steps below outline building the TVM compiler and creating the Python packag
     Building the TVM compiler for AArch64 is not supported.
 
 
-TVM Runtime for AArch64
+TVM runtime for AArch64
 -----------------------
 
 The TVM Runtime is an alternative to using the DLR for running inference. It provides C and Python APIs to load and run
@@ -97,15 +102,14 @@ models compiled by TVM. The steps below outline building just the TVM runtime fo
     cmake -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/arm-tidl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} -DCMAKE_TOOLCHAIN_FILE=../cmake/modules/contrib/ti-aarch64-linux-gcc-toolchain.cmake ..
     make clean; make runtime
 
-############
 Building DLR
-############
+==================
 
-The Neo-AI-DLR (Deep Learning Runtime) is used for inference i.e. load and run models compiled by TVM.
-DLR can be built for x86_64 to enable host emulation i.e. run a model with TIDL offload on a x86_64 PC. DLR can also be built
+The Neo-AI Deep Learning Runtime (:term:`DLR`) is used for inference, that is, to load and run models compiled by TVM.
+DLR can be built for x86_64 to enable host emulation, that is, to run a model with TIDL offload on a x86_64 PC. DLR can also be built
 AArch64 and used for inference on the device.
 
-x86_64 Package
+x86_64 package
 --------------
 .. code-block:: bash
 
@@ -122,7 +126,7 @@ x86_64 Package
     cd python; python3 ./setup.py bdist_wheel; ls dist
 
 
-AArch64 Package
+AArch64 package
 ---------------
 .. code-block:: bash
 

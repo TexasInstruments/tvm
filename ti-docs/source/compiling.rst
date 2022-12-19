@@ -1,49 +1,60 @@
+.. _ti-tvm-compiling:
+
 =====================
 Compilation Explained
 =====================
 
-In this section, we will explain in more details about TVM compilation.
+This section explains TI TVM compilation in more detail. An introduction to this topic is provided in :ref:`ti-tvm-gs-compilation`.
 
+
+.. _ti-tvm-compiling-env:
 
 Environment Setup
 =================
-If not already set up by the edgeai, the following three environment variables are required
+If they have not already been set up by Edgeai, the following three environment variables are required
 before running the compilation script.
 
-- ``TIDL_TOOLS_PATH``: set to installed /path/to/processor_sdk_rtos/tidl_release/tidl_tools
-- ``ARM64_GCC_PATH``: set to installed /path/to/gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu
-- ``CGT7X_ROOT``: set to installed /path/to/`TI C7x C/C++ compiler 2.1.1 LTS <https://www.ti.com/tool/download/C7000-CGT/2.1.1.LTS>`_
+- ``TIDL_TOOLS_PATH``: Point to installed /processor_sdk_rtos/tidl_release/tidl_tools.
+- ``ARM64_GCC_PATH``: Point to installed /gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu.
+- ``CGT7X_ROOT``: Point to installed `TI C7x C/C++ compiler 2.1.1.LTS <https://www.ti.com/tool/download/C7000-CGT/2.1.1.LTS>`_.
 
 .. note::
-  Processor SDK RTOS currently ships TI C7x compiler 3.0.0 STS.  There is a known bug in the
-  compiler impacting TVM C7x code generation.  It has been fixed and will be released in the next
-  Processor SDK.  For now, please use 2.1.1 LTS for TVM C7x code generation.
+  The processor SDK RTOS currently ships with the TI C7x compiler 3.0.0.STS. There is a known bug in the
+  compiler that impacts TVM C7x code generation. This bug has been fixed and will be released in the next
+  Processor SDK.  For now, please use 2.1.1.LTS for TVM C7x code generation.
+
+.. _ti-tvm-compiling-frontend:
 
 Frontends
 =========
 
 TVM can accept machine learning models in many formats, including Tensorflow/TFLite, Keras,
-Core ML, MXNet, ONNX, PyTorch.  As the first step of compilation, these formats are all
-imported into TVM's internal common representation, Relay IR, using different frontends in TVM.
-In addition to various examples in Apache TVM documentation, we also have examples in
-``tests/python/relay/ti_tests/models.py`` to show how to import from different network
+Core ML, MXNet, ONNX, and PyTorch.  As the first step of compilation, these formats are all
+imported into TVM's internal common representation, :term:`Relay IR`, using different frontends in TVM.
+
+TI TVM provides additional examples beyond those provided by :term:`Apache TVM` in
+``tests/python/relay/ti_tests/models.py`` to show how to import machine learning models in different network
 formats into Relay IR.
 
+
+.. _ti-tvm-compiling-calib:
 
 Calibration Data
 ================
 
-After we partition layers into subgraphs that can be offloaded to TIDL, these subgraphs need
+After partitioning layers into :term:`subgraphs` that can be offloaded to TIDL, these subgraphs need
 to be imported to TIDL.  Because TIDL runs inference with quantized fixed-point values,
-TIDL import process requires calibration data so that each layer's dynamic range can be
+the TIDL import process requires calibration data so that each layer's dynamic range can be
 estimated and the scaling factor for converting between floating point and fixed point
 can be computed.  
 
-User will only need to provide the calibration data for the whole model.  TVM+TIDL compilation
-flow will automatically obtain the corresponding tensor values at the TIDL subgraph boundaries
-and feed those values into the TIDL import process for calibration.  User-provided calibration
-data should represent the typical input for the model.
+You only need to provide calibration data for the whole model. The TVM+TIDL compilation
+flow automatically obtains the corresponding tensor values at the TIDL subgraph boundaries
+and feeds those values into the TIDL import process for calibration.  The calibration
+data you provide should represent typical input for the model.
 
+
+.. _ti-tvm-compiling-artifacts:
 
 Artifacts
 =========
@@ -51,74 +62,73 @@ Artifacts
 Deployable module
 -----------------
 
-After successful TVM+TIDL compilation, a deployable module consists of 3 files are saved in
+After a successful TVM+TIDL compilation, a deployable module consists of 3 files that are saved in
 the ``<artifacts_folder>``.
 
-- .json: Json file describing the compiled graph with information about nodes, allocation, etc.
-- .so: The shared lib containing code to run nodes in the compiled graph.  This is a fat binary.
-  Imported TIDL subgraph artifacts, generated C7x code are all embedded in this fat binary.
-- .params: The weights associated with the nodes in the compiled graph.
+- **.json:** A JSON file describing the compiled graph through information about nodes, allocation, etc.
+- **.so:** The shared library containing code to run nodes in the compiled graph.  This is a fat binary. Imported TIDL subgraph artifacts and generated C7x code are embedded in this fat binary.
+- **.params:** Contains weights associated with the nodes in the compiled graph.
 
-At inference time, DLR/TVM runtime read these 3 files and create an runtime instance to run
+At inference time, DLR/TVM runtime read these 3 files and create a runtime instance to run
 inference.
 
 .. hint::
-  During the development, you may export the x86_64 Linux filesystem where you run compilation,
+  During development, you may export the x86_64 Linux filesystem where you run compilation,
   and mount the filesystem on your EVM so that you do not need to copy the deployable module.
 
-For deploying onto EVM, the deployable module is all that is needed.  During compilation, we
-also save intermediate results in the ``<artifacts_folder>/tempDir`` directory.  They may
-help understand and debug the compilation.  The following are some of the intermediate artifacts.
+For deploying onto your EVM, the deployable module is all that is needed.  During compilation, TI TVM saves intermediate results in the ``<artifacts_folder>/tempDir`` directory.  These results may
+help you understand and debug the compilation.  The following subsections describe some of the intermediate artifacts.
 
 Relay graphs
 ------------
 
-- relay_graph.orig.txt: the original relay graph from the TVM frontend
-- relay_graph.prepared.txt: relay graph after transformations that prepare for TIDL offload
-- relay_graph.annotated.txt: relay graph annotated for TIDL offload
-- relay_graph.partitioned.txt: relay graph partitioned for TIDL offload
-- relay_graph.import.txt: relay graph used to import into TIDL
-- relay_graph.boundary.txt: relay graph used to obtain calibration data at TIDL subgraph boundaries
-- relay_graph.optimized.txt: optimized relay graph for code generation
-- relay_graph.wrapper.txt: wrapper relay graph on Arm side for dispatching the graph to C7x
+- **relay_graph.orig.txt:** The original relay graph from the TVM frontend.
+- **relay_graph.prepared.txt:** The relay graph after transformations that prepare for TIDL offload.
+- **relay_graph.annotated.txt:** The relay graph annotated for TIDL offload.
+- **relay_graph.partitioned.txt:** The relay graph partitioned for TIDL offload.
+- **relay_graph.import.txt:** The relay graph used to import into TIDL.
+- **relay_graph.boundary.txt:** The relay graph used to obtain calibration data at TIDL subgraph boundaries.
+- **relay_graph.optimized.txt:** The optimized relay graph for code generation.
+- **relay_graph.wrapper.txt:** The wrapper relay graph on the Arm side for dispatching the graph to C7x.
 
-For example, user may look into ``relay_graph.import.txt`` to see how many TIDL subgraphs are
+For example, you may examine ``relay_graph.import.txt`` to see how many TIDL subgraphs are
 created and which layers are not offloaded to TIDL.
 
 
 Imported TIDL artifacts
 -----------------------
 
-TIDL subgraphs are imported into TIDL artifacts in TIDL specific formats.  They are embedded into
-the ``.so`` fat binary in the deployable module.  The DLR/TVM runtime will retrieve TIDL artifacts
-and invoke the TIDL runtime at inference time.
+TIDL subgraphs are imported into TIDL artifacts in TIDL-specific formats.  These artifacts are embedded into
+the ``.so`` fat binary in the deployable module.  The DLR/TVM runtime retrieves TIDL artifacts
+and invokes the TIDL runtime at inference time.
 
-- relay.gv.svg: graphical view of the whole network and where the TIDL subgraphs are
-- subgraph<n>_net.bin.svg: graphical view of TIDL subgraphs
+- **relay.gv.svg:** A graphical view of the whole network and where the TIDL subgraphs are located.
+- **subgraph<n>_net.bin.svg:** A graphical view of TIDL subgraphs.
 
 
 Generated C7x code
 ------------------
 
-When ``c7x_codegen`` is set to 1 in the compilation script, TVM will generated C7x code for layers
-not offloaded to TIDL.  These C7x code are compiled and embedded into the ``.so`` fat binary in
-the deployable module.  The DLR/TVM runtime will retrieve the C7x code and dispatch to C7x
+When ``c7x_codegen`` is set to 1 in the compilation script, TI TVM generates C7x code for layers
+not offloaded to TIDL.  This C7x code is compiled and embedded into the ``.so`` fat binary in
+the deployable module.  The DLR/TVM runtime retrieves the C7x code and dispatches it to the C7x
 for execution.
 
-- model_<n>.c: generated code either to run a TIDL subgraph or non-TIDL layers
+- **model_<n>.c:** Contains generated code either to run a TIDL subgraph or non-TIDL layers.
 
+
+.. _ti-tvm-compiling-debug:
 
 Debugging Compilation
 =====================
 
-We use an environment variable to help debug the TVM+TIDL compilation flow.
+TI TVM uses the TIDL_RELAY_IMPORT_DEBUG environment variable to help debug the TVM+TIDL compilation flow. The available settings are as follows.
 
 TIDL_RELAY_IMPORT_DEBUG=1
 -------------------------
 
-When set, the verbose output at the terminal gives more information about the TIDL import, e.g.
-whether a node is supported by TIDL, relay node to TIDL node conversion, imported TIDL subgraph,
-optimized TIDL subgraph, calibration process, etc.
+When set to 1, verbose output at the terminal provides more information about the TIDL import. This includes whether a node is supported by TIDL, relay node to TIDL node conversion, imported TIDL subgraphs,
+optimized TIDL subgraphs, and calibration processes. For example:
 
 .. code:: bash
 
@@ -130,19 +140,20 @@ optimized TIDL subgraph, calibration process, etc.
 TIDL_RELAY_IMPORT_DEBUG=2, 3
 ----------------------------
 
-More verbose information about importing TIDL subgraphs.
+When set to 2 or 3, verbose information about importing TIDL subgraphs is provided in addition to the information provided when the setting is 1.
 
 TIDL_RELAY_IMPORT_DEBUG=4
 -------------------------
 
-When set to 4, TIDL import will generate the output for each TIDL layer in the imported TIDL
-subgraph, using calibration inputs.  They are stored in the files
-``tempDir/tidl_import_subgraph<subgraph_id>.txt<layer_id><dimensions>_float.bin``.
-The compilation will also generate corresponding output from running the original model on
-x86_64 host using TVM code generation for x86_64.  They are stored in the files
-``tempDir/tidl_<subgraph_id>_layer<layer_id>.npy``.
+When set to 4, the TIDL import generates output for each TIDL layer in the imported TIDL
+subgraph using calibration inputs.  This output is stored in the auto-generated ``tempDir/tidl_import_subgraph<subgraph_id>.txt<layer_id><dimensions>_float.bin`` files.
+
+The compilation also generates corresponding output from running the original model on
+x86_64 hosts using TVM code generation for x86_64.  This is stored in the
+``tempDir/tidl_<subgraph_id>_layer<layer_id>.npy`` files.
+
 A script, ``python/tvm/contrib/tidl/compare_tensors.py`` is provided to compare the two
-results with graphical view.
+results with a graphical view. You can run the script as follows:
 
 .. code:: bash
 

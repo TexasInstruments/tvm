@@ -1,12 +1,15 @@
+.. _ti-tvm-gs-installation:
+
 #########################
 Installation Instructions
 #########################
 
-Follow the instructions below to install the TVM compiler framework on a Linux PC. The instructions also cover installing
-EVM specific dependencies required for inference.
+Follow the instructions linked below to install the TVM compiler framework on a Linux PC. The instructions also cover how to install
+EVM-specific dependencies required for inference.
 
 .. list-table::
     :widths: 50 50
+    :header-rows: 1
 
     * - EVM
       - Instructions

@@ -1,16 +1,18 @@
+.. _ti-tvm-developing:
+
 ============================
 Recommended Development Flow
 ============================
 
-In this section, we talk about recommended development flow of using TVM to compile and
+This section describes the recommended development flow for using TVM to compile and
 infer a model.
 
 
-Step 1: Model selection
+Step 1: Model Selection
 =======================
 
-You may already have a model developed and trained by yourself.  But if you are using a model
-downloaded from public domain, we recommend you take a look at
+You may have already developed and trained a model.  But if you are using a model
+downloaded from public domain, we recommend you look at
 `TI EdgeAI ModelZoo <https://github.com/TexasInstruments/edgeai-modelzoo>`_ first.
 TI EdgeAI ModelZoo contains models that have been tweaked and optimized for inference speed
 on TI SoCs.
@@ -19,56 +21,60 @@ on TI SoCs.
 Step 2: Compile with c7x_codegen=0
 ==================================
 
-Follow example compilation scripts in
+Adapt the example compilation scripts in
 `TI edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools/tree/master/examples/osrt_python/tvm_dlr>`_
-and adapt for your model.  We have additional examples in the
-`TVM github repo <https://github.com/TexasInstruments/tvm/tree/tidl-j7/tests/python/relay/ti_tests>`_.
+for use with your model.  Additional examples are provided in the
+`TVM Git repository <https://github.com/TexasInstruments/tvm/tree/tidl-j7/tests/python/relay/ti_tests>`_.
 
-If you want to understand more about the compilation process and compiled artifacts, please
-see the section "Compilation Explained".  Things to pay attention include:
+See the :ref:`ti-tvm-compiling` section for more about the compilation process and compiled artifacts. 
 
-- Has all layers been offloaded to TIDL
-- If not, which layers are not offloaded
-- The number of TIDL subgraphs
+When troubleshooting and optimizing, check the following:
+
+- Have all layers been offloaded to TIDL?
+- If not, which layers are not offloaded?
+- How many TIDL subgraphs are there?
 
 
-Step 3: Inference and performance profiling
+Step 3: Inference and Performance Profiling
 ===========================================
 
-Follow example inference scripts in 
+Adapt the example inference scripts in 
 `TI edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools/tree/master/examples/osrt_python/tvm_dlr>`_
-and adapt for your model.  We have additional examples in the
-`TVM github repo <https://github.com/TexasInstruments/tvm/tree/tidl-j7/tests/python/relay/ti_tests>`_.
+for your model.  Additional examples are provided in the
+`TVM Git repository <https://github.com/TexasInstruments/tvm/tree/tidl-j7/tests/python/relay/ti_tests>`_.
 
-The first thing is to get the compiled model artifacts (TVM deployable module) to run on EVM
-and check if the inference results match expected outputs for the given inputs.
+First, get the compiled model artifacts (TVM deployable module) to run on the EVM. Then 
+check to make sure the inference results match the expected outputs for the given inputs.
 
 After the model is running correctly on the EVM, use the performance profiling method described
-in section "Inference Explained" to see if performance match expectation.
+in the :ref:`ti-tvm-infering` section to see if performance matches expectations.
 
 
 Step 4: Compile with c7x_codegen=1
 ==================================
 
-When there are TIDL unsupported layers in the model, you may also try running them on the C7x.
-This could help save the overhead between C7x TIDL subgraphs and layers on Arm.  This could
-also lead to better performance with either TVM auto-generated C7x code or user written C7x code
+If there are TIDL unsupported layers in the model, you may also try running them on the C7x.
+Running layers on the C7x can help save the overhead between C7x TIDL subgraphs and layers on Arm.  This can
+also lead to better performance with either TVM auto-generated C7x code or user-written C7x code
 for the TIDL unsupported layers.
 
 
-Step 5: Inference and performance profiling
+Step 5: Inference and Performance Profiling
 ===========================================
 
-Once the model is compiled successfully with c7x_codegen=1, run it on EVM and check if the
-inference results match expected outputs for the given inputs.
+Once the model is compiled successfully with c7x_codegen=1, run it on the EVM and check to make sure the
+inference results still match the expected outputs for the given inputs.
 
 After the model is running correctly on the EVM, use the performance profiling method described
-in section "Inference Explained" to see if performance match expectation.
+in the :ref:`ti-tvm-infering` section to see if performance matches expectations.
 
-Step 6: Performance tuning
+Step 6: Performance Tuning
 ==========================
 
-If the performance of TIDL unsupported layers does not match expectation, we can try work
-around them via Relay rewriting or try to optimize them with C7x code, either TVM generated
-or user written, see section "Extending TVM" for examples.  Feedback on TI E2E forum is welcome
-(please see "Support" section).
+If the performance of TIDL unsupported layers does not match expectations, try the following:
+
+* Work around issues by rewriting Relay IR code.
+* Optimize the C7x code (either TVM-generated or user-written)
+
+See the :ref:`ti-tvm-extending` section for examples.  Feedback on TI E2E forum is welcome
+(see the :ref:`ti-tvm-support` section).
