@@ -48,10 +48,10 @@ def read_trace(trace_filename : str):
 
     output['oid'] = oid
     output['ndim'] = read_int(f)
-    output['type_code'] = type_code = read_int(f)
-    output['elem_bytes'] = read_int(f)
+    output['type_code'] = read_int(f)
+    output['elem_bytes'] = elem_bytes = read_int(f)
     output['num_elements'] = read_int(f)
-    if type_code != 1:
+    if elem_bytes != 0:
       output['min'] = read_float(f)
       output['max'] = read_float(f)
       output['sum'] = read_float(f)
