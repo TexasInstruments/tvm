@@ -988,7 +988,7 @@ def C7xDMATransform(f, mod, ctx):
         if (num_outer_loops > 0):
             # The on-chip block's indexing expression only depends on inner block loop variables.
             # If the index expr depends on the outer loop vars, then it is off-chip.
-            if (src_outer_strides[num_outer_loops-1] != 0):  # copying in, dst is on-chip
+            if any(s != 0 for s in src_outer_strides[:num_outer_loops]): #copying in, dst is on-chip
                 axis = c7x_dma_add_outer_dims(sync_axis, elem_bytes, num_blocks,
                                 outer_loop_bounds, src_outer_strides,
                                 dst_dma_icnts, dst_dma_strides, src_dma_icnts, src_dma_strides)
