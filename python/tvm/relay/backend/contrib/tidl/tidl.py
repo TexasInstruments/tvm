@@ -2083,6 +2083,7 @@ class TIDLCompiler:
             # bind_params will remove weights from arguments of main(), so that
             #     main() function API will be the same in TIDL_REBUILD_ONLY path.
             mod_orig['main'] = relay.build_module.bind_params_by_name(mod_orig['main'], params)
+            mod_orig = relay.transform.DynamicToStatic()(mod_orig)
             return enable_c7x_mod(self, mod_orig, mod_orig, params, 0), 0
 
         # (Backward compatible) if single calibration image/data/dict, convert to list
