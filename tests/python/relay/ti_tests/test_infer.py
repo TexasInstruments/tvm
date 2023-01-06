@@ -26,10 +26,10 @@ skipped_configs = [
   # Not enough memory to run the model
   [ 'yolo3_mv1_mxnet', 'J7', '--target', '--notidl', '--c7x', '--dlr', 0 ],
   # Skip 16-bit to float data convert layer issues in PSDK 8.5
-  ['mv3_large_mxnet', 'J7', '--target', '--tidl', '--c7x', '--dlr', 0],
-  ['mv3_large_mxnet', 'J7', '--target', '--tidl', '--noc7x', '--dlr', 0],
-  ['mv2_pth', 'J7', '--target', '--tidl', '--c7x', '--dlr', 2],
-  ['mv2_pth', 'J7', '--target', '--tidl', '--noc7x', '--dlr', 2],
+  #['mv3_large_mxnet', 'J7', '--target', '--tidl', '--c7x', '--dlr', 0],
+  #['mv3_large_mxnet', 'J7', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  #['mv2_pth', 'J7', '--target', '--tidl', '--c7x', '--dlr', 2],
+  #['mv2_pth', 'J7', '--target', '--tidl', '--noc7x', '--dlr', 2],
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):

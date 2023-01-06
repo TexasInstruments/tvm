@@ -59,16 +59,20 @@ TIDL uses the TIDL_RT_DEBUG environment variable to help debug the TVM+TIDL infe
 Vision apps "printf" terminal
 -----------------------------
 
-First, you need to open a 
-"printf" terminal, where debug "printf" output from C7x core is shown.
+First, you need to open a "printf" terminal, where debug "printf" output from C7x core is shown.
 
-Open a terminal on your EVM, and run the following commands.  Run the inference in a different terminal.
+Open a terminal on your EVM, and run the following commands.
 
 .. code:: bash
 
+  # if using EdgeAI Start Kit SDK
+  root@tda4vm-sk:~# /opt/vx_app_arm_remote_log.out
+
+  # if using J721E SDK
   root@j7-evm:~# cd /opt/vision_apps/
   root@j7-evm:/opt/vision_apps# source ./vision_apps_init.sh
 
+Then, run the inference in a different terminal.
 
 Debugging TIDL subgraphs
 ------------------------

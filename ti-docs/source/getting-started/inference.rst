@@ -30,7 +30,7 @@ The ``run_model`` function shows how to run inference with the DLR or the TVM Ru
 C++
 ---
 
-:numref:`cpp-inference` shows how to use the C++ and TVM Runtime APIs to:
+:numref:`cpp-inference` shows how to use the C++ and TVM Runtime APIs to (`relay_mul example in TI TVM repo <https://github.com/TexasInstruments/tvm/tree/tidl-j7/tests/python/relay/ti_tests/relay_mul>`_)
 
 * Load compilation artifacts (shared library, parameter file, and JSON representation of the network graph)
 * Create a TVM Graph Executor
@@ -43,6 +43,15 @@ C++
   :lines: 37-103
   :caption: Running inference using C++ and the TVM Runtime
   :name: cpp-inference
+  :linenos:
+
+:numref:`dlr-cpp-inference` shows how to use the C++ and DLR Runtime APIs to run inference (`test_dlr_cpp example in TI TVM repo <https://github.com/TexasInstruments/tvm/tree/tidl-j7/tests/python/relay/ti_tests/test_dlr_cpp>`_).
+
+.. literalinclude:: ../../../tests/python/relay/ti_tests/test_dlr_cpp/test_infer.cpp
+  :language: c++
+  :lines: 53-109
+  :caption: Running inference using C++ and the DLR Runtime
+  :name: dlr-cpp-inference
   :linenos:
 
 .. todo::

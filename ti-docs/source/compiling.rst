@@ -16,12 +16,7 @@ before running the compilation script.
 
 - ``TIDL_TOOLS_PATH``: Point to installed /processor_sdk_rtos/tidl_release/tidl_tools.
 - ``ARM64_GCC_PATH``: Point to installed /gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu.
-- ``CGT7X_ROOT``: Point to installed `TI C7x C/C++ compiler 2.1.1.LTS <https://www.ti.com/tool/download/C7000-CGT/2.1.1.LTS>`_.
-
-.. note::
-  The processor SDK RTOS currently ships with the TI C7x compiler 3.0.0.STS. There is a known bug in the
-  compiler that impacts TVM C7x code generation. This bug has been fixed and will be released in the next
-  Processor SDK.  For now, please use 2.1.1.LTS for TVM C7x code generation.
+- ``CGT7X_ROOT``: Point to installed TI C7x C/C++ compiler 3.1.0.LTS in the Processor SDK package or from `ti.com <https://www.ti.com/tool/download/C7000-CGT/>`_.
 
 .. _ti-tvm-compiling-frontend:
 

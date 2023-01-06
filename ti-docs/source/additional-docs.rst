@@ -8,7 +8,7 @@ See the following documentation for related information.
 
 * `Apache TVM documentation <https://tvm.apache.org/docs/>`_
 
-* `TI Deep Learning library (TIDL) User Guide <https://software-dl.ti.com/jacinto7/esd/processor-sdk-rtos-jacinto7/08_04_00_06/exports/docs/tidl_j721e_08_04_00_16/ti_dl/docs/user_guide_html/index.html>`_
+* `TI Deep Learning library (TIDL) User Guide <https://software-dl.ti.com/jacinto7/esd/processor-sdk-rtos-jacinto7/08_05_00_11/exports/docs/tidl_j721e_08_05_00_16/ti_dl/docs/user_guide_html/index.html>`_
 
 * `Edge AI page on ti.com <https://www.ti.com/technologies/edge-ai.html>`_
 
