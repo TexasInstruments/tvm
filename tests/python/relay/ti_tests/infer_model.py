@@ -20,6 +20,7 @@
 import os
 import sys
 from platform import processor
+from utils import supported_platform
 
 
 def run_model(artifacts_folder: str, input_dict, use_dlr: bool):
@@ -143,7 +144,7 @@ def parse_args():
   args = parser.parse_args()
 
   assert(args.model_name is not None), "Please specify a model name"
-  assert(args.platform in ["J7", "J721S2", "AM62A"]), f"Platform {args.platform} is not supported"
+  assert(supported_platform(args.platform)), f"Platform {args.platform} is not supported"
 
   return args
 

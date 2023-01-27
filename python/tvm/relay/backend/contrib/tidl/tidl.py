@@ -37,6 +37,7 @@ from tvm.relay.expr_functor import ExprMutator
 from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
 from tvm.contrib import graph_executor
+from tvm.contrib.tidl.c7x import supported_platform
 #import tvm.relay.op.contrib.tidl as tidl_annotation
 from .reduce_subgraph_size import reduce_subgraph_size
 from .visualize import visualize_relay_graph
@@ -1196,7 +1197,7 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_et
                 assert False, f'Unsupported TIDL calibration data type: {input_etypes[i]}'
     fid.close()
 
-    if platform in ["J7", "J721S2", "AM62A"]:
+    if supported_platform(platform):
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
         try:
           # TIDL is adding model_group_id to the interface to indicate which
@@ -1371,7 +1372,7 @@ class TIDLImport:
         True if import succeeds or False if import fails
         """
 
-        if self.tidl_platform in ["J7", "J721S2", "AM62A"]:
+        if supported_platform(self.tidl_platform):
             import_lib_node = tvm.get_global_func("TIDL_relayImportNode")
             if has_qnn_ops:
                 zp, scale = get_quantization(this_node, None, all_nodes, inout_quant_dict)
@@ -1983,7 +1984,7 @@ class TIDLCompiler:
     def __init__(self, platform="J7", version="7.3", max_num_layers=225, max_total_memory_mb=448, **kwargs):
         self.tidl_platform = platform
         self.version = version
-        if platform in ["J7", "J721S2", 'AM62A']: # and float(version) >= 7.3:
+        if supported_platform(platform): # and float(version) >= 7.3:
             # Set default values for J7, PSDK 7.0 or newer
             self.tidl_target = "tidl"
             self.tidl_tools_path = None

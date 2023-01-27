@@ -31,6 +31,9 @@ import numpy as np
 from platform import processor
 from typing import List
 
+def supported_platform(platform): 
+    return platform in ["J7", "J721S2", "AM62A"]
+
 def parse_args():
   import argparse
   parser = argparse.ArgumentParser()
@@ -39,7 +42,7 @@ def parse_args():
                       default='J7',
                       help='Compile models for which platforms (J7, J721S2, AM62A)')
   args = parser.parse_args()
-  assert(args.platform in ["J7", "J721S2", "AM62A"]), f"Platform {args.platform} is not supported"
+  assert(supported_platform(args.platform), f"Platform {args.platform} is not supported")
   return args
 
 args = parse_args()

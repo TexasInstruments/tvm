@@ -20,6 +20,7 @@ import os
 import sys
 
 from tvm.contrib.tidl import compile
+from tvm.contrib.tidl.c7x import supported_platform
 
 def compile_model(model_name: str, platform: str,
                   compile_for_device: bool, enable_tidl_offload: bool, enable_c7x_codegen: bool,
@@ -103,7 +104,7 @@ def parse_args():
   args = parser.parse_args()
 
   assert(args.model_name is not None), "Please specify a model name"
-  assert(args.platform in ["J7", "J721S2", "AM62A"]), f"Platform {args.platform} is not supported"
+  assert(supported_platform(args.platform)), f"Platform {args.platform} is not supported"
 
   return args
 

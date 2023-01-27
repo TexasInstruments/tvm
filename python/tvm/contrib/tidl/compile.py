@@ -23,6 +23,7 @@ from typing import Tuple, Dict, List
 import tvm
 from tvm import relay
 from tvm.runtime import NDArray
+from tvm.contrib.tidl.c7x import supported_platform
 
 def compile_relay(mod: tvm.IRModule,
                   params: Dict[str, NDArray],
@@ -61,7 +62,7 @@ def compile_relay(mod: tvm.IRModule,
   """
 
   assert tidl_tensor_bits in [8, 16, 32]
-  assert platform in ["J7", "J721S2", "AM62A"]
+  assert supported_platform(platform)
 
   tidl_tools_path, arm_gcc, status = setup_tool_paths(enable_tidl_offload, enable_c7x_codegen,
                                                       compile_for_device)

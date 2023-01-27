@@ -20,6 +20,9 @@
 import tvm
 import logging
 
+def supported_platform(platform): 
+    return platform in ["J7", "J721S2", "AM62A"]
+
 #----------------------------------------------------------------
 # Sets up custom Target and PassConfig contexts for C7x. 
 # Usage:
