@@ -190,6 +190,13 @@ function run_tvm_tidl_tests {
     # Run inference tests on EVM (export workspace dir and mount it on EVM)
     ssh root@${EVM_IP} 'cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests; python3 ./test_infer.py'
     retval=$?
+    if [ $retval -ne 0 ]; then
+        return $retval
+    fi
+
+    # Run dlr cpp tests on EVM
+    ssh root@${EVM_IP} 'cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/test_dlr_cpp; python3 ./test_dlr_cpp.py'
+    retval=$?
 
     return $retval
 }
