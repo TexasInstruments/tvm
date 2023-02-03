@@ -44,10 +44,8 @@ function build_tvm {
 
 # Build the Graph Executor for aarch64
 function build_aarch64_ge {
+    # ARM64_GCC_PATH, CGT7X_ROOT already set in the environment (e.g. Jenkins)
     local BUILD_DIR_AARCH64=${WORKSPACE}/build_aarch64
-    local GCC_VERSION=gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu
-
-    export ARM64_GCC_PATH=${TVM_DEPS_PATH}/$GCC_VERSION
 
     rm -rf $BUILD_DIR_AARCH64
     mkdir $BUILD_DIR_AARCH64
@@ -108,7 +106,7 @@ function test_tvm {
     fi
 
     # Test C++ Graph Executor
-    make clean; make
+    make clean; make TVM_HOME=${WORKSPACE}
     retval=$?
     if [ $retval -ne 0 ]
     then
@@ -133,74 +131,99 @@ function test_tvm {
     return $retval
 }
 
-function setup_tvm_tidl_tests {
-    # Set up environment variables for TVM+TIDL compilation
-    # ARM64_GCC_PATH already set in build_aarch64_ge
-    export TIDL_TOOLS_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/tidl_tools)
-    # In PSDK 8.4, TI C7x compiler 3.0.0.STS contains a known bug that generates an illegal
-    # VSUBSP instruction on scalar A side registers.  It is fixed in a future release.
-    # For now, use 2.1.1.LTS in the previous PSDK 8.2.
-    export CGT7X_ROOT=$(ls -d ${PSDKR_PATH}/../ti-cgt-c7000_3.1.0B1/)
+function setup_tvm_tidl_tests_common {
+    # ARM64_GCC_PATH, CGT7X_ROOT already set in the environment (e.g. Jenkins)
+
     pip3 install pytest opencv-python
+    mkdir -p ${WORKSPACE}/ti_tests_logs
+    mkdir -p ${WORKSPACE}/tests/python/relay/ti_tests/testdata
+    cp ~/.tvm_test_data/data/* ${WORKSPACE}/tests/python/relay/ti_tests/testdata
+}
+
+function setup_tvm_tidl_tests {
+    platform=$1
+    # Set up environment variables for TVM+TIDL compilation
+    export TIDL_TOOLS_PATH=${TVM_DEPS_PATH}/tidl_tools/psdk_8.5/${platform}/tidl_tools
+    export EVM_IP=sdtocg-${platform}-0.hou.asp.ti.com  # DNS is case insensitive
+    export LD_LIBRARY_PATH=${TIDL_TOOLS_PATH}
+
+    # Initialize the ssh connection to EVM, save EVM into .known_hosts
+    ssh-keygen -f "/home/sdomcbld/.ssh/known_hosts" -R "${EVM_IP}"
+    ssh -o "StrictHostKeyChecking no" root@${EVM_IP} 'uname -a'
 
     # Export workspace dir and mount it on EVM
     ssh root@${EVM_IP} 'mkdir -p /home/sdomcbld; mount -t nfs sdomc-build4.dhcp.ti.com:/home/sdomcbld /home/sdomcbld'
 }
 
 function run_tvm_tidl_unit_tests {
+    platform=$1
     # Use TVM to compile a unit test
     local TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests/unit_tests
     cd $TEST_DIR
 
     # Run compilation tests on host
-    python3 ./run_unit_tests.py
+    python3 ./run_unit_tests.py --platform ${platform}
     retval=$?
     if [ $retval -ne 0 ]; then
         return $retval
     fi
 
     # Run inference tests on EVM (export workspace dir and mount it on EVM)
-    ssh root@${EVM_IP} 'cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/unit_tests; python3 ./run_unit_tests.py'
+    ssh root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/unit_tests; python3 ./run_unit_tests.py --platform ${platform}"
     retval=$?
 
     return $retval
 }
 
 function run_tvm_tidl_tests {
+    platform=$1
     # Use TVM to compile a unit test
     local TEST_DIR=${WORKSPACE}/tests/python/relay/ti_tests
     cd $TEST_DIR
 
     # Run compilation tests
-    python3 ./test_compile.py
+    python3 ./test_compile.py --platform ${platform}
     retval=$?
     if [ $retval -ne 0 ]; then
         return $retval
     fi
 
     # Run inference tests on host
-    mkdir -p testdata
-    cp ~/.tvm_test_data/data/* testdata
-    python3 ./test_infer.py --tvm
+    python3 ./test_infer.py --tvm --platform ${platform}
     retval=$?
     if [ $retval -ne 0 ]; then
         return $retval
     fi
 
     # Run inference tests on EVM (export workspace dir and mount it on EVM)
-    ssh root@${EVM_IP} 'cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests; python3 ./test_infer.py'
+    ssh root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests; python3 ./test_infer.py --platform ${platform}"
     retval=$?
     if [ $retval -ne 0 ]; then
         return $retval
     fi
 
     # Run dlr cpp tests on EVM
-    ssh root@${EVM_IP} 'cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/test_dlr_cpp; python3 ./test_dlr_cpp.py'
+    ssh root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/test_dlr_cpp; python3 ./test_dlr_cpp.py ${platform}"
     retval=$?
 
     return $retval
 }
 
+function test_tvm_tidl {
+    platform=$1
+    setup_tvm_tidl_tests ${platform}
+    run_tvm_tidl_unit_tests ${platform}
+    retval=$?
+    if [ $retval -eq 0 ]; then
+        run_tvm_tidl_tests ${platform}
+        retval=$?
+    fi
+    return $retval
+}
+
+echo "PLATFORMS=${PLATFORMS}"
+echo "ARM64_GCC_PATH=${ARM64_GCC_PATH}"
+echo "CGT7X_ROOT=${CGT7X_ROOT}"
 
 build_tvm
 build_aarch64_ge
@@ -216,13 +239,26 @@ fi
 
 # If test_tvm succeeds, run TVM+TIDL tests in tests/python/relay/ti_tests
 if [ $retval -eq 0 ]; then
-    setup_tvm_tidl_tests
-    run_tvm_tidl_unit_tests
-    retval=$?
-    if [ $retval -eq 0 ]; then
-        run_tvm_tidl_tests
-        retval=$?
-    fi
+    setup_tvm_tidl_tests_common
+
+    # test each platform in a separate process in background, they can have different env vars
+    for platform in ${PLATFORMS}; do
+        test_tvm_tidl ${platform} > ${WORKSPACE}/ti_tests_logs/${platform}.log 2>&1 &
+        declare pid_${platform}=$!
+    done
+
+    # wait for platform processes to finish
+    for platform in ${PLATFORMS}; do
+        pid="pid_${platform}"
+        wait ${!pid}
+        retval_tmp=$?
+        if [ ${retval_tmp} -ne 0 ]; then
+            echo "${platform} tests failed.  See ${platform}.log in artifacts/ti_tests_logs"
+            retval=${retval_tmp}
+        else
+            echo "${platform} tests passed.  See ${platform}.log in artifacts/ti_tests_logs"
+        fi
+    done
 fi
 
 exit $retval

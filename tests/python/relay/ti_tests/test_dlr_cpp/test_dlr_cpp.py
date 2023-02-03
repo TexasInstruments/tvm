@@ -28,7 +28,9 @@ except:
 
 try:
   os.environ['LD_LIBRARY_PATH'] = "/usr/lib/python3.8/site-packages/dlr"
-  subprocess.run(["./native.out"], check=True)
+  platform = "J7" if len(sys.argv) <= 1 else sys.argv[1]
+  artifacts_dir = f"../artifacts/mv2_onnx_{platform}_target_tidl_c7x"
+  subprocess.run(["./native.out", artifacts_dir], check=True)
 except:
   print("Failed: test_dlr_cpp inference")
   sys.exit(1)
