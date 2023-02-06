@@ -60,22 +60,15 @@ def compile_model():
 
 
 def run_model():
-  import sys
-  sys.path.append("..")
-  from infer_model import run_model
-
   inputs, weights, output = gen_reference(None, artifacts_data_dir, input_shapes, weight_shapes,
                                           gen_new_data=False)
 
-  os.environ["TVM_RT_DEBUG"] = "2"
-  tvm_outputs = run_model(artifacts_dir, inputs, use_dlr=True)
+  from unit_utils import run_model_and_collect_trace
+  tvm_outputs, trace = run_model_and_collect_trace(artifacts_dir, inputs)
 
   if not check_reference(tvm_outputs, artifacts_data_dir):
     return False
 
-  sys.path.append("../../../../../python/tvm/contrib/tidl")
-  from dump_tvm_trace import read_trace
-  trace = read_trace("tvm_c7x.trace")
   resize1_time = trace['nodes'][0]['time']
   resize2_time = trace['nodes'][2]['time']
   print(f"resize node 1 time: {resize1_time} C7x cycles")

@@ -42,7 +42,7 @@ def parse_args():
                       default='J7',
                       help='Compile models for which platforms (J7, J721S2, AM62A)')
   args = parser.parse_args()
-  assert(supported_platform(args.platform), f"Platform {args.platform} is not supported")
+  assert supported_platform(args.platform), f"Platform {args.platform} is not supported"
   return args
 
 args = parse_args()
@@ -159,4 +159,28 @@ def build_and_set_ext_lib(src_name, src_dir, build_dir):
   ext_libs += f" -l {build_dir}/{src_name}.lib"
   os.environ["CGT7X_EXT_LIBS"] = ext_libs
   return True
+
+def run_model_and_collect_trace(artifacts_dir, inputs, use_dlr=True):
+  import sys
+  sys.path.append("..")
+  from infer_model import run_model
+  sys.path.append("../../../../../python/tvm/contrib/tidl")
+  from dump_tvm_trace import read_trace
+
+  cwd = os.getcwd()
+  cdebug = os.environ.get("TVM_RT_DEBUG", None)
+  real_artifacts_dir = os.path.realpath(artifacts_dir)
+  os.chdir(real_artifacts_dir)
+  os.environ["TVM_RT_DEBUG"] = "2"
+
+  tvm_outputs = run_model(real_artifacts_dir, inputs, use_dlr)
+  c7x_trace = read_trace("tvm_c7x.trace")
+
+  os.chdir(cwd)
+  if cdebug is None:
+    os.environ.pop("TVM_RT_DEBUG")
+  else:
+    os.environ["TVM_RT_DEBUG"] = cdebug
+
+  return tvm_outputs, c7x_trace
 

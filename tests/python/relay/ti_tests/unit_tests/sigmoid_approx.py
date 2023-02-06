@@ -133,22 +133,15 @@ def compile_model():
 
 
 def run_model():
-  import sys
-  sys.path.append("..")
-  from infer_model import run_model
-
   inputs, weights, output = gen_reference(None, artifacts_data_dir, input_shapes, weight_shapes,
                                           gen_new_data=False)
 
-  os.environ["TVM_RT_DEBUG"] = "2"
-  tvm_outputs = run_model(artifacts_dir, inputs, use_dlr=True)
+  from unit_utils import run_model_and_collect_trace
+  tvm_outputs, trace = run_model_and_collect_trace(artifacts_dir, inputs)
 
   if not check_reference(tvm_outputs, artifacts_data_dir, sigmoid_precision):
     return False
 
-  sys.path.append("../../../../../python/tvm/contrib/tidl")
-  from dump_tvm_trace import read_trace
-  trace = read_trace("tvm_c7x.trace")
   sigmoid_time = trace['nodes'][1]['time']
   print(f"sigmoid node time: {sigmoid_time} C7x cycles")
   if sigmoid_time > 25000:

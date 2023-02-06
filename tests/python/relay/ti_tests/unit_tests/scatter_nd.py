@@ -94,7 +94,6 @@ def run_model():
   inputs2, weights2, output2 = gen_reference(None, artifacts_data_dir2, input_shapes2, weight_shapes,
                                           gen_new_data=False)
   
-  os.environ["TVM_RT_DEBUG"] = "2"
   tvm_outputs = run_model(artifacts_dir, inputs, use_dlr=True)
 
   if not check_reference(tvm_outputs, artifacts_data_dir, maxdiff_ratio=0.03):
