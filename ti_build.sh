@@ -143,12 +143,14 @@ function setup_tvm_tidl_tests_common {
 function setup_tvm_tidl_tests {
     platform=$1
     # Set up environment variables for TVM+TIDL compilation
-    export TIDL_TOOLS_PATH=${TVM_DEPS_PATH}/tidl_tools/psdk_8.5/${platform}/tidl_tools
-    export EVM_IP=sdtocg-${platform}-0.hou.asp.ti.com  # DNS is case insensitive
+    export TIDL_TOOLS_PATH=${TVM_DEPS_PATH}/tidl_tools/latest/${platform}/tidl_tools
+    export EVM_IP=sdtocg-${platform,,}-0.hou.asp.ti.com  # ${platform,,} to lower case
     export LD_LIBRARY_PATH=${TIDL_TOOLS_PATH}
 
     # Initialize the ssh connection to EVM, save EVM into .known_hosts
     ssh-keygen -f "/home/sdomcbld/.ssh/known_hosts" -R "${EVM_IP}"
+    OTHER_IP=`host ${EVM_IP} | cut -d' ' -f4`
+    ssh-keygen -f "/home/sdomcbld/.ssh/known_hosts" -R "${OTHER_IP}"
     ssh -o "StrictHostKeyChecking no" root@${EVM_IP} 'uname -a'
 
     # Export workspace dir and mount it on EVM
