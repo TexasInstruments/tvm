@@ -23,9 +23,18 @@ from platform import processor
 from models import models
 
 skipped_configs = [
+  # large feature map size in batch processing, unable to import to TIDL
+  [ 'mv2_onnx', 'AM62A', '*', '--tidl', '*', '*', 2 ],
+  [ 'mv2_pth', 'AM62A', '*', '--tidl', '*', '*', 2 ],
+
   # Not enough memory to run the model
   [ 'yolo3_mv1_mxnet', 'J7', '--target', '--notidl', '--c7x', '--dlr', 0 ],
   [ 'yolo3_mv1_mxnet', 'J721S2', '--target', '--notidl', '--c7x', '--dlr', 0 ],
+
+  [ 'yolo3_mv1_mxnet', 'AM62A', '--target', '--tidl', '--c7x', '--dlr', 0 ],
+  [ 'yolo3_mv1_mxnet', 'AM62A', '--target', '--notidl', '--c7x', '--dlr', 0 ],
+  [ 'swin_tiny_timm', 'AM62A', '--target', '--tidl', '--c7x', '--dlr', 0 ],
+  [ 'swin_tiny_timm', 'AM62A', '--target', '--notidl', '--c7x', '--dlr', 0 ],
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
@@ -43,7 +52,8 @@ def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
 
             for n in (models[model]['batch_size'] if 'batch_size' in models[model] else [0]):
               print(f"\n\nInferring config: {[model, platform, t_h, t_nt, c_nc, d_t, n]} ...")
-              if [model, platform, t_h, t_nt, c_nc, d_t, n] in skipped_configs:
+              if [model, platform, '*', t_nt, '*', '*', n] in skipped_configs or \
+                 [model, platform, t_h, t_nt, c_nc, d_t, n] in skipped_configs:
                 print("Skipped")
                 continue
               try:

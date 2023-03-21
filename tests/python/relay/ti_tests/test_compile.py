@@ -22,6 +22,13 @@ import subprocess
 from models import models
 
 
+skipped_configs = [
+  # large feature map size in batch processing, unable to import to TIDL
+  [ 'mv2_onnx', 'AM62A', '*', '--tidl', '*', 2 ],
+  [ 'mv2_pth', 'AM62A', '*', '--tidl', '*', 2 ],
+]
+
+
 def test_compile(in_models, platforms, targets, tidls, c7xs):
   failed_configs = []
   for model in in_models:
@@ -35,6 +42,10 @@ def test_compile(in_models, platforms, targets, tidls, c7xs):
 
             for n in (models[model]['batch_size'] if 'batch_size' in models[model] else [0]):
               print(f"\n\nCompiling config: {[model, platform, t_h, t_nt, c_nc, n]} ...")
+              if [model, platform, '*', t_nt, '*', n] in skipped_configs or \
+                 [model, platform, t_h, t_nt, c_nc, n] in skipped_configs:
+                print("Skipped")
+                continue
               try:
                 subprocess.run(["python3", "compile_model.py", model, "--platform", platform,
                                 t_h, t_nt, c_nc, "--batch_size", str(n)], check=True)

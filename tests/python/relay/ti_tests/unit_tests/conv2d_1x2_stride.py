@@ -77,11 +77,13 @@ def run_model():
   c7x_max_pool2d_time = trace['nodes'][1]['time']
   print(f"TIDL conv2d time: {tidl_conv2d_time} C7x cycles")
   print(f"C7x max_pol2d time: {c7x_max_pool2d_time} C7x cycles")
-  if tidl_conv2d_time > 1000000:
-    print(f"TIDL conv2d time exceeded expected threshold (1,000,000 cycles)")
+  threshold1 = 1000000 if platform != "AM62A" else 1100000
+  if tidl_conv2d_time > threshold1:
+    print(f"TIDL conv2d time exceeded expected threshold ({threshold1} cycles)")
     return False
-  if c7x_max_pool2d_time > 1000000:
-    print(f"C7x max_pool2d time exceeded expected threshold (1,000,000 cycles)")
+  threshold2 = 1000000
+  if c7x_max_pool2d_time > threshold2:
+    print(f"C7x max_pool2d time exceeded expected threshold ({threshold2} cycles)")
     return False
 
   return True

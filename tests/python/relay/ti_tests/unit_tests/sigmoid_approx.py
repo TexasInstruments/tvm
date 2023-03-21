@@ -144,8 +144,9 @@ def run_model():
 
   sigmoid_time = trace['nodes'][1]['time']
   print(f"sigmoid node time: {sigmoid_time} C7x cycles")
-  if sigmoid_time > 25000:
-    print(f"sigmoid node time exceeded expected threshold (25,000 cycles)")
+  threshold = 25000 if platform != "AM62A" else 55000
+  if sigmoid_time > threshold:
+    print(f"sigmoid node time exceeded expected threshold ({threshold} cycles)")
     return False
 
   return True

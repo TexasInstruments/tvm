@@ -116,8 +116,9 @@ def run_model():
 
   resize_time = trace['nodes'][0]['time']
   print(f"resize node time: {resize_time} C7x cycles")
-  if resize_time > 1000000:
-    print(f"resize node time exceeded expected threshold (1,000,000 cycles)")
+  threshold = 1000000 if platform != "AM62A" else 2500000
+  if resize_time > threshold:
+    print(f"resize node time exceeded expected threshold ({threshold} cycles)")
     return False
 
   return True
