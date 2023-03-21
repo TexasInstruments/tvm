@@ -145,3 +145,64 @@ AArch64 package
     # build python package in $DLR_HOME/python/dist
     cd ..; rm -f build; ln -s build_aarch64 build
     cd python; python3 ./setup.py bdist_wheel; ls dist
+
+
+Rebuilding C7x Firmware
+========================
+
+In some cases, you may want to rebuild the C7x firmware when using the TVM+TIDL flow.
+For example to increase the number of subgraphs or the heap size as described below.
+Please refer to the
+`official user guide on rebuilding firmware <https://software-dl.ti.com/jacinto7/esd/processor-sdk-rtos-j721s2/08_06_00_11/exports/docs/psdk_rtos/docs/user_guide/firmware_builder.html>`_
+for more details.
+
+Increase allowed number of TIDL subgraphs
+-----------------------------------------
+
+When using C7x to run the TIDL unsupported layers, the maximum number of TIDL subgraphs is 16
+by default.  If you have a model that has more than 16 TIDL subgraphs, this limit can be increased
+by rebuilding the TIDL library and the C7x firmware.  Information on the number of TIDL subgraphs
+are available in the output messages shown during compilation.  For example,
+"TIDL import of 41 Relay IR subgraphs succeeded."
+
+First, set up the PSDK RTOS build.
+
+.. code-block:: bash
+
+    $ export PSDK_INSTALL_PATH=/path/to/ti-processor-sdk-rtos-<SOC>-evm-<xx>_<yy>_<zz>_<ww>
+    $ cd ${PSDK_INSTALL_PATH}
+    $ ./psdk_rtos/scripts/setup_psdk_rtos.sh
+
+Next, edit `${PSDK_INSTALL_PATH}/tidl_<SOC>_<xx>_<yy>_<zz>_<ww>/ti_dl/inc/itidl_ti.h` header file.
+Increase `TIDL_MAX_OBJECTS_PER_LEVEL` to match the number of TIDL subgraphs in your model.  Then
+rebuild the `tidl_algo.lib` library.
+
+.. code-block:: bash
+
+    $ cd ${PSDK_INSTALL_PATH}/tidl_<SOC>_<xx>_<yy>_<zz>_<ww>
+    $ vi ti_dl/inc/itidl_ti.h
+    $ make tidl_algo
+
+Finally, rebuild the C7x firmware and copy it to your EVM.
+
+.. code-block:: bash
+
+    $ cd ${PSDK_INSTALL_PATH}/vision_apps
+    $ make firmware
+    $ scp out/<SOC>/C7<XYZ>/FREERTOS/release/vx_app_rtos_linux_c7x_1.out root@evm:/lib/firmware/vision_apps_evm (or vision_apps_eaik)
+
+
+.. note::
+
+    Rebuilding C7x firmware alone does not work if layers unsupported by TIDL are executed on the Arm, because the maximum number of TIDL subgraphs is also subject to the OpenVX environment setup.
+
+
+Increase allocated C7x DDR Heap Size
+------------------------------------
+
+The default C7x firmware comes with a default allocation for C7x local heap, which is used by TVM
+runtime to run TIDL subgraphs and unsupported layers.  If your model requires more memory, you can
+increase the allocated C7x local heap size and rebuild the C7x firmware.  Please refer to the
+`official developer notes on updating SDK memory map <https://software-dl.ti.com/jacinto7/esd/processor-sdk-rtos-j721s2/08_06_00_11/exports/docs/psdk_rtos/docs/user_guide/developer_notes_memory_map.html>`_
+for details.
+
