@@ -42,10 +42,12 @@ SOURCES = bundle_static.c \
           tidl_api.c \
           tidl_api_mem.c \
           tvm_tidl_dmautils.c \
-          tvm_tidl_sort.c
+		  tvm_tidl_sort.cc
 
 HEADERS := $(shell find . -name "*.h")
-OBJS  = $(patsubst %.c,$(BUILD_DIR)/%.obj,$(SOURCES))
+OBJS_C  = $(patsubst %.c,$(BUILD_DIR)/%.obj,$(SOURCES))
+OBJS  = $(patsubst %.cc,$(BUILD_DIR)/%.obj,$(OBJS_C))
+
 OBJS += $(BUILD_DIR)/ti_mem_manager.obj
 OBJS += $(BUILD_DIR)/tidl_rt_ovx_debug_utils.obj
 
@@ -53,6 +55,10 @@ all: $(LIB_NAME)
 
 $(LIB_NAME): $(OBJS)
 	$(QUIET)$(AR) -r $@ $^
+
+$(BUILD_DIR)/%.obj: %.cc $(HEADERS)
+	$(QUIET)$(MKDIR_P) $(dir $@)
+	$(QUIET)$(CC) $(CFLAGS) -c --c++14 $< -fr=$(BUILD_DIR)
 
 $(BUILD_DIR)/%.obj: %.c $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)

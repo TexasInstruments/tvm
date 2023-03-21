@@ -7,13 +7,14 @@ from unit_utils import platform
 
 unit_tests = [
 "broadcast_mul_odd_blocks_odd_iters.py",
-"topk_ext_call.py",
 "sigmoid_approx.py",
 "resize_nchw_1x2.py",
 "resize_index_simplify.py",
 "conv2d_1x2_stride.py",
 "sigmoid_tidl.py",
 "scatter_nd.py",
+"topk.py",
+"argsort.py",
 ]
 
 failed_tests = []
