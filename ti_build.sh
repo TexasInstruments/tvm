@@ -213,7 +213,6 @@ function run_tvm_tidl_tests {
 
 function test_tvm_tidl {
     platform=$1
-    setup_tvm_tidl_tests ${platform}
     run_tvm_tidl_unit_tests ${platform}
     retval=$?
     if [ $retval -eq 0 ]; then
@@ -245,6 +244,7 @@ if [ $retval -eq 0 ]; then
 
     # test each platform in a separate process in background, they can have different env vars
     for platform in ${PLATFORMS}; do
+        setup_tvm_tidl_tests ${platform}
         test_tvm_tidl ${platform} > ${WORKSPACE}/ti_tests_logs/${platform}.log 2>&1 &
         declare pid_${platform}=$!
     done
