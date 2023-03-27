@@ -63,7 +63,6 @@ def is_on_target():
 def get_data_file(artifacts_dir, var):
   return os.path.join(artifacts_dir, var + "_data.npy")
 
-
 def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : List,
                   gen_new_data=True):
   """Generate reference inputs and outputs for a model
@@ -90,6 +89,14 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
         data = np.arange(-7.0, 7.0, 14.0 / np.prod(shape), dtype=float).reshape(shape)
       elif var.endswith("_s"):
         data = np.random.randint(-128, 127, size=shape).astype('float32') / 128.0
+      elif var.endswith("_unique"):
+        num_elements = np.prod(shape)
+        rng = np.random.default_rng()
+        data = rng.choice(np.arange(num_elements * 2), size=shape, replace=False).astype('float32') / num_elements * 2.0
+      elif var.endswith("_i"):
+        num_elements = np.prod(shape)
+        rng = np.random.default_rng()
+        data = rng.choice(np.arange(num_elements * 2), size=shape, replace=False).astype('int32')
       else:
         data = np.random.randint(0, 255, size=shape).astype('float32') / 256.0
       np.save(get_data_file(artifacts_dir, var), data)
@@ -99,14 +106,20 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
   for var, _ in weight_shapes:
     weights[var] = np.load(get_data_file(artifacts_dir, var))
 
+  num_outputs = 1
   if gen_new_data:
     import tvm
     output = tvm.relay.create_executor(kind="graph", mod=mod).evaluate()(**inputs, **weights)
     if isinstance(output, List):
-      output = output[0]
-    np.save(get_data_file(artifacts_dir, "ref_out"), output.numpy())
+      for i, out in enumerate(output):
+        if isinstance(out, List):
+          out = out[0]
+        np.save(get_data_file(artifacts_dir, f"ref_out{i}"), out.numpy())
+      num_outputs = len(output)
+    else:
+      np.save(get_data_file(artifacts_dir, "ref_out0"), output.numpy())
 
-  outputs["ref_out"] = np.load(get_data_file(artifacts_dir, "ref_out"))
+  outputs["ref_out"] = [np.load(get_data_file(artifacts_dir, f"ref_out{i}")) for i in range(num_outputs)]
 
   return inputs, weights, outputs
 
@@ -116,20 +129,28 @@ def check_reference(tvm_outputs, artifacts_dir:str, maxdiff_threshold=None,
   """Check tvm inference results agains reference
   """
   # Check results
-  print("\nInfer result:", tvm_outputs[0].shape, tvm_outputs[0].min(), tvm_outputs[0].max())
-  np.save(get_data_file(artifacts_dir, "tvm_out"), tvm_outputs[0])
-  ref_out = np.load(get_data_file(artifacts_dir, "ref_out"))
-  print("Golden(x86):", ref_out.shape, ref_out.min(), ref_out.max())
-  diff = ref_out - tvm_outputs[0]
-  print("Diff:", diff.min(), diff.max(), np.argmax(diff))
+  failed_outputs = []
+  failure = False
+  for i, out in enumerate(tvm_outputs):
+    if isinstance(out, List):
+      out = out[0]
+    print("\nInfer result:", out.shape, out.min(), out.max())
+    np.save(get_data_file(artifacts_dir, f"tvm_out{i}"), out)
+    ref_out = np.load(get_data_file(artifacts_dir, f"ref_out{i}"))
+    print("Golden(x86):", ref_out.shape, ref_out.min(), ref_out.max())
+    diff = ref_out - out
+    print("Diff:", diff.min(), diff.max(), np.argmax(diff))
 
-  maxdiff = np.fmax(np.fabs(diff.min()), np.fabs(diff.max()))
-  if maxdiff_threshold is None:
-    maxval  = np.fmax(np.fabs(ref_out.min()), np.fabs(ref_out.max()))
-    maxdiff_threshold = maxval * maxdiff_ratio
-  if (maxdiff >= maxdiff_threshold):
-    print("FAIL: maxdiff exceeded allowed threshold\n")
-    return False
+    maxdiff = np.fmax(np.fabs(diff.min()), np.fabs(diff.max()))
+    if maxdiff_threshold is None:
+      maxval  = np.fmax(np.fabs(ref_out.min()), np.fabs(ref_out.max()))
+      maxdiff_threshold = maxval * maxdiff_ratio
+    failed_outputs.append(maxdiff >= maxdiff_threshold)
+    failure = failure or maxdiff >= maxdiff_threshold
+  if failure:
+    for i, fail in enumerate(failed_outputs):
+      if fail:
+        print(f"FAIL: maxdiff exceeded allowed for output {i}\n")
   else:
     print("PASS\n")
     return True
