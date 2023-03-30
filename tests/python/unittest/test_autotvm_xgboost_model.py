@@ -43,6 +43,23 @@ def test_fit():
 
     upper_model.fit(xs, ys, plan_size=32)
 
+    # feature lengths are not guaranteed to always be the same
+    upper_model.predict(np.ones(12))
+    upper_model.predict(np.ones(8))
+
+
+def fit_spawn():
+    assert multiprocessing.get_start_method(False) == "spawn"
+    test_fit()
+
+
+def test_fit_spawn():
+    # Subprocesses inherit the spawn method of their parents
+    ctx = multiprocessing.get_context("spawn")
+    p = ctx.Process(target=test_fit)
+    p.start()
+    p.join()
+
 
 def fit_spawn():
     assert multiprocessing.get_start_method(False) == "spawn"
@@ -61,6 +78,9 @@ def test_tuner():
     task, target = get_sample_task()
     records = get_sample_records(n=10)
 
+
+def test_update():
+    task, target = get_sample_task()
     tuner = autotvm.tuner.XGBTuner(task)
     tuner.load_history(records, min_seed_records=10)
     # Confirm that loading history successfully loaded a

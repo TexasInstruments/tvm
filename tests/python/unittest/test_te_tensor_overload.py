@@ -248,8 +248,7 @@ def test_tensor_scalar_bop():
     verify_tensor_scalar_bop((1,), typ="add")
     verify_tensor_scalar_bop((3, 5), typ="sub")
     verify_tensor_scalar_bop((1, 3, 5), typ="mul")
-    # TODO(wweic): fix later
-    # verify_tensor_scalar_bop((2, 3, 1, 32), typ="div")
+    verify_tensor_scalar_bop((2, 3, 1, 32), typ="div")
 
 
 @tvm.testing.uses_gpu

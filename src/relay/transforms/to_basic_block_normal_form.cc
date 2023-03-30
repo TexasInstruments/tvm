@@ -36,10 +36,6 @@ namespace tvm {
 namespace relay {
 
 IRModule ToBasicBlockNormalForm(const IRModule& mod) {
-  //Begin TI: change "<< mod" to "<< PrettyPrint(mod)"
-  DLOG(INFO) << "ToBBlock:" << std::endl << PrettyPrint(mod);
-  //End TI
-
   // Create a new module by shallow copy.
   IRModule new_mod = mod->ShallowCopy();
 
@@ -62,10 +58,6 @@ IRModule ToBasicBlockNormalForm(const IRModule& mod) {
   for (auto pair : updates) {
     new_mod->Add(pair.first, pair.second, true);
   }
-
-  //Begin TI: change "<< mod" to "<< PrettyPrint(mod)"
-  DLOG(INFO) << "ToBBlock: transformed" << std::endl << PrettyPrint(new_mod);
-  //End TI
 
   return new_mod;
 }

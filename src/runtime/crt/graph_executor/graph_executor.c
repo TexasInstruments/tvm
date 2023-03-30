@@ -49,11 +49,6 @@ uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
   return accum;
 }
 
-// Begin TI
-#define TVM_RT_TRACE_CRT
-#include <tvm/runtime/crt/tvm_tidl_trace.h>
-// End TI
-
 int NodeEntry_Load(TVMGraphExecutorNodeEntry* entry, JSONReader* reader) {
   int status = 0;
   reader->BeginArray(reader);
@@ -776,15 +771,6 @@ void TVMGraphExecutor_SetInput(TVMGraphExecutor* executor, const char* name, DLT
   executor->data_entry[eid].dl_tensor.data = data_in->data;
 }
 
-void TVMGraphExecutor_SetInputRaw(TVMGraphExecutor* executor, const char* name, void* data_in_raw) {
-  uint32_t index = TVMGraphExecutor_GetInputIndex(executor, name);
-  if (index >= executor->input_nodes_count) {
-    fprintf(stderr, "given index is greater than num of input nodes.\n");
-  }
-  uint32_t eid = TVMGraphExecutor_GetEntryId(executor, executor->input_nodes[index], 0);
-  executor->data_entry[eid].dl_tensor.data = data_in_raw;
-}
-
 /*!
  * \brief Load parameters from parameter blob.
  * \param executor The graph executor.
@@ -888,61 +874,20 @@ int TVMGraphExecutor_LoadParams(TVMGraphExecutor* executor, const char* param_bl
   return status;
 }
 
-
-
 /*!
  * \brief Run all the operations one by one.
  * \param executor The graph executor.
  */
 void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
-  uint32_t tvm_rt_debug_level = tvm_rt_get_debug_level();
-  int32_t  tvm_rt_trace_node  = tvm_rt_get_trace_node();
-  uint64_t t_g, t_n;
-  if (tvm_rt_debug_level > 1) {
-    tvm_rt_trace_init();
-    t_g = _TSC_read();
-  }
-
   // setup the array and requirements.
   uint32_t idx;
   for (idx = 0; idx < executor->op_execs_count; ++idx) {
     if (executor->op_execs[idx].fexec) {
-      if (tvm_rt_debug_level > 3)
-        printf("TVM CRT: running %s (%d)\n", executor->op_execs[idx].name, idx);
-      if (tvm_rt_debug_level > 1)
-        t_n = _TSC_read();
-
 #if TVM_CRT_DEBUG
       printf("calling: %s (%d)\n", executor->op_execs[idx].name, idx);
 #endif  // TVM_CRT_DEBUG
       executor->op_execs[idx].Call(&(executor->op_execs[idx]));
-
-      if (tvm_rt_debug_level > 1)
-      {
-        t_n = _TSC_read() - t_n;  /* Cycles */
-        tvm_rt_trace_node_begin(idx, executor->op_execs[idx].name, t_n);
-      }
-      if (tvm_rt_debug_level > 2)
-      {
-        uint32_t num_outputs = 1;
-        if (idx < executor->node_row_ptr_count - 1)
-          num_outputs = executor->node_row_ptr[idx+1] - executor->node_row_ptr[idx];
-        for (uint32_t out_id = 0; out_id < num_outputs; out_id++) {
-          uint32_t eid = TVMGraphExecutor_GetEntryId(executor, idx, out_id);
-          DLTensor *tensor = &(executor->data_entry[eid].dl_tensor);
-          tvm_rt_trace_write_tensor(tensor, out_id, tvm_rt_debug_level,
-                                    (int)idx == tvm_rt_trace_node ? 1:0);
-        }
-      }
-      if (tvm_rt_debug_level > 1)
-        tvm_rt_trace_write_int(TVM_RT_TRACE_END_NODE);  /* End of node */
     }
-  }
-
-  if (tvm_rt_debug_level > 1)
-  {
-    t_g = _TSC_read() - t_g;  /* Cycles */
-    tvm_rt_trace_finalize(t_g);
   }
 }
 
@@ -967,20 +912,6 @@ int TVMGraphExecutor_GetOutput(TVMGraphExecutor* executor, const int32_t idx, DL
   CHECK(out->dtype.bits == tensor->dtype.bits);
   CHECK(Shape_Accumulate(out->shape, out->ndim) == Shape_Accumulate(tensor->shape, tensor->ndim));
   memcpy(out->data, tensor->data, size * elem_bytes);
-  return status;
-}
-
-int TVMGraphExecutor_GetOutputRaw(TVMGraphExecutor* executor, const int32_t idx, void* out_raw) {
-  int status = 0;
-  uint32_t nid = executor->outputs[idx].node_id;
-  uint32_t index = executor->outputs[idx].index;
-  uint32_t eid = TVMGraphExecutor_GetEntryId(executor, nid, index);
-
-  // copy data section to allocated output tensor
-  DLTensor* tensor = &(executor->data_entry[eid].dl_tensor);
-  int32_t elem_bytes = tensor->dtype.bits / 8;
-  int64_t size = Shape_Accumulate(tensor->shape, tensor->ndim);
-  memcpy(out_raw, tensor->data, size * elem_bytes);
   return status;
 }
 
@@ -1083,7 +1014,7 @@ int TVMGraphExecutor_SetupStorage(TVMGraphExecutor* executor) {
     executor->storage_pool_count++;
   }
 
-  // Assign the pooled entries. A unified memory pool is used to simplifiy
+  // Assign the pooled entries. A unified memory pool is used to simplify
   // memory assignment for each node entry. The allocated memory on each device
   // is mapped to this pool.
   executor->data_entry_count = executor->node_row_ptr[executor->node_row_ptr_count - 1];
@@ -1100,6 +1031,8 @@ int TVMGraphExecutor_SetupStorage(TVMGraphExecutor* executor) {
                                        attrs->shape + idx * TVM_CRT_MAX_NDIM, attrs->ndim[idx],
                                        vtype[idx], &executor->data_entry[idx]);
     CHECK_EQ(status, 0, "fail to create for node with idx=%d, storage_id=%u\n", idx, storage_id);
+
+    TVMNDArray_IncrementReference(&executor->data_entry[idx]);
   }
 
   // Release memory
@@ -1132,10 +1065,7 @@ int TVMGraphExecutor_SetupOpExecs(TVMGraphExecutor* executor) {
   }
   for (nid = 0; nid < executor->nodes_count; nid++) {
     const TVMGraphExecutorNode* inode = executor->nodes + nid;
-    // Begin TI: skip creating pf for "__nop" to suppress error message in CreateTVMOp()
-    // if (strcmp(inode->op_type, "null")) {
-    if (strcmp(inode->op_type, "null") && strcmp(inode->param.func_name, "__nop")) {
-    // End TI
+    if (strcmp(inode->op_type, "null")) {
       DLTensorPtr args[TVM_CRT_MAX_ARGS];
       uint32_t args_count = 0;
       for (idx = 0; idx < inode->inputs_count; idx++) {
@@ -1170,7 +1100,6 @@ int TVMGraphExecutor_SetupOpExecs(TVMGraphExecutor* executor) {
       memset(&executor->op_execs[nid], 0, sizeof(TVMPackedFunc));
     }
   }
-
   return status;
 }
 

@@ -210,6 +210,8 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
 
     // Start with a copy of the current prim_func buffer map.
     Map<Var, Buffer> new_buffer_map(prim_func->buffer_map.begin(), prim_func->buffer_map.end());
+    Map<Var, Buffer> new_preflattened_buffer_map(prim_func->preflattened_buffer_map.begin(),
+                                                 prim_func->preflattened_buffer_map.end());
     bool any_change = false;
 
     // For each constrained parameter...
@@ -223,6 +225,23 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
         any_change = true;
       }
       new_buffer_map.Set(param, new_buffer);
+
+      // Rewrite the pre-flattened buffers to account for constraint.
+      // This only has an impact if the IRModule being analyzed has
+      // already been run through the StorageFlatten or FlattenBuffer
+      // passes.
+      if (auto opt = prim_func->preflattened_buffer_map.Get(param)) {
+        Buffer pf_buffer = opt.value();
+        if (pf_buffer.same_as(buffer)) {
+          new_preflattened_buffer_map.Set(param, new_buffer);
+        } else {
+          const Buffer new_buffer = RewriteBuffer(pf_buffer, virtual_device);
+          if (!new_buffer.same_as(pf_buffer)) {
+            any_change = true;
+          }
+          new_preflattened_buffer_map.Set(param, new_buffer);
+        }
+      }
     }
     // Make sure we have accounted for all prim_func parameters.
     CheckNoRemainingPointerParams(prim_func, &current_primfunc_param_index);
@@ -240,7 +259,8 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
 
     if (any_change) {
       return PrimFunc(prim_func->params, std::move(new_body), prim_func->ret_type,
-                      std::move(new_buffer_map), prim_func->attrs, prim_func->span);
+                      std::move(new_buffer_map), std::move(new_preflattened_buffer_map),
+                      prim_func->attrs, prim_func->span);
     } else {
       return prim_func;
     }
@@ -255,7 +275,7 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
     if (!new_buffer_var.same_as(new_load->buffer_var)) {
       return Load(load_node->dtype, new_buffer_var, load_node->index, load_node->predicate);
     }
-    return new_load;
+    return std::move(new_load);
   }
 
   PrimExpr VisitExpr_(const BufferLoadNode* buffer_load_node) final {
@@ -265,7 +285,7 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
     if (!new_buffer.same_as(new_buffer_load->buffer)) {
       return BufferLoad(new_buffer, new_buffer_load->indices, new_buffer_load->span);
     }
-    return new_buffer_load;
+    return std::move(new_buffer_load);
   }
 
   Stmt VisitStmt_(const LetStmtNode* let_stmt_node) final {
@@ -284,7 +304,7 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
                         new_attr_stmt->body);
       }
     }
-    return new_attr_stmt;
+    return std::move(new_attr_stmt);
   }
 
   // ForNode default ok since loop_var never of PointerType
@@ -302,7 +322,7 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
     if (!new_buffer_var.same_as(new_store->buffer_var)) {
       Store(new_buffer_var, new_store->value, new_store->index, new_store->predicate);
     }
-    return new_store;
+    return std::move(new_store);
   }
 
   Stmt VisitStmt_(const BufferStoreNode* buffer_store_node) final {
@@ -313,7 +333,7 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
       return BufferStore(new_buffer, new_buffer_store->value, new_buffer_store->indices,
                          new_buffer_store->span);
     }
-    return new_buffer_store;
+    return std::move(new_buffer_store);
   }
 
   Stmt VisitStmt_(const BufferRealizeNode* buffer_realize_node) final {
@@ -324,7 +344,7 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
       return BufferRealize(new_buffer, new_buffer_realize->bounds, new_buffer_realize->condition,
                            new_buffer_realize->body, new_buffer_realize->span);
     }
-    return new_buffer_realize;
+    return std::move(new_buffer_realize);
   }
 
   // IfThenElseNode default ok
@@ -338,7 +358,7 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
     if (!new_buffer.same_as(new_prefetch->buffer)) {
       return Prefetch(new_buffer, prefetch_node->bounds, prefetch_node->span);
     }
-    return new_prefetch;
+    return std::move(new_prefetch);
   }
 
   // SeqStmtNode default ok
@@ -373,9 +393,8 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
   }
 
   template <typename T>
-  Array<T> VisitItems(Array<T> items) {
-    items.MutateByApply([this](const T& item) { return VisitItem(item.get()); });  // copy-on-write
-    return items;
+  Array<T> VisitItems(const Array<T>& items) {
+    return items.Map([this](T item) -> T { return VisitItem(item.get()); });
   }
 
   Stmt VisitStmt_(const BlockNode* block_node) final {
@@ -390,7 +409,7 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
                    new_block->name_hint, new_block->body, new_block->init, new_block->alloc_buffers,
                    std::move(new_match_buffers), new_block->annotations, new_block->span);
     }
-    return new_block;
+    return std::move(new_block);
   }
 
   // BlockRealizeNode default ok
@@ -425,9 +444,8 @@ class ApplyDeviceConstraintsMutator : public StmtExprMutator {
     PointerType new_pointer_type(pointer_type_node->element_type, virtual_device->memory_scope);
     Var new_data(buffer->data->name_hint, new_pointer_type, buffer->data->span);
     var_subst_.emplace(buffer->data.get(), new_data);
-    Buffer new_buffer(new_data, buffer->dtype, buffer->shape, buffer->strides, buffer->elem_offset,
-                      buffer->name, buffer->data_alignment, buffer->offset_factor,
-                      buffer->buffer_type, buffer->span);
+    Buffer new_buffer = buffer;
+    new_buffer.CopyOnWrite()->data = new_data;
     buffer_subst_.emplace(buffer.get(), new_buffer);
     return new_buffer;
   }

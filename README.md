@@ -29,12 +29,6 @@ Apache TVM is a compiler stack for deep learning systems. It is designed to clos
 productivity-focused deep learning frameworks, and the performance- and efficiency-focused hardware backends.
 TVM works with deep learning frameworks to provide end to end compilation to different backends.
 
-Neo-AI/TVM is a downstream branch of TVM that includes vendor- and product-specific features on top of the upstream codebase.
-
-Branches
---------
-  * dev [![Build Status](https://neo-ai-ci.amazon-ml.com/job/tvm/job/dev/badge/icon)](https://neo-ai-ci.amazon-ml.com/job/tvm/job/dev/badge/icon) - This is the development branch with most update to date source code.
-
 License
 -------
 TVM is licensed under the [Apache-2.0](LICENSE) license.

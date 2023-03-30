@@ -92,7 +92,7 @@ class DialectRewriter : public transform::DeviceAwareExprMutator {
       }
       new_fields.push_back(new_field);
     }
-    return WithFields(GetRef<Tuple>(tuple_node), std::move(new_fields));
+    return WithFields(GetRef<Tuple>(tuple_node), new_fields);
   }
 
   void PreVisitLetBlock_(const LetNode* let_node) final { scopes_.emplace_back(); }
@@ -140,6 +140,9 @@ class DialectRewriter : public transform::DeviceAwareExprMutator {
 
     VirtualDevice virtual_device = GetVirtualDevice(call);
     ICHECK(!virtual_device->IsFullyUnconstrained());
+    ICHECK(!scopes_.empty())
+        << "Calls out of a let block are not supported, do you forget to transform "
+        << "with ToANormalForm or set opt_level >= 1 in the pass context?";
     LetList& scope = scopes_.back();
 
     std::vector<Expr> new_args;

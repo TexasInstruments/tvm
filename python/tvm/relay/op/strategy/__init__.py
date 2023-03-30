@@ -29,4 +29,4 @@ from . import bifrost
 from . import rocm
 from . import intel_graphics
 from . import hexagon
-from . import c7x
+from . import adreno

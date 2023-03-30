@@ -19,6 +19,7 @@
 import numpy as np
 
 import tvm
+import tvm.testing
 from tvm import relay
 import pytest
 
@@ -139,7 +140,7 @@ def print_test_info(test, lanes, cycles):
     print("test:{} vector-lanes:{} number of cycles:{}".format(test, lanes, cycles))
 
 
-@pytest.mark.skipif(skip_test(), reason="Skip because Verilator codegen is not available")
+@pytest.mark.skip(reason="Skip because Verilator codegen is not available")
 def tadd(lanes):
     """Print counter
 
@@ -160,7 +161,7 @@ def tadd(lanes):
     print_test_info("add", lanes, cycles)
 
 
-@pytest.mark.skipif(skip_test(), reason="Skip because Verilator codegen is not available")
+@pytest.mark.skip(reason="Skip because Verilator codegen is not available")
 def tbias(lanes):
     """Print counter
 
@@ -182,12 +183,14 @@ def tbias(lanes):
     print_test_info("nn.bias_add", lanes, cycles)
 
 
+@pytest.mark.skip(reason="Skip because Verilator codegen is not available")
 def test_add():
     """add tests."""
     tadd(1)
     tadd(4)
 
 
+@pytest.mark.skip(reason="Skip because Verilator codegen is not available")
 def test_bias_add():
     """bias_add tests."""
     tbias(1)
@@ -195,6 +198,4 @@ def test_bias_add():
 
 
 if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__] + sys.argv[1:]))
+    tvm.testing.main()

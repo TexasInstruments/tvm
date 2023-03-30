@@ -25,10 +25,10 @@ List of affected files:
 - tvm-root/conda/recipe/meta.yaml
 - tvm-root/web/package.json
 """
-import os
-import re
 import argparse
 import logging
+import os
+import re
 import subprocess
 
 # Modify the following value during release
@@ -44,7 +44,7 @@ import subprocess
 # Two tag formats are supported:
 # - vMAJ.MIN.PATCH (e.g. v0.8.0) or
 # - vMAJ.MIN.devN (e.g. v0.8.dev0)
-__version__ = "0.9.dev0"
+__version__ = "0.10.0"
 
 # ---------------------------------------------------
 
@@ -79,7 +79,7 @@ def git_describe_version():
     - pub_ver = '0.7.0', local_ver = '0.7.0':
       We are at the 0.7.0 release.
     - pub_ver =  '0.8.dev94', local_ver = '0.8.dev94+g0d07a329e':
-      We are at the the 0.8 development cycle.
+      We are at the 0.8 development cycle.
       The current source contains 94 additional commits
       after the most recent tag(v0.7.0),
       the git short hash tag of the current commit is 0d07a329e.

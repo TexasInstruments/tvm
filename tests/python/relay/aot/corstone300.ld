@@ -141,6 +141,8 @@ SECTIONS
     . = ALIGN (16);
     *(.rodata.tvm)
     . = ALIGN (16);
+    *(.data.tvm)
+    . = ALIGN (16);
   } > DDR
 
   .text :
@@ -249,12 +251,12 @@ SECTIONS
     . = ALIGN(16);
   } > SRAM AT > SRAM
 
-  .bss.NoInit :
+  .bss.noinit (NOLOAD):
   {
     . = ALIGN(16);
-    *(.bss.NoInit)
+    *(.bss.noinit.*)
     . = ALIGN(16);
-  } > DDR AT > DDR
+  } > SRAM AT > SRAM
 
   .bss :
   {

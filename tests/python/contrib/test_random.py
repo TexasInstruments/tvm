@@ -160,6 +160,5 @@ def test_random_fill():
 if __name__ == "__main__":
     test_randint()
     test_uniform()
-    # TODO(trevmorr): Disabled in neo-ai/tvm due to MemoryError
-    # test_normal()
+    test_normal()
     test_random_fill()

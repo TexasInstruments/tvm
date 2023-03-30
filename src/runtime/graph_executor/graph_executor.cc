@@ -24,6 +24,7 @@
 
 #include <tvm/runtime/container/map.h>
 #include <tvm/runtime/container/string.h>
+#include <tvm/runtime/data_type.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/runtime/ndarray.h>
 #include <tvm/runtime/packed_func.h>
@@ -41,6 +42,7 @@
 #include <vector>
 
 #include "../file_utils.h"
+#include "../texture.h"
 
 namespace tvm {
 namespace runtime {
@@ -50,80 +52,16 @@ inline size_t GetDataAlignment(const DLTensor& arr) {
   if (align < kAllocAlignment) return kAllocAlignment;
   return align;
 }
+constexpr auto Is2DStorage = IsTextureStorage;
 }  // namespace details
-
-// BeginTI
-/* copied from tvm crt graph runtime */
-static uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
-  int64_t accum = 1;
-  uint32_t idx;
-  for (idx = 0; idx < ndim; idx++) {
-    if (shape[idx] == 0) {
-      break;
-    }
-    accum *= shape[idx];
-  }
-  return accum;
-}
-
-#undef TVM_RT_TRACE_CRT
-#include <tvm/runtime/crt/tvm_tidl_trace.h>
-// EndTI
 
 /*!
  * \brief Run all the operations one by one.
  */
 void GraphExecutor::Run() {
-  int tvm_rt_debug_level = 0;
-  int tvm_rt_trace_node = -1;
-  char *env_var;
-  uint64_t t_g = 0, t_n = 0;
-  if ((env_var = getenv("TVM_RT_DEBUG")))
-    tvm_rt_debug_level = atoi(env_var);
-  if ((env_var = getenv("TVM_RT_TRACE_NODE")))
-    tvm_rt_trace_node = atoi(env_var);
-  if (tvm_rt_debug_level > 0) {
-    tvm_rt_trace_init();
-    t_g = _TSC_read();
-  }
-
   // setup the array and requirements.
   for (size_t i = 0; i < op_execs_.size(); ++i) {
-    if (op_execs_[i]) {
-      if (tvm_rt_debug_level > 3)
-        printf("TVM RT: running %s (%d)\n", nodes_[i].name.c_str(), (int) i);
-      if (tvm_rt_debug_level > 0)
-        t_n = _TSC_read();
-    }
-
     if (op_execs_[i]) op_execs_[i]();
-
-    if (op_execs_[i])
-    {
-      if (tvm_rt_debug_level > 0)
-      {
-        t_n = _TSC_read() - t_n;  /* Nanoseconds */
-        tvm_rt_trace_node_begin(i, nodes_[i].name.c_str(), t_n);
-      }
-      if (tvm_rt_debug_level > 2)
-      {
-        uint32_t num_outputs = nodes_[i].param.num_outputs;
-        for (uint32_t out_id = 0; out_id < num_outputs; out_id++) {
-          uint32_t eid = this->entry_id(i, out_id);
-          const DLTensor *tensor = data_entry_[eid].operator->();
-          tvm_rt_trace_write_tensor(tensor, out_id, tvm_rt_debug_level,
-                                    (int)i == tvm_rt_trace_node ? 1:0);
-        }
-      }
-      if (tvm_rt_debug_level > 0)
-        tvm_rt_trace_write_int(TVM_RT_TRACE_END_NODE);  /* End of node */
-    }
-  }
-
-  if (tvm_rt_debug_level > 0)
-  {
-    t_g = _TSC_read() - t_g;  /* Nanoseconds */
-    tvm_rt_trace_finalize(t_g);
   }
 }
 
@@ -159,9 +97,12 @@ void GraphExecutor::Init(const std::string& graph_json, tvm::runtime::Module mod
   for (size_t i = 0; i < outputs_.size(); i++) {
     const uint32_t nid = outputs_[i].node_id;
     std::string& name = nodes_[nid].name;
-    output_map_[name] = i;
+    std::stringstream ss;
+    ss << name << ":" << i;
+    output_map_[ss.str()] = i;
   }
 }
+
 /*!
  * \brief Get the input index given the name of input.
  * \param name The name of the input.
@@ -174,6 +115,29 @@ int GraphExecutor::GetInputIndex(const std::string& name) {
   }
   return -1;
 }
+
+/*!
+ * \brief Get the input info of Graph by parsing the input nodes.
+ * \return The shape and dtype tuple.
+ */
+std::tuple<GraphExecutor::ShapeInfo, GraphExecutor::DtypeInfo> GraphExecutor::GetInputInfo() const {
+  GraphExecutor::ShapeInfo shape_dict;
+  GraphExecutor::DtypeInfo dtype_dict;
+  for (uint32_t nid : input_nodes_) {
+    CHECK_LE(nid, nodes_.size());
+    std::string name = nodes_[nid].name;
+    if (param_names_.find(name) == param_names_.end()) {
+      CHECK_LE(nid, attrs_.shape.size());
+      auto shape = attrs_.shape[nid];
+      shape_dict.Set(name, ShapeTuple(shape));
+      CHECK_LE(nid, attrs_.dltype.size());
+      auto dtype = attrs_.dltype[nid];
+      dtype_dict.Set(name, String(dtype));
+    }
+  }
+  return std::make_tuple(shape_dict, dtype_dict);
+}
+
 /*!
  * \brief Get the output index given the name of output.
  * \param name The name of the output.
@@ -218,6 +182,17 @@ std::string GraphExecutor::GetInputType(int index) const {
   return attrs_.dltype[eid];
 }
 /*!
+ * \brief Get the type of the index-th output.
+ * \param index The output index.
+ *
+ * \return The type of the index-th output.
+ */
+std::string GraphExecutor::GetOutputType(int index) const {
+  CHECK_LT(static_cast<size_t>(index), outputs_.size()) << "The index is out of range.";
+  uint32_t eid = this->entry_id(outputs_[index]);
+  return attrs_.dltype[eid];
+}
+/*!
  * \brief Get the names of weight inputs.
  *
  * \return The names of the weight inputs.
@@ -232,7 +207,9 @@ void GraphExecutor::CheckExternalDLTensor(const DLTensor* external, uint32_t eid
   const DLTensor* internal = data_entry_[eid].operator->();
 
   ICHECK_EQ(data_alignment_[eid], details::GetDataAlignment(*external));
-  ICHECK_EQ(reinterpret_cast<size_t>(external->data) % kAllocAlignment, 0);
+  ICHECK_EQ(reinterpret_cast<size_t>(static_cast<char*>(external->data) + external->byte_offset) %
+                kAllocAlignment,
+            0);
   ICHECK_EQ(internal->ndim, static_cast<size_t>(external->ndim));
   ICHECK_EQ(internal->device.device_type, external->device.device_type);
   ICHECK_EQ(internal->device.device_id, external->device.device_id);
@@ -252,7 +229,7 @@ void GraphExecutor::SetInputZeroCopy(int index, DLTensor* data_ref) {
   CheckExternalDLTensor(data_ref, eid);
   // Update the data pointer for each argument of each op
   for (DLTensor* t : input_dltensors_[eid]) {
-    t->data = data_ref->data;
+    t->data = static_cast<char*>(data_ref->data) + data_ref->byte_offset;
   }
 }
 /*!
@@ -271,12 +248,12 @@ void GraphExecutor::SetOutputZeroCopy(int index, DLTensor* data_ref) {
 
   // Update the data pointer for output op
   for (DLTensor* t : output_dltensors_[output_node_eid]) {
-    t->data = data_ref->data;
+    t->data = static_cast<char*>(data_ref->data) + data_ref->byte_offset;
   }
 
   // Update the input of the op connected to the output
   for (DLTensor* t : both_output_opinput_dltensors_[output_node_eid]) {
-    t->data = data_ref->data;
+    t->data = static_cast<char*>(data_ref->data) + data_ref->byte_offset;
   }
 }
 /*!
@@ -291,17 +268,6 @@ int GraphExecutor::NumOutputs() const { return outputs_.size(); }
  * \return The number of inputs to the graph.
  */
 int GraphExecutor::NumInputs() const { return input_nodes_.size(); }
-/*!
- * \brief Get the type of the index-th output.
- * \param index The output index.
- *
- * \return The type of the index-th output.
- */
-std::string GraphExecutor::GetOutputType(int index) const {
-  CHECK_LT(static_cast<size_t>(index), outputs_.size()) << "The index is out of range.";
-  uint32_t eid = this->entry_id(outputs_[index]);
-  return attrs_.dltype[eid];
-}
 /*!
  * \brief Return NDArray for given input index.
  * \param index The input index.
@@ -356,6 +322,7 @@ void GraphExecutor::LoadParams(dmlc::Stream* strm) {
   weight_names_.clear();
   Map<String, NDArray> params = ::tvm::runtime::LoadParams(strm);
   for (auto& p : params) {
+    param_names_.insert(p.first);
     int in_idx = GetInputIndex(p.first);
     if (in_idx < 0) continue;
     uint32_t eid = this->entry_id(input_nodes_[in_idx], 0);
@@ -439,24 +406,16 @@ void GraphExecutor::SetupStorage() {
   // Find the maximum space size.
   for (size_t i = 0; i < attrs_.shape.size(); ++i) {
     int storage_id = attrs_.storage_id[i];
+    std::string storage_scope = attrs_.storage_scope.empty() ? "" : attrs_.storage_scope[i];
     // Use the fallback device if no device index is available.
     int device_type = static_cast<int>(devices_[0].device_type);
     if (!attrs_.device_index.empty()) {
       device_type = attrs_.device_index[i];
     }
-    size_t size = 1;
-    for (int64_t sz : attrs_.shape[i]) {
-      size *= static_cast<size_t>(sz);
-    }
-    ICHECK_GE(storage_id, 0) << "Do not support runtime shape op";
-    DLDataType t = vtype[i];
-    size_t bits = t.bits * t.lanes;
-    ICHECK(bits % 8U == 0U || bits == 1U || bits == 4U);
-    size_t bytes = ((bits + 7U) / 8U) * size;
 
     uint32_t sid = static_cast<uint32_t>(storage_id);
     if (sid >= pool_entry.size()) {
-      pool_entry.resize(sid + 1, {0, -1});
+      pool_entry.resize(sid + 1, {-1, {0}, {}});
     } else {
       ICHECK(pool_entry[sid].device_type == -1 || pool_entry[sid].device_type == device_type)
           << "The same pool entry cannot be assigned to multiple devices";
@@ -473,8 +432,38 @@ void GraphExecutor::SetupStorage() {
       pool_entry[sid].linked_param = lookup_rv;
     }
     pool_entry[sid].param_data_entry = i;
-    pool_entry[sid].size = std::max(pool_entry[sid].size, bytes);
     pool_entry[sid].device_type = device_type;
+    pool_entry[sid].scope = storage_scope;
+
+    DLDataType t = vtype[i];
+    if (!details::Is2DStorage(storage_scope)) {
+      size_t size = 1;
+      for (int64_t sz : attrs_.shape[i]) {
+        size *= static_cast<size_t>(sz);
+      }
+      size_t bits = t.bits * t.lanes;
+      ICHECK(bits % 8U == 0U || bits == 1U || bits == 4U);
+      int64_t bytes = ((bits + 7U) / 8U) * size;
+      pool_entry[sid].shape[0] = std::max(pool_entry[sid].shape[0], bytes);
+      pool_entry[sid].dtype = DLDataType{kDLFloat, 32, 1};
+    } else {
+      if (pool_entry[sid].shape.size() == 1) {
+        pool_entry[sid].shape.resize(3, 0);
+      }
+      size_t axis = runtime::DefaultTextureLayoutSeparator(attrs_.shape[i].size(), storage_scope);
+      auto shape = ApplyTexture2DFlattening<int64_t>(attrs_.shape[i], attrs_.shape[i].size(), axis);
+      pool_entry[sid].shape[0] = std::max(pool_entry[sid].shape[0], shape.height);
+      pool_entry[sid].shape[1] = std::max(pool_entry[sid].shape[1], shape.width);
+      CHECK(pool_entry[sid].shape[2] == 0 || pool_entry[sid].shape[2] == shape.channel)
+          << pool_entry[sid].shape[2] << " != " << shape.channel
+          << ",  texture channel length must be consistent within a storage pool";
+      pool_entry[sid].shape[2] = shape.channel;
+      CHECK(pool_entry[sid].dtype.bits == 0 || TypeEqual(pool_entry[sid].dtype, t))
+          << DLDataType2String(pool_entry[sid].dtype) << " != " << DLDataType2String(t)
+          << ", pool entry for 2d texure allocations must be of the same type;"
+          << " downstream error from memory planner likely";
+      pool_entry[sid].dtype = t;
+    }
   }
 
   // Allocate the space.
@@ -488,9 +477,15 @@ void GraphExecutor::SetupStorage() {
     if (pit.linked_param.defined()) {
       storage_pool_.push_back(pit.linked_param);
     } else {
-      std::vector<int64_t> shape;
-      shape.push_back(static_cast<int64_t>(pit.size + 3) / 4);
-      storage_pool_.push_back(NDArray::Empty(shape, DLDataType{kDLFloat, 32, 1}, dev));
+      std::vector<int64_t> shape = pit.shape;
+      if (shape.size() == 1) {
+        shape[0] = (shape[0] + 3) / 4;
+      }
+      Optional<String> mem_scope;
+      if (!pit.scope.empty()) {
+        mem_scope = String(pit.scope);
+      }
+      storage_pool_.push_back(NDArray::Empty(shape, pit.dtype, dev, mem_scope));
     }
   }
 
@@ -567,8 +562,8 @@ void GraphExecutor::SetupOpExecs() {
   }
 }
 
-std::pair<std::function<void()>, std::shared_ptr<GraphExecutor::OpArgs> >
-GraphExecutor::CreateTVMOp(const TVMOpParam& param, const std::vector<DLTensor>& args) {
+std::pair<std::function<void()>, std::shared_ptr<GraphExecutor::OpArgs>> GraphExecutor::CreateTVMOp(
+    const TVMOpParam& param, const std::vector<DLTensor>& args) {
   std::shared_ptr<GraphExecutor::OpArgs> arg_ptr = std::make_shared<GraphExecutor::OpArgs>();
   // setup address.
   arg_ptr->args = args;
@@ -620,17 +615,7 @@ GraphExecutor::CreateTVMOp(const TVMOpParam& param, const std::vector<DLTensor>&
 PackedFunc GraphExecutor::GetFunction(const std::string& name,
                                       const ObjectPtr<Object>& sptr_to_self) {
   // Return member functions during query.
-  if (name == "get_custom_data") {
-    return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
-      auto func_name = args[0].operator String();
-      PackedFunc func = module_.GetFunction(func_name, true);
-      if(func == nullptr)
-        *rv = nullptr;
-      else
-        *rv = func();
-    });
-  }
-  else if (name == "set_input") {
+  if (name == "set_input") {
     return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
       if (String::CanConvertFrom(args[0])) {
         int in_idx = this->GetInputIndex(args[0].operator String());
@@ -729,6 +714,14 @@ PackedFunc GraphExecutor::GetFunction(const std::string& name,
     return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
       CHECK(String::CanConvertFrom(args[0])) << "Input key is not a string";
       *rv = this->GetInputIndex(args[0].operator String());
+    });
+  } else if (name == "get_input_info") {
+    return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
+      auto [shape_info, dtype_info] = this->GetInputInfo();
+      Map<String, ObjectRef> input_info;
+      input_info.Set("shape", shape_info);
+      input_info.Set("dtype", dtype_info);
+      *rv = input_info;
     });
   } else {
     return PackedFunc();

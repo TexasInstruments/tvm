@@ -210,13 +210,13 @@ class Device(ctypes.Structure):
         12: "ext_dev",
         14: "hexagon",
         15: "webgpu",
-        16: "c7x",
     }
     STR2MASK = {
         "llvm": 1,
         "stackvm": 1,
         "cpu": 1,
         "c": 1,
+        "test": 1,
         "hybrid": 1,
         "composite": 1,
         "cuda": 2,
@@ -233,7 +233,6 @@ class Device(ctypes.Structure):
         "ext_dev": 12,
         "hexagon": 14,
         "webgpu": 15,
-        "c7x": 16,
     }
 
     def __init__(self, device_type, device_id):
@@ -284,7 +283,7 @@ class Device(ctypes.Structure):
     def warp_size(self):
         """Number of threads that execute concurrently.
 
-        Returns device value for for cuda, rocm, and vulkan.  Returns
+        Returns device value for cuda, rocm, and vulkan.  Returns
         1 for metal and opencl devices, regardless of the physical
         device.  Returns remote device value for RPC devices.  Returns
         None for all other devices.
@@ -430,6 +429,17 @@ class Device(ctypes.Structure):
         -------
         version : str or None
             The version string in `major.minor.patch` format.
+
+        """
+        return self._GetDeviceAttr(self.device_type, self.device_id, 12)
+
+    def texture_spatial_limit(self):
+        """Returns limits for textures by spatial dimensions
+
+        Returns
+        -------
+        limit : int or None
+            Maximum size of the texture by spatial dimensions
 
         """
         return self._GetDeviceAttr(self.device_type, self.device_id, 12)

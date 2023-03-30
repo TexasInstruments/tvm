@@ -86,14 +86,6 @@ int TVMGraphExecutor_GetNumInputs();
 void TVMGraphExecutor_SetInput(TVMGraphExecutor* executor, const char* name, DLTensor* data_in);
 
 /*!
- * \brief set input to the graph based on name with raw data.
- * \param runtime The graph runtime.
- * \param name The name of the input.
- * \param data_in The raw input data (not DLTensor).
- */
-void TVMGraphExecutor_SetInputRaw(TVMGraphExecutor* executor, const char* name, void* data_in);
-
-/*!
  * \brief get number of output tensors allocated.
  * \return integer number of output tensors allocated.
  */
@@ -107,15 +99,6 @@ int TVMGraphExecutor_GetNumOutputs();
  * \return The result of this function execution.
  */
 int TVMGraphExecutor_GetOutput(TVMGraphExecutor* executor, const int32_t index, DLTensor* out);
-
-/*!
- * \brief Return raw data for given output index.
- * \param runtime The graph runtime.
- * \param index The output index.
- * \param out The copied raw data corresponding to given output node index.
- * \return The result of this function execution.
- */
-int TVMGraphExecutor_GetOutputRaw(TVMGraphExecutor* executor, const int32_t index, void* out);
 
 /*!
  * \brief Load parameters from parameter blob.

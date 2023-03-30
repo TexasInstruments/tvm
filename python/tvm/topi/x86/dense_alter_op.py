@@ -24,42 +24,35 @@ from tvm import autotvm
 from .dense import _default_dense_pack_config
 from ..utils import get_const_tuple
 from ..nn import dense_alter_layout
+from .utils import target_has_vnni
+from .. import nn
+
+
+def check_vnni_applicable(x, y):
+    mcpu = tvm.target.Target.current().mcpu
+    return (
+        target_has_vnni(mcpu)
+        and "int8" in x.dtype
+        and "int8" in y.dtype
+        and y.shape[-2] % 16 == 0
+        and y.shape[-1] % 4 == 0
+    )
 
 
 @dense_alter_layout.register(["cpu", "arm_cpu"])
 def _alter_dense_layout(attrs, inputs, tinfos, out_type):
     target = tvm.target.Target.current(allow_none=False)
-    # special check to turn on mlas library
-    if (
-        "mlas" in target.libs
-        and tinfos[0].dtype == "float32"
-        and tinfos[1].dtype == "float32"
-        and out_type.dtype == "float32"
-    ):
-        # mlas is only used for static tensors
-        if not (
-            any([isinstance(dim, tvm.tir.Any) for dim in tinfos[0].shape])
-            or any([isinstance(dim, tvm.tir.Any) for dim in tinfos[1].shape])
-        ):
-            # if matrix B is constant, use packed matmul
-            if isinstance(inputs[1], relay.expr.Constant):
-                b_shape = inputs[1].data.shape
-                assert len(b_shape) == 2
-                N, K = b_shape[0], b_shape[1]
-                packed_b = relay.op.mlas_packb(inputs[1], K, N)
-                output = relay.op.mlas_matmul(inputs[0], packed_b, True, K, N)
-                return output
-            # if matrix A, B are not constant and no other libs are enabled, use normal matmul
-            if not any([item in target.libs for item in ["mkl", "clbas", "mkldnn"]]):
-                return relay.op.mlas_matmul(inputs[0], inputs[1], False)
-
     dispatch_ctx = autotvm.task.DispatchContext.current
     data_tensor, weight_tensor = tinfos
     out_dtype = out_type.dtype
     M, K = get_const_tuple(data_tensor.shape)
     N, _ = get_const_tuple(weight_tensor.shape)
 
-    impl, outs = relay.backend.te_compiler.select_implementation(
+    if check_vnni_applicable(data_tensor, weight_tensor) and data_tensor.dtype == "uint8":
+        weight_layout = "NC16n4c"
+        return relay.nn.contrib_dense_pack(inputs[0], inputs[1], weight_layout, None, out_dtype)
+
+    _, outs = relay.backend.te_compiler.select_implementation(
         relay.op.get("nn.dense"), attrs, tinfos, out_type, target
     )
     workload = autotvm.task.get_workload(outs)
@@ -90,3 +83,37 @@ def _alter_dense_layout(attrs, inputs, tinfos, out_type):
             return relay.nn.contrib_dense_pack(inputs[0], inputs[1], weight_layout, None, out_dtype)
 
     return None
+
+
+def vnni_legalize(inputs, arg_types, op, attrs, need_expand=False):
+    """Legalizes s8, s8 -> s32 GEMM op for VNNI."""
+    if check_vnni_applicable(arg_types[0], arg_types[1]) and arg_types[0].dtype == "int8":
+        x, y = inputs
+        x = relay.cast(x, "int32")
+        x = relay.add(x, relay.const(128, "int32"))
+        x = relay.cast(x, "uint8")
+
+        adjust_shift = relay.const(128, "int32") * relay.sum(relay.cast(y, "int32"), axis=[-1])
+
+        if need_expand:
+            adjust_shift = relay.expand_dims(adjust_shift, axis=1)
+
+        out = op(x, y, **attrs)
+
+        return relay.subtract(out, adjust_shift)
+
+    return None
+
+
+@nn.dense_legalize.register("cpu")
+def _dense_legalize(attrs, inputs, arg_types):
+    """Legalizes s8, s8 -> s32 dense for VNNI."""
+    return vnni_legalize(inputs, arg_types, relay.nn.dense, attrs)
+
+
+@nn.batch_matmul_legalize.register("cpu")
+def _batch_matmul_legalize(attrs, inputs, arg_types):
+    """Legalizes s8, s8 -> s32 batch_matmul for VNNI."""
+    if attrs["transpose_a"] or not attrs["transpose_b"]:
+        return None
+    return vnni_legalize(inputs, arg_types, relay.nn.batch_matmul, attrs, need_expand=True)

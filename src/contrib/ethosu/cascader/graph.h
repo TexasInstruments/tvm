@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include "block_config.h"
 #include "propagator.h"
 
 namespace tvm {
@@ -43,6 +44,14 @@ namespace cascader {
 class Tensor;
 class Part;
 class StripeConfig;
+
+/*!
+ * \brief The buffering mode to use when realizing a tensor.
+ * RECOMPUTE - The 'default' behaviour of TVM. Overlapping stripes will be recomputed.
+ * ROLLING - Apply both the sliding window and storage folding optimizations to the tensor
+ * realization.
+ */
+enum BufferMode { RECOMPUTE, ROLLING };
 
 /*! \brief A struct to hold a Tensor Expression subgraph */
 struct TESubgraph {
@@ -58,11 +67,13 @@ class PerformanceInfoNode : public Object {
   void VisitAttrs(AttrVisitor* v);
 
   /*! \brief The cycles to compute a block */
-  size_t compute_cycles;
+  int64_t compute_cycles;
   /*! \brief The number of bytes read per input tensor */
-  std::vector<size_t> read_bytes;
+  std::vector<int64_t> read_bytes;
   /*! \brief The number of bytes written to the output tensor */
-  size_t write_bytes;
+  int64_t write_bytes;
+  /*! \brief The block config used for this performance point */
+  BlockConfig block_config;
 
   static constexpr const char* _type_key = "contrib.ethosu.cascader.PerformanceInfo";
   TVM_DECLARE_FINAL_OBJECT_INFO(PerformanceInfoNode, Object);
@@ -77,11 +88,13 @@ class PerformanceInfoNode : public Object {
  */
 class PerformanceInfo : public ObjectRef {
  public:
-  PerformanceInfo(size_t compute_cycles, std::vector<size_t> read_bytes, size_t write_bytes) {
+  PerformanceInfo(int64_t compute_cycles, std::vector<int64_t> read_bytes, int64_t write_bytes,
+                  BlockConfig block_config) {
     auto n = make_object<PerformanceInfoNode>();
     n->compute_cycles = compute_cycles;
     n->read_bytes = std::move(read_bytes);
     n->write_bytes = write_bytes;
+    n->block_config = block_config;
     data_ = std::move(n);
   }
 
@@ -190,7 +203,7 @@ class PartNode : public Object {
    * \return The performance information containing the compute cycles and read/write bytes.
    */
   virtual const PerformanceInfo GetPerformanceInfo(const StripeConfig& output_stripe_config,
-                                                   bool is_rolling) = 0;
+                                                   BufferMode buffer_mode) = 0;
 
   static constexpr const char* _type_key = "contrib.ethosu.cascader.Part";
   TVM_DECLARE_BASE_OBJECT_INFO(PartNode, Object);

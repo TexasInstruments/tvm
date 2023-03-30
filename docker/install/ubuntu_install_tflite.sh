@@ -18,6 +18,7 @@
 
 set -e
 set -u
+set -x
 set -o pipefail
 
 # The tflite version should have matched versions to the tensorflow
@@ -37,9 +38,17 @@ pip3 install flatbuffers
 # Build the TFLite static library, necessary for building with TFLite ON.
 # The library is built at:
 # tensorflow/tensorflow/lite/tools/make/gen/*/lib/libtensorflow-lite.a.
-git clone https://github.com/tensorflow/tensorflow --branch=v${TENSORFLOW_VERSION}
-./tensorflow/tensorflow/lite/tools/make/download_dependencies.sh
-./tensorflow/tensorflow/lite/tools/make/build_lib.sh
+git clone https://github.com/tensorflow/tensorflow --branch=v${TENSORFLOW_VERSION} --depth 1
+
+mkdir -p /opt/tflite
+cd /opt/tflite
+cmake \
+  -DTFLITE_ENABLE_XNNPACK=OFF \
+  /tensorflow/tensorflow/lite
+
+cmake --build .
+cd -
+
 
 # Setup tflite from schema
 mkdir tflite

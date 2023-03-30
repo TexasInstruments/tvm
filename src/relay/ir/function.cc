@@ -36,6 +36,7 @@ Function::Function(tvm::Array<Var> params, Expr body, Type ret_type,
   n->ret_type = std::move(ret_type);
   n->type_params = std::move(type_params);
   n->attrs = std::move(attrs);
+  n->virtual_device_ = VirtualDevice::FullyUnconstrained();
   n->span = std::move(span);
   data_ = std::move(n);
 }
@@ -53,7 +54,9 @@ Function WithFields(Function function, Optional<Array<Var>> opt_params, Optional
   Span span = opt_span.value_or(function->span);
 
   bool unchanged = body.same_as(function->body) && ret_type.same_as(function->ret_type) &&
-                   attrs.same_as(function->attrs) && span.same_as(function->span);
+                   attrs.same_as(function->attrs) &&
+                   virtual_device.same_as(function->virtual_device()) &&
+                   span.same_as(function->span);
 
   // Check that all the type params are unchanged
   if (unchanged) {
@@ -109,7 +112,7 @@ FuncType FunctionNode::func_type_annotation() const {
 const FunctionNode* AsOptimizableFunctionNode(const BaseFunc& base_func) {
   if (const auto* function_node = base_func.as<FunctionNode>()) {
     if (!function_node->GetAttr<String>(attr::kCompiler).defined() &&
-        !function_node->GetAttr<String>(attr::kExternalSymbol).defined() &&
+        !function_node->HasNonzeroAttr(attr::kExtern) &&
         !function_node->HasNonzeroAttr(attr::kSkipOptimization)) {
       return function_node;
     }
@@ -123,6 +126,14 @@ TVM_REGISTER_GLOBAL("relay.ir.Function")
     .set_body_typed([](tvm::Array<Var> params, Expr body, Type ret_type,
                        tvm::Array<TypeVar> ty_params, tvm::DictAttrs attrs) {
       return Function(params, body, ret_type, ty_params, attrs);
+    });
+TVM_REGISTER_GLOBAL("relay.ir.FunctionWithFields")
+    .set_body_typed([](Function function, Optional<Array<Var>> opt_params, Optional<Expr> opt_body,
+                       Optional<Type> opt_ret_type, Optional<Array<TypeVar>> opt_ty_params,
+                       Optional<DictAttrs> opt_attrs, Optional<VirtualDevice> opt_virtual_device,
+                       Optional<Span> opt_span) {
+      return WithFields(function, opt_params, opt_body, opt_ret_type, opt_ty_params, opt_attrs,
+                        opt_virtual_device, opt_span);
     });
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)

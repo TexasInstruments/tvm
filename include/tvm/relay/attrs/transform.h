@@ -27,11 +27,35 @@
 #include <tvm/ir/attrs.h>
 #include <tvm/relay/base.h>
 #include <tvm/relay/expr.h>
+#include <tvm/tir/index_map.h>
 
 #include <string>
 
 namespace tvm {
 namespace relay {
+
+/*! \brief Attributes used for the sliding_window operator */
+struct SlidingWindowAttrs : public tvm::AttrsNode<SlidingWindowAttrs> {
+  int axis;
+  Array<Integer> window_shape;
+  Array<Integer> strides;
+  TVM_DECLARE_ATTRS(SlidingWindowAttrs, "relay.attrs.SlidingWindowAttrs") {
+    TVM_ATTR_FIELD(axis).describe(
+        "What axis the sliding window begin forming over."
+        "Window will be slid over this axis and all following axes."
+        "The axis value determines the window shape (and thus, the"
+        "number of strides):"
+        "window shape and strides must both be of length"
+        "`data.ndim-axis`.");
+    TVM_ATTR_FIELD(window_shape)
+        .describe(
+            "The window shape to form over the input."
+            "Window shape must be of length `data.ndim-axis`.");
+    TVM_ATTR_FIELD(strides).describe(
+        "How to stride the window along each dimension."
+        "Strides must be of length `data.ndim-axis`.");
+  }
+};  // struct SlidingWindowAttrs
 
 /*! \brief data type cast */
 struct CastAttrs : public tvm::AttrsNode<CastAttrs> {
@@ -95,9 +119,12 @@ struct TransposeAttrs : public tvm::AttrsNode<TransposeAttrs> {
 /*! \brief Attributes used in reshape operators */
 struct ReshapeAttrs : public tvm::AttrsNode<ReshapeAttrs> {
   Array<Integer> newshape;
+  bool allowzero;
   TVM_DECLARE_ATTRS(ReshapeAttrs, "relay.attrs.ReshapeAttrs") {
     TVM_ATTR_FIELD(newshape).describe(
         "The new shape. Should be compatible with the original shape.");
+    TVM_ATTR_FIELD(allowzero).set_default(0).describe(
+        "Whether to honor the value of zero in newshape.");
   }
 };  // struct ReshapeAttrs
 
@@ -173,7 +200,7 @@ struct GatherNDAttrs : public tvm::AttrsNode<GatherNDAttrs> {
 struct TakeAttrs : public tvm::AttrsNode<TakeAttrs> {
   Integer batch_dims;
   Integer axis;
-  std::string mode;
+  tvm::String mode;
 
   TVM_DECLARE_ATTRS(TakeAttrs, "relay.attrs.TakeAttrs") {
     TVM_ATTR_FIELD(batch_dims)
@@ -228,14 +255,6 @@ struct MeshgridAttrs : public tvm::AttrsNode<MeshgridAttrs> {
         .set_default("ij");
   }
 };  // struct MeshgridAttrs
-
-struct InterpolateAttrs : public tvm::AttrsNode<InterpolateAttrs> {
-  std::string mode;
-
-  TVM_DECLARE_ATTRS(InterpolateAttrs, "relay.attrs.InterpolateAttrs") {
-    TVM_ATTR_FIELD(mode).describe("Type of inteprolation to use.").set_default("linear");
-  }
-};  // struct InterpolateAttrs
 
 /*! \brief Attributes used in stack operators */
 struct StackAttrs : public tvm::AttrsNode<StackAttrs> {
@@ -329,7 +348,7 @@ struct StridedSliceAttrs : public tvm::AttrsNode<StridedSliceAttrs> {
   Optional<Array<Integer>> begin;
   Optional<Array<Integer>> end;
   Optional<Array<Integer>> strides;
-  std::string slice_mode;
+  tvm::String slice_mode;
   Optional<Array<Integer>> axes;
 
   TVM_DECLARE_ATTRS(StridedSliceAttrs, "relay.attrs.StridedSliceAttrs") {
@@ -408,6 +427,22 @@ struct AutoSchedulerLayoutTransformAttrs
     TVM_ATTR_FIELD(src_layout).describe("The source layout of the tensor. (e.g. 1N32C112H112W)");
     TVM_ATTR_FIELD(dst_layout)
         .describe("The destination layout of the tensor. (e.g. 1N2C112H112W16c)");
+  }
+};
+
+/*! \brief Attributes for MetaScheduleLayoutTransform operator */
+struct MetaScheduleLayoutTransformAttrs : public tvm::AttrsNode<MetaScheduleLayoutTransformAttrs> {
+  tir::IndexMap index_map;
+
+  TVM_DECLARE_ATTRS(MetaScheduleLayoutTransformAttrs,
+                    "relay.attrs.MetaScheduleLayoutTransformAttrs") {
+    TVM_ATTR_FIELD(index_map).describe(
+        "The order of the extents, for example, "
+        "let extents = [2, 3, 4], reorder = [0, 2, 1], and the shape of buffer A is (4, 6)"
+        "then A[i, j] will be first rewritten to "
+        "A[(6 * i + j) / 12, (6 * i + j) / 4 % 3 , (6 * i + j) % 4] according to the `extents`,"
+        "and then reordered to A[(6 * i + j) / 12, (6 * i + j) % 4 , (6 * i + j) / 4 % 3]"
+        "according to `reorder`");
   }
 };
 
@@ -539,6 +574,15 @@ struct StftAttrs : public tvm::AttrsNode<StftAttrs> {
         "Whether to return onesided result or fill with conjugate symmetry");
   }
 };  // struct StftAttrs
+
+struct TriluAttrs : public tvm::AttrsNode<TriluAttrs> {
+  bool upper;
+
+  TVM_DECLARE_ATTRS(TriluAttrs, "relay.attrs.TriluAttrs") {
+    TVM_ATTR_FIELD(upper).set_default(true).describe(
+        "Whether to keep the upper or lower half of the diagonal.");
+  }
+};  // struct TriluAttrs
 
 }  // namespace relay
 }  // namespace tvm
