@@ -119,7 +119,6 @@ def compile_cuda(code, target_format="ptx", arch=None, options=None, path_target
         return data
 
 
-
 def find_cuda_path():
     """Utility function to find cuda path
 

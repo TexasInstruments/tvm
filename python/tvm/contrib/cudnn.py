@@ -199,7 +199,6 @@ def conv_output_shape(
     -------
     oshape: list
         output shape
-
     """
 
     assert len(x_shape) == len(w_shape)

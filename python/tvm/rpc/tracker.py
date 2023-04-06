@@ -75,7 +75,6 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 
 
-
 class Scheduler(object):
     """Abstract interface of scheduler."""
 

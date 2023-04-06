@@ -157,7 +157,6 @@ accident. Once uploaded you should send a PR to update the ``URL_MAP`` in
 `request_hook.py <https://github.com/apache/tvm/blob/main/tests/scripts/request_hook/request_hook.py>`_
 with the new URL.
 
-will run ``test_mytest`` with ``target="llvm"``, ``target="cuda"``, and few others. This also ensures that your test is run on the correct hardware by the CI. If you only want to test against a couple targets use ``@tvm.testing.parametrize_targets("target_1", "target_2")``. If you want to test on a single target, use the associated decorator from :py:func:`tvm.testing`. For example, CUDA tests use the ``@tvm.testing.requires_cuda`` decorator.
 
 Handle Integer Constant Expression
 ----------------------------------

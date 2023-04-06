@@ -174,8 +174,6 @@ inline const char* CLGetErrorString(cl_int error) {
     default:
       return "Unknown OpenCL error code";
   }
-  LOG(FATAL) << "data type is not supported in OpenCL runtime yet: " << dtype;
-  return CL_FLOAT;
 }
 
 inline cl_channel_type DTypeToOpenCLChannelType(DLDataType data_type) {

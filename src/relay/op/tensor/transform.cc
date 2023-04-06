@@ -1367,19 +1367,17 @@ elements along a given axis.
 
 Examples::
 
-RELAY_REGISTER_OP("reshape_like")
-    .describe(R"code(Reshapes the input array by the size of another array.
-For an input array with shape ``(d1, d2, ..., dk)``, `reshape_like` operation reshapes
-the input array into an output array with the same shape as the second input array.
-.. note::
-    Sizes for both array should be compatible.
-Example::
+  a = [[ 1, 2],
+       [ 3, 4]]
+  indices = [3, 0, 2]
+  take(a, indices) = [ 4, 1, 3]
 
-  data.shape == (1, 2, 3, 4)
-  shape_like.shape == (6, 2, 2, 3)
+  a = [[ 1., 2.],
+       [ 3., 4.]]
+  indices = [1, 0]
+  take(a, indices, axis=1) = [[ 2., 1.],
+                              [ 4., 3.]]
 
-  ret = reshape_like(data, shape_like, lhs_begin=1, rhs_end=3)
-  ret.shape == (1, 6, 2, 2)
 )code" TVM_ADD_FILELINE)
     .set_attrs_type<TakeAttrs>()
     .set_num_inputs(2)

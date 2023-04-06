@@ -17,7 +17,6 @@
 import tvm
 from tvm import te
 import numpy as np
-import pytest
 from tvm.contrib import random
 from tvm import rpc
 import tvm.testing
@@ -73,7 +72,6 @@ def test_uniform():
     verify()
 
 
-@pytest.mark.skip("neo-ai/tvm: skip due to MemoryError")
 def test_normal():
     m = 10240
     n = 10240

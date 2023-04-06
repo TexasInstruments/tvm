@@ -268,9 +268,6 @@ class TypedPackedFunc<R(Args...)> {
   /*!
    * \brief construct from a lambda function with the same signature.
    *
-   * This version does not take a name. It is highly recommend you use the
-   * version that takes a name for the lambda.
-   *
    * Example usage:
    * \code
    * auto typed_lambda = [](int x)->int { return x + 1; }

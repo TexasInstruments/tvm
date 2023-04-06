@@ -347,8 +347,6 @@ class RefRead(ExprWithOp):
     def __init__(self, ref):
         self.__init_handle_by_constructor__(_ffi_api.RefRead, ref)
 
-    def __init__(self, ref):
-        self.__init_handle_by_constructor__(_ffi_api.RefRead, ref)
 
 @tvm._ffi.register_object("relay.RefWrite")
 class RefWrite(ExprWithOp):
@@ -434,8 +432,6 @@ class TupleWrapper(object):
     def astype(self, _):
         raise TypeError("astype cannot be used on tuple")
 
-    def astype(self, _):
-        raise TypeError("astype cannot be used on tuple")
 
 def var(name_hint, type_annotation=None, shape=None, dtype="float32"):
     """Create a new tvm.relay.Var.

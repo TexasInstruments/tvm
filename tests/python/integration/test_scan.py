@@ -16,7 +16,6 @@
 # under the License.
 """Test scheduling adn running scan operators."""
 import numpy as np
-import tvm.testing
 
 import tvm
 import tvm.testing

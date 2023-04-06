@@ -191,28 +191,6 @@ to update a CI Docker image.
 
 .. _pr-testing:
 
-
-
-CI Environment
---------------
-We use docker container to create stable CI environments
-that can be deployed to multiple machines.
-Because we want a relatively stable CI environment and make use of pre-cached image,
-all of the CI images are built and maintained by committers.
-
-Upgrade of CI images can cause problems and need fixes to accommodate the new env.
-Here is the protocol to update CI image:
-
-- Send PR to upgrade build script in the repo
-  - Can be done by a contributor, the following steps need committership.
-- Build the new docker image
-- Tag the docker image with a new version and push to tvmai
-- Update the version(most of the time increase the minor version) in the Jenkinsfile, send a PR.
-- Fix any issues wrt to the new image versions in the PR.
-- Merge the PR and now we are in new version.
-- Tag the new version as the latest.
-- Periodically cleanup the old versions on local workers
-
 Testing
 -------
 Even though we have hooks to run unit tests automatically for each pull request, it's always recommended to run unit tests

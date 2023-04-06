@@ -16,7 +16,6 @@
 # under the License.
 """RPC client tools"""
 import os
-import stat
 import socket
 import stat
 import struct

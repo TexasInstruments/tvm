@@ -21,7 +21,6 @@ import logging
 import multiprocessing as mp
 import textwrap
 
-import pytest
 import tvm
 import tvm.relay
 import tvm.testing
@@ -169,7 +168,6 @@ def teardown_module():
 
 
 def get_sample_task(target=tvm.target.cuda(), target_host=None):
-    target, target_host = Target.check_and_update_host_consist(target, target_host)
     """return a sample task for testing"""
     target, target_host = Target.canon_target_and_host(target, target_host)
     task = autotvm.task.create(

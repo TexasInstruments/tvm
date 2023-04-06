@@ -259,10 +259,6 @@ void VulkanDeviceAPI::GetTargetProperty(Device dev, const std::string& property,
   if (property == "max_spirv_version") {
     *rv = int64_t(prop.max_spirv_version);
   }
-  const auto& device = this->device(dev.device_id);
-  auto usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-  return new VulkanBuffer(device, nbytes, usage, device.compute_mtype_index);
 }
 
 void* VulkanDeviceAPI::AllocDataSpace(Device dev, size_t nbytes, size_t alignment,

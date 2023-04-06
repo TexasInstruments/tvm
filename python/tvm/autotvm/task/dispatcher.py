@@ -239,11 +239,6 @@ class ApplyFixedConfig(DispatchContext):
         self.workload = workload
         self._config = cfg
 
-    def update(self, target, workload, cfg):
-        """Override update"""
-        self.workload = workload
-        self._config = cfg
-
 
 class ApplyHistoryBest(DispatchContext):
     """

@@ -17,8 +17,6 @@
 
 .. _code_review_guide:
 
-Building Trust
---------------
 
 Code Reviews
 ============

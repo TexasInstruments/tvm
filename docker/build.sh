@@ -86,26 +86,6 @@ if [[ "$1" == "--net=host" ]]; then
     CI_DOCKER_EXTRA_PARAMS+=('--net=host')
     CI_DOCKER_BUILD_EXTRA_PARAMS+=("--network=host")
     shift 1
-    cached_image="$1"
-    DOCKER_NO_CACHE_ARG=
-    CI_DOCKER_BUILD_EXTRA_PARAMS+=("--cache-from tvm.$CONTAINER_TYPE:$DOCKER_IMAGE_TAG")
-    CI_DOCKER_BUILD_EXTRA_PARAMS+=("--cache-from $cached_image")
-    shift 1
-fi
-
-if [[ "$1" == "--context-path" ]]; then
-    DOCKER_CONTEXT_PATH="$2"
-    echo "Using custom context path: ${DOCKER_CONTEXT_PATH}"
-    shift 2
-else
-    DOCKER_CONTEXT_PATH=$(dirname "${DOCKERFILE_PATH}")
-    echo "Using default context path: ${DOCKER_CONTEXT_PATH}"
-fi
-
-if [[ "$1" == "--name" ]]; then
-    CI_DOCKER_EXTRA_PARAMS+=("--name ${2} --hostname ${2}")
-    echo "Using container name ${2}"
-    shift 2
 fi
 
 DOCKER_NO_CACHE_ARG=--no-cache
