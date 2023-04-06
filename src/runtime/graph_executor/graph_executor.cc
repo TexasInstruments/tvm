@@ -55,13 +55,78 @@ inline size_t GetDataAlignment(const DLTensor& arr) {
 constexpr auto Is2DStorage = IsTextureStorage;
 }  // namespace details
 
+// Begin TI
+/* copied from tvm crt graph runtime */
+static uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
+  int64_t accum = 1;
+  uint32_t idx;
+  for (idx = 0; idx < ndim; idx++) {
+    if (shape[idx] == 0) {
+      break;
+    }
+    accum *= shape[idx];
+  }
+  return accum;
+}
+
+#undef TVM_RT_TRACE_CRT
+#include <tvm/runtime/crt/tvm_tidl_trace.h>
+// End TI
+
 /*!
  * \brief Run all the operations one by one.
  */
 void GraphExecutor::Run() {
+  int tvm_rt_debug_level = 0;
+  int tvm_rt_trace_node = -1;
+  char *env_var;
+  uint64_t t_g = 0, t_n = 0;
+  if ((env_var = getenv("TVM_RT_DEBUG")))
+    tvm_rt_debug_level = atoi(env_var);
+  if ((env_var = getenv("TVM_RT_TRACE_NODE")))
+    tvm_rt_trace_node = atoi(env_var);
+  if (tvm_rt_debug_level > 0) {
+    tvm_rt_trace_init();
+    t_g = _TSC_read();
+  }
+
   // setup the array and requirements.
   for (size_t i = 0; i < op_execs_.size(); ++i) {
+    if (op_execs_[i]) {
+      if (tvm_rt_debug_level > 3)
+        printf("TVM RT: running %s (%d)\n", nodes_[i].name.c_str(), (int) i);
+      if (tvm_rt_debug_level > 0)
+        t_n = _TSC_read();
+    }
+
     if (op_execs_[i]) op_execs_[i]();
+
+    if (op_execs_[i])
+    {
+      if (tvm_rt_debug_level > 0)
+      {
+        t_n = _TSC_read() - t_n;  /* Nanoseconds */
+        tvm_rt_trace_node_begin(i, nodes_[i].name.c_str(), t_n);
+      }
+      if (tvm_rt_debug_level > 2)
+      {
+        uint32_t num_outputs = nodes_[i].param.num_outputs;
+        for (uint32_t out_id = 0; out_id < num_outputs; out_id++) {
+          uint32_t eid = this->entry_id(i, out_id);
+          const DLTensor *tensor = data_entry_[eid].operator->();
+          tvm_rt_trace_write_tensor(tensor, out_id, tvm_rt_debug_level,
+                                    (int)i == tvm_rt_trace_node ? 1:0);
+        }
+      }
+      if (tvm_rt_debug_level > 0)
+        tvm_rt_trace_write_int(TVM_RT_TRACE_END_NODE);  /* End of node */
+    }
+  }
+
+  if (tvm_rt_debug_level > 0)
+  {
+    t_g = _TSC_read() - t_g;  /* Nanoseconds */
+    tvm_rt_trace_finalize(t_g);
   }
 }
 
@@ -615,7 +680,19 @@ std::pair<std::function<void()>, std::shared_ptr<GraphExecutor::OpArgs>> GraphEx
 PackedFunc GraphExecutor::GetFunction(const std::string& name,
                                       const ObjectPtr<Object>& sptr_to_self) {
   // Return member functions during query.
-  if (name == "set_input") {
+  // Begin TI
+  if (name == "get_custom_data") {
+    return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
+      auto func_name = args[0].operator String();
+      PackedFunc func = module_.GetFunction(func_name, true);
+      if(func == nullptr)
+        *rv = nullptr;
+      else
+        *rv = func();
+    });
+  }
+  // End TI
+  else if (name == "set_input") {
     return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
       if (String::CanConvertFrom(args[0])) {
         int in_idx = this->GetInputIndex(args[0].operator String());

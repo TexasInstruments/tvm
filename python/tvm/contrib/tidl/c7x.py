@@ -310,7 +310,7 @@ def SETransform(f, mod, ctx):
         def __init__(self, op, nest, this_if_nest, trip, guard):
             # the load or store operator, and var operand
             self.op = op
-            self.var = op.buffer_var
+            self.var = op.buffer.data
             # loops between var's def and access
             self.nest = nest
             # ifs between var's def and access
@@ -332,8 +332,8 @@ def SETransform(f, mod, ctx):
             '''
             logging.debug(f"qualify: {self}")
             op = self.op
-            index = op.index
-            buf = op.buffer_var
+            index = op.indices[0]
+            buf = op.buffer.data
             if not self.nest:
                 return False
             # the loop nest cannot contain IfThenElse except the veclen_guard,
@@ -363,7 +363,7 @@ def SETransform(f, mod, ctx):
                 if not isinstance(cnt, tvm.tir.IntImm):
                     return False
             # if Load/SE, make sure the loop nest has no other accesses to the same var
-            if isinstance(op, tvm.tir.Load) and self.outer_loop:
+            if isinstance(op, tvm.tir.BufferLoad) and self.outer_loop:
                 for cand in loop_candidates[self.outer_loop]:
                     if cand != self and cand.var == self.var:
                         logging.debug(f"  load disqualified due to other accesses of the same var")
@@ -380,7 +380,7 @@ def SETransform(f, mod, ctx):
             elem_type = buffer_type.element_type
             assert isinstance(elem_type, tvm.ir.PrimType)
             elem_type = elem_type.dtype
-            kind = "SE" if isinstance(op, tvm.tir.Load) else "SA"
+            kind = "SE" if isinstance(op, tvm.tir.BufferLoad) else "SA"
             config = SEConfig(kind, elem_type, extents, coeffs)
             #logging.debug(config)
 
@@ -411,7 +411,7 @@ def SETransform(f, mod, ctx):
             logging.debug(f"allocate: {self}")
             se_resources = ["SE" + str(i) for i in range(0,2)]
             sa_resources = ["SA" + str(i) for i in range(0,4)]
-            resources = se_resources if isinstance(self.op, tvm.tir.Load) \
+            resources = se_resources if isinstance(self.op, tvm.tir.BufferLoad) \
                         else sa_resources
             # Build a set of resources in use for all overlapping loops
             loop = self.outer_loop
@@ -446,7 +446,7 @@ def SETransform(f, mod, ctx):
             adv = "adv"
             index = tvm.tir.Call("int", "tir.c7x.stream_access",
                                  [self.config_var, self.engine,
-                                  pred, adv, self.op.index])
+                                  pred, adv, self.op.indices[0]])
             return index
                 
         def __lt__(self, other):
@@ -562,9 +562,9 @@ def SETransform(f, mod, ctx):
                     logging.debug(f"not veclen_guard: {_get_if_condition(op)}")
             elif isinstance(op, tvm.tir.Call) and op.op.same_as(tvm.ir.Op.get("tir.if_then_else")):
                 if_expr_nest.append(op)
-            elif (isinstance(op, tvm.tir.Store) or isinstance(op, tvm.tir.Load)) and \
+            elif (isinstance(op, tvm.tir.BufferStore) or isinstance(op, tvm.tir.BufferLoad)) and \
                  not if_expr_nest:
-                level = def_levels[op.buffer_var]
+                level = def_levels[op.buffer.data]
                 this_if_nest = [ (x[0], x[1]-level) for x in if_nest if x[1] > level ]
                 cand = SECandidate(op, loop_nest[level:], this_if_nest, trip, veclen_guard)
                 candidates.append(cand)
@@ -645,7 +645,7 @@ def SETransform(f, mod, ctx):
         local data structures, so make any changes on the way down.
         TODO: rewrite the whole SEPass in C++
         '''
-        if isinstance(op, tvm.tir.Store):
+        if isinstance(op, tvm.tir.BufferStore):
             cand = op_candidates.get(op)
             if cand and cand.qualified:
                 logging.debug(f"streamify store, cand={cand}")
@@ -653,15 +653,15 @@ def SETransform(f, mod, ctx):
                 # we wrap the rhs in an 'Evaluate' statement
                 rhs = tvm.tir.Evaluate(op.value)
                 rhs = tvm.tir.stmt_functor.ir_transform(
-                      rhs, _deploy_pre, None, ["tir.Load"])
+                      rhs, _deploy_pre, None, ["tir.BufferLoad"])
                 index = cand.access_call()
-                return tvm.tir.Store(op.buffer_var, rhs.value, index)
-        elif isinstance(op, tvm.tir.Load):
+                return tvm.tir.BufferStore(op.buffer, rhs.value, [index])
+        elif isinstance(op, tvm.tir.BufferLoad):
             cand = op_candidates.get(op)
             if cand and cand.qualified:
                 logging.debug(f"streamify load, cand={cand}")
                 index = cand.access_call()
-                return tvm.tir.Load(op.dtype, op.buffer_var, index)
+                return tvm.tir.BufferLoad(op.buffer, [index])
         elif isinstance(op, tvm.tir.IfThenElse):
             # if we streamified all the accesses, remove the vector 
             # length guard
@@ -696,13 +696,13 @@ def SETransform(f, mod, ctx):
         def _find_vars(vars_list, op):
             if isinstance(op, tvm.tir.Var):
                 vars_list.add(op)
-            elif isinstance(op, tvm.tir.Load):
+            elif isinstance(op, tvm.tir.BufferLoad):
                 cand = op_candidates.get(op)
                 if cand and cand.qualified and \
                    cand.guard_condition == guard_condition:
                     logging.debug("skip load index")
                     return op
-            elif isinstance(op, tvm.tir.Store):
+            elif isinstance(op, tvm.tir.BufferStore):
                 cand = op_candidates.get(op)
                 if cand and cand.qualified and \
                    cand.guard_condition == guard_condition:

@@ -57,6 +57,10 @@ __attribute__((format(printf, 1, 2))) int TVMAPIErrorf(const char* msg, ...) {
   to_return = vsnprintf(g_last_error, sizeof(g_last_error), msg, args);
   va_end(args);
 
+  // Begin TI
+  printf("TVM CRT: ERROR: %s\n", g_last_error);
+  // End TI
+
   return to_return;
 }
 

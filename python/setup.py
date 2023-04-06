@@ -180,6 +180,17 @@ if not CONDA_BUILD:
                 _, libname = os.path.split(path)
                 shutil.copytree(path, os.path.join(CURRENT_DIR, "tvm", libname))
                 fo.write(f"recursive-include tvm/{libname} *\n")
+        shutil.copytree(os.path.join(CURRENT_DIR, "../src/runtime/contrib/tidl/c7x"),
+                        os.path.join(CURRENT_DIR, "tvm/src/runtime/contrib/tidl/c7x"))
+        shutil.copytree(os.path.join(CURRENT_DIR, "../include/tvm/runtime"),
+                        os.path.join(CURRENT_DIR, "tvm/include/tvm/runtime"))
+        shutil.copytree(os.path.join(CURRENT_DIR, "../3rdparty/dlpack/include/dlpack"),
+                        os.path.join(CURRENT_DIR, "tvm/3rdparty/dlpack/include/dlpack"))
+        with open("tvm/src/runtime/contrib/tidl/c7x/py_dist_files.txt") as fi:
+            for line in fi:
+                fo.write(f"include tvm/src/runtime/contrib/tidl/c7x/{line}")
+        fo.write("recursive-include tvm/include/tvm/runtime *\n")
+        fo.write("recursive-include tvm/3rdparty/dlpack/include/dlpack *\n")
 
     setup_kwargs = {"include_package_data": True}
 
@@ -214,8 +225,8 @@ setup(
     description="TVM: An End to End Tensor IR/DSL Stack for Deep Learning Systems",
     long_description=long_description_contents(),
     long_description_content_type="text/markdown",
-    url="https://tvm.apache.org/",
-    download_url="https://github.com/apache/tvm/tags",
+    url="https://github.com/TexasInstruments/tvm",
+    download_url="https://github.com/TexasInstruments/tvm/tags",
     author="Apache TVM",
     license="Apache",
     # See https://pypi.org/classifiers/

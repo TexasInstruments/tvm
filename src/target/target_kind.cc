@@ -420,6 +420,13 @@ TVM_REGISTER_TARGET_KIND("hexagon", kDLHexagon)
     .add_attr_option<Integer>("num-cores")
     .set_default_keys({"hexagon"});
 
+TVM_REGISTER_TARGET_KIND("c7x", kDLCPU)
+    .add_attr_option<Array<String>>("mattr")
+    .add_attr_option<String>("mcpu")
+    .add_attr_option<String>("mtriple")
+    .add_attr_option<Bool>("system-lib")
+    .set_default_keys({"c7x"});
+
 TVM_REGISTER_TARGET_KIND("stackvm", kDLCPU);
 
 TVM_REGISTER_TARGET_KIND("ext_dev", kDLExtDev);

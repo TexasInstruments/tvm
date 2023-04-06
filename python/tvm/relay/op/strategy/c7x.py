@@ -38,11 +38,17 @@ def schedule_injective_c7x(_, outs, target):
     with target:
         return topi.c7x.schedule_injective(outs)
 
-@schedule_concatenate.register(["c7x"])
-def schedule_concatenate(attrs, outs, target):
-    """Schedule concatenate op for c7x"""
-    with target:
-        return topi.c7x.schedule_injective(outs)
+
+@concatenate_strategy.register("c7x")
+def concatenate_strategy_c7x(attrs, inputs, out_type, target):
+    """concatenate strategy for c7x"""
+    strategy = _op.OpStrategy()
+    strategy.add_implementation(
+        wrap_compute_concat(topi.concatenate),
+        wrap_topi_schedule(topi.c7x.schedule_injective),
+        name="concatenate.c7x",
+    )
+    return strategy
 
 
 @scatter_nd_strategy.register(["c7x"])

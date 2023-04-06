@@ -49,6 +49,11 @@ uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
   return accum;
 }
 
+// Begin TI
+#define TVM_RT_TRACE_CRT
+#include <tvm/runtime/crt/tvm_tidl_trace.h>
+// End TI
+
 int NodeEntry_Load(TVMGraphExecutorNodeEntry* entry, JSONReader* reader) {
   int status = 0;
   reader->BeginArray(reader);
@@ -771,6 +776,17 @@ void TVMGraphExecutor_SetInput(TVMGraphExecutor* executor, const char* name, DLT
   executor->data_entry[eid].dl_tensor.data = data_in->data;
 }
 
+// Begin TI
+void TVMGraphExecutor_SetInputRaw(TVMGraphExecutor* executor, const char* name, void* data_in_raw) {
+  uint32_t index = TVMGraphExecutor_GetInputIndex(executor, name);
+  if (index >= executor->input_nodes_count) {
+    fprintf(stderr, "given index is greater than num of input nodes.\n");
+  }
+  uint32_t eid = TVMGraphExecutor_GetEntryId(executor, executor->input_nodes[index], 0);
+  executor->data_entry[eid].dl_tensor.data = data_in_raw;
+}
+// End TI
+
 /*!
  * \brief Load parameters from parameter blob.
  * \param executor The graph executor.
@@ -879,15 +895,54 @@ int TVMGraphExecutor_LoadParams(TVMGraphExecutor* executor, const char* param_bl
  * \param executor The graph executor.
  */
 void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
+  uint32_t tvm_rt_debug_level = tvm_rt_get_debug_level();
+  int32_t  tvm_rt_trace_node  = tvm_rt_get_trace_node();
+  uint64_t t_g, t_n;
+  if (tvm_rt_debug_level > 1) {
+    tvm_rt_trace_init();
+    t_g = _TSC_read();
+  }
+
   // setup the array and requirements.
   uint32_t idx;
   for (idx = 0; idx < executor->op_execs_count; ++idx) {
     if (executor->op_execs[idx].fexec) {
+      if (tvm_rt_debug_level > 3)
+        printf("TVM CRT: running %s (%d)\n", executor->op_execs[idx].name, idx);
+      if (tvm_rt_debug_level > 1)
+        t_n = _TSC_read();
+
 #if TVM_CRT_DEBUG
       printf("calling: %s (%d)\n", executor->op_execs[idx].name, idx);
 #endif  // TVM_CRT_DEBUG
       executor->op_execs[idx].Call(&(executor->op_execs[idx]));
+
+      if (tvm_rt_debug_level > 1)
+      {
+        t_n = _TSC_read() - t_n;  /* Cycles */
+        tvm_rt_trace_node_begin(idx, executor->op_execs[idx].name, t_n);
     }
+      if (tvm_rt_debug_level > 2)
+      {
+        uint32_t num_outputs = 1;
+        if (idx < executor->node_row_ptr_count - 1)
+          num_outputs = executor->node_row_ptr[idx+1] - executor->node_row_ptr[idx];
+        for (uint32_t out_id = 0; out_id < num_outputs; out_id++) {
+          uint32_t eid = TVMGraphExecutor_GetEntryId(executor, idx, out_id);
+          DLTensor *tensor = &(executor->data_entry[eid].dl_tensor);
+          tvm_rt_trace_write_tensor(tensor, out_id, tvm_rt_debug_level,
+                                    (int)idx == tvm_rt_trace_node ? 1:0);
+        }
+      }
+      if (tvm_rt_debug_level > 1)
+        tvm_rt_trace_write_int(TVM_RT_TRACE_END_NODE);  /* End of node */
+    }
+  }
+
+  if (tvm_rt_debug_level > 1)
+  {
+    t_g = _TSC_read() - t_g;  /* Cycles */
+    tvm_rt_trace_finalize(t_g);
   }
 }
 
@@ -914,6 +969,22 @@ int TVMGraphExecutor_GetOutput(TVMGraphExecutor* executor, const int32_t idx, DL
   memcpy(out->data, tensor->data, size * elem_bytes);
   return status;
 }
+
+// Begin TI
+int TVMGraphExecutor_GetOutputRaw(TVMGraphExecutor* executor, const int32_t idx, void* out_raw) {
+  int status = 0;
+  uint32_t nid = executor->outputs[idx].node_id;
+  uint32_t index = executor->outputs[idx].index;
+  uint32_t eid = TVMGraphExecutor_GetEntryId(executor, nid, index);
+
+  // copy data section to allocated output tensor
+  DLTensor* tensor = &(executor->data_entry[eid].dl_tensor);
+  int32_t elem_bytes = tensor->dtype.bits / 8;
+  int64_t size = Shape_Accumulate(tensor->shape, tensor->ndim);
+  memcpy(out_raw, tensor->data, size * elem_bytes);
+  return status;
+}
+// End TI
 
 int TVMGraphExecutor_SetupStorage(TVMGraphExecutor* executor) {
   TVMPackedFunc lookup_linked_param;
@@ -1065,7 +1136,10 @@ int TVMGraphExecutor_SetupOpExecs(TVMGraphExecutor* executor) {
   }
   for (nid = 0; nid < executor->nodes_count; nid++) {
     const TVMGraphExecutorNode* inode = executor->nodes + nid;
-    if (strcmp(inode->op_type, "null")) {
+    // Begin TI: skip creating pf for "__nop" to suppress error message in CreateTVMOp()
+    // if (strcmp(inode->op_type, "null")) {
+    if (strcmp(inode->op_type, "null") && strcmp(inode->param.func_name, "__nop")) {
+    // End TI
       DLTensorPtr args[TVM_CRT_MAX_ARGS];
       uint32_t args_count = 0;
       for (idx = 0; idx < inode->inputs_count; idx++) {

@@ -360,6 +360,14 @@ void CodeGenLLVM::Optimize() {
 #endif
   builder.LoopVectorize = true;
   builder.SLPVectorize = true;
+  if (getenv("TIDL_TVM_HOST_REF_ONLY_BUILD") != nullptr)
+  {
+    // Improve the build speed for generating reference tensors on host
+    // Reference tensors are used for TIDL subgraph calibration or
+    //     TIDL subgraph per-layer debug
+    builder.LoopVectorize = false;
+    builder.SLPVectorize = false;
+  }
   this->InitPassManagerBuilder(&builder);
 
 #if TVM_LLVM_VERSION >= 50

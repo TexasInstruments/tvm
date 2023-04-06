@@ -41,7 +41,10 @@ def graph_json_to_c_func_registry(graph_path, func_registry_path):
 
         funcs.append(n["attrs"]["func_name"])
 
-    encoded_funcs = f"\\{len(funcs):03o}" + "\\0".join(funcs)
+    #encoded_funcs = f"\\{len(funcs):03o}" + "\\0".join(funcs)
+    num_funcs_hi = len(funcs) // 256
+    num_funcs_lo = len(funcs) % 256
+    encoded_funcs = f"\\{num_funcs_lo:03o}\\{num_funcs_hi:03o}" + "\\0".join(funcs)
     lines = [
         "#include <tvm/runtime/c_runtime_api.h>",
         "#include <tvm/runtime/crt/module.h>",

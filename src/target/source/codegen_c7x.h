@@ -168,7 +168,7 @@ class CodeGenC7x final : public CodeGenC {
 
   // expression visitors
   void VisitExpr_(const VarNode* op, std::ostream& os) override;        // NOLINT(*)
-  void VisitExpr_(const LoadNode* op, std::ostream& os) override;       // NOLINT(*)
+  void VisitExpr_(const BufferLoadNode* op, std::ostream& os) override;       // NOLINT(*)
   void VisitExpr_(const LetNode* op, std::ostream& os) override;        // NOLINT(*)
   void VisitExpr_(const CallNode* op, std::ostream& os) override;       // NOLINT(*)
   void VisitExpr_(const AddNode* op, std::ostream& os) override;        // NOLINT(*)
@@ -197,7 +197,7 @@ class CodeGenC7x final : public CodeGenC {
   void VisitExpr_(const StringImmNode* op, std::ostream& os) override;  // NOLINT(*)
   // statment vistors
   void VisitStmt_(const LetStmtNode* op) override;
-  void VisitStmt_(const StoreNode* op) override;
+  void VisitStmt_(const BufferStoreNode* op) override;
   void VisitStmt_(const ForNode* op) override;
   void VisitStmt_(const IfThenElseNode* op) override;
   void VisitStmt_(const AllocateNode* op) override;
@@ -212,9 +212,9 @@ class CodeGenC7x final : public CodeGenC {
   void PrintVecBinaryOp(const std::string& op, DataType op_type, PrimExpr lhs, PrimExpr rhs,
                                 std::ostream& os) override;  // NOLINT(*)
   // print vector load
-  std::string GetVecLoad(DataType t, const VarNode* buffer, PrimExpr base) override;
+  std::string GetVecLoad(DataType t, const BufferNode* buffer, PrimExpr base) override;
   // print vector store
-  void PrintVecStore(const VarNode* buffer, DataType t, PrimExpr base,
+  void PrintVecStore(const BufferNode* buffer, DataType t, PrimExpr base,
                              const std::string& value) override;  // NOLINT(*)
   // print load of single element
   void PrintVecElemLoad(const std::string& vec, DataType t, int i,

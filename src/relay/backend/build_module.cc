@@ -400,6 +400,14 @@ class RelayBuildModule : public runtime::ModuleNode {
 
     ICHECK(relay_module.defined());
 
+    // Begin TI: save optimized Relay IR in temp dir
+    if (char *tidl_temp_folder = getenv("TIDL_ARTIFACTS_TEMP_FOLDER"))
+    {
+      std::ofstream of(std::string(tidl_temp_folder) + "/relay_graph.optimized.txt");
+      of << AsText(relay_module, false);
+    }
+    // End TI
+
     return relay_module;
   }
 
@@ -410,6 +418,9 @@ class RelayBuildModule : public runtime::ModuleNode {
    * \param params The parameters.
    */
   void BuildRelay(IRModule relay_module, const String& mod_name) {
+    if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+      LOG_INFO << "calling Optimize() on relay module: " << mod_name;
+
     // Relay IRModule -> IRModule optimizations.
     IRModule module = WithAttrs(
         relay_module, {{tvm::attr::kExecutor, executor_}, {tvm::attr::kRuntime, runtime_}});
@@ -424,6 +435,9 @@ class RelayBuildModule : public runtime::ModuleNode {
                                       {tvm::attr::kRuntime, runtime_},
                                       {tvm::attr::kWorkspaceMemoryPools, workspace_memory_pools_},
                                       {tvm::attr::kConstantMemoryPools, constant_memory_pools_}});
+
+    if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+      LOG_INFO << "calling Codegen() on main func, module =" << mod_name;
 
     // Generate code for the updated function.
     executor_codegen_ = MakeExecutorCodegen(executor_->name);
@@ -455,6 +469,8 @@ class RelayBuildModule : public runtime::ModuleNode {
         ret_.mod = tvm::codegen::CSourceModuleCreate(";", "", Array<String>{});
       }
     } else {
+      if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+        LOG_INFO << "calling tvm::TIRToRuntime, target=" << host_target->kind->name;
       ret_.mod = tvm::TIRToRuntime(lowered_funcs, host_target);
     }
 

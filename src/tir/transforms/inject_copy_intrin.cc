@@ -46,10 +46,21 @@ class CopyIntrinInjector : public StmtMutator {
     if (op->attr_key == pragma_key_) {
       Stmt ret;
       std::string error_info;
+      // Begin TI
+      #if 0
       ICHECK(MatchCopyPattern(op->body, &ret, &error_info))
           << "Cannot match copy pattern. The error is " << error_info << " The body is "
           << op->body;
       return ret;
+      #else
+      // If the copy loop pattern does not conform to the pattern required for copy intrinsics,
+      // return the original copy loop body
+      if (MatchCopyPattern(op->body, &ret, &error_info) == false)
+        return op->body;
+      else
+        return ret;
+      #endif
+      // End TI
     }
     return StmtMutator::VisitStmt_(op);
   }

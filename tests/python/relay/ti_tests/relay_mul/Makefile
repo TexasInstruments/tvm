@@ -21,7 +21,7 @@ CXX=${ARM64_GCC_PATH}/bin/aarch64-none-linux-gnu-g++
 
 DMLC_CORE=${TVM_HOME}/3rdparty/dmlc-core
 
-PKG_CFLAGS = -std=c++14 -g -fPIC\
+PKG_CFLAGS = -std=c++17 -g -fPIC\
 	-I${TVM_HOME}/include\
 	-I${DMLC_CORE}/include\
 	-I${TVM_HOME}/3rdparty/dlpack/include\

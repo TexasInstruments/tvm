@@ -1083,7 +1083,8 @@ def prune_subgraphs_with_multiple_inputs(mod, compiler="tidl"):
     # Remove subgraphs with more than 1 input or tuple inputs.
     for subgraph in mod.get_global_vars():
         name = subgraph.name_hint
-        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
+        if not mod[name].attrs or "Compiler" not in mod[name].attrs or \
+                mod[name].attrs["Compiler"] != compiler:
             continue
         if len(mod[name].params) != 1 \
            or isinstance(mod[name].params[0].checked_type, relay.TupleType):
@@ -1113,7 +1114,8 @@ def prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=16, compiler
     subgraph_names_to_remove = []
     for subgraph in mod.get_global_vars():
         name = subgraph.name_hint
-        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
+        if not mod[name].attrs or "Compiler" not in mod[name].attrs or \
+                mod[name].attrs["Compiler"] != compiler:
             continue
         # Remove subgraphs with inputs or outputs over limit.
         #   - mod[name].params has the input tensors
@@ -1152,7 +1154,8 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_thres
     subgraph_with_macs = []
     for subgraph in mod.get_global_vars():
         name = subgraph.name_hint
-        if not mod[name].attrs or mod[name].attrs["Compiler"] != compiler:
+        if not mod[name].attrs or "Compiler" not in mod[name].attrs or \
+                mod[name].attrs["Compiler"] != compiler:
             continue
         num_macs = relay.analysis.get_total_mac_number(mod[name])
         subgraph_with_macs.append([name, num_macs])

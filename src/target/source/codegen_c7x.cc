@@ -36,6 +36,7 @@
 #include <tvm/ir/op.h>
 #include <tvm/tir/op_attr_types.h>
 #include <tvm/runtime/logging.h>
+#include <tvm/arith/analyzer.h>
 
 #include <sstream>
 #include <string>
@@ -253,7 +254,7 @@ class ScanMemory : public StmtExprVisitor {
       return;
     }
 
-    int32_t alloc_size = op->constant_allocation_size();
+    int32_t alloc_size = op->ConstantAllocationSize();
     ICHECK_GT(alloc_size, 0) << "Can only handle constant size stack allocation for now";
 
     size_t alloc_size_in_bytes = aligned_size(alloc_size * op->dtype.bytes());
@@ -305,7 +306,7 @@ class ScanMemory : public StmtExprVisitor {
   }
 };
 
-CodeGenC7x::CodeGenC7x() { module_name_ = GetUniqueName("__tvm_module_ctx"); }
+CodeGenC7x::CodeGenC7x() { module_name_ = name_supply_->FreshName("__tvm_module_ctx"); }
 
 // adapted from CodeGenC
 void CodeGenC7x::Init(bool output_ssa, bool emit_asserts, std::string target_str) {
@@ -587,6 +588,10 @@ void CodeGenC7x::PrintType(DataType t, std::ostream& os) {  // NOLINT(*)
     os << "void*";
     return;
   }
+  if (t.is_void()) {
+    os << "void";
+    return;
+  }
   if (t == DataType::Bool()) {
     os << "bool";
     return;
@@ -699,12 +704,12 @@ void CodeGenC7x::PrintVecElemStore(const std::string& vec, DataType t, int i,
 }
 
 // verbatim from CodegenC
-std::string CodeGenC7x::GetVecLoad(DataType t, const VarNode* buffer, PrimExpr base) {
+std::string CodeGenC7x::GetVecLoad(DataType t, const BufferNode* buffer, PrimExpr base) {
   return GetBufferRef(t, buffer, base);
 }
 
 // verbatim from CodegenC
-void CodeGenC7x::PrintVecStore(const VarNode* buffer, DataType t, PrimExpr base,
+void CodeGenC7x::PrintVecStore(const BufferNode* buffer, DataType t, PrimExpr base,
                              const std::string& value) {
   std::string ref = GetBufferRef(t, buffer, base);
   this->PrintIndent();
@@ -1022,14 +1027,14 @@ std::string CodeGenC7x::PrintDLTensor(const CallNode *make_array, std::ostream& 
   DataType dt = dtype.dtype();
 
   this->PrintIndent();
-  std::string shape_var = GetUniqueName("tmp_shape");
+  std::string shape_var = name_supply_->FreshName("tmp_shape");
   this->stream << "int64_t " << shape_var << "[" << ndim->value << "] = {";
   for (auto &dim : shape->args)
     this->stream << dim << ",";
   this->stream << "};\n";
 
   this->PrintIndent();
-  std::string tensor_var = GetUniqueName("tmp_tensor");
+  std::string tensor_var = name_supply_->FreshName("tmp_tensor");
   this->stream << "DLTensor " << tensor_var << " = { (void*)";
   this->PrintExpr(data, this->stream);
   this->stream << ", {kDLCPU,0}, " << ndim->value << ", "
@@ -1045,7 +1050,15 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
   if (auto* ptr_op = op->op.as<OpNode>()) {
     auto call_op = GetRef<Op>(ptr_op);
 
-    if (op->op.same_as(builtin_call_extern_) || op->op.same_as(builtin_call_pure_extern_)) {
+    if (op->op.same_as(builtin::tvm_check_return())) {
+      const CallNode* call = op->args[2].as<CallNode>();
+      os << "if (";
+      VisitExpr_(call, os);
+      os << " != ";
+      PrintExpr(op->args[0], os);
+      os << " ) return ";
+      PrintExpr(op->args[1], os);
+    } else if (op->op.same_as(builtin_call_extern_) || op->op.same_as(builtin_call_pure_extern_)) {
       ICHECK_GE(op->args.size(), 1U);
       auto func = Downcast<StringImm>(op->args[0]);
       this->PrintCallExtern(GetType(GetRef<PrimExpr>(op)), func->value, op->args, true, os);
@@ -1083,17 +1096,10 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
       PrintExpr(op->args[2], os);
       os << ")";
     } else if (op->op.same_as(builtin::address_of())) {
-      const LoadNode* l = op->args[0].as<LoadNode>();
-      ICHECK(op->args.size() == 1 && l);
-      os << "((";
-      this->PrintType(l->dtype.element_of(), os);
-      os << " *)" << this->GetVarID(l->buffer_var.get()) << " + "
-         << "(";
-      this->PrintExpr(l->index, os);
-      if (l->dtype.bits() == 4 || (l->dtype.bits() == 1 && l->dtype.is_int())) {
-        os << " / " << (32 / l->dtype.bits());
-      }
-      os << "))";
+      const BufferLoadNode* load = op->args[0].as<BufferLoadNode>();
+      ICHECK(op->args.size() == 1 && load);
+      ICHECK_EQ(load->indices.size(), 1) << "CodeGenC only supports flat memory allocations.";
+      os << "(&(" << GetBufferRef(load->dtype, load->buffer.get(), load->indices[0]) << "))";
     } else if (op->op.same_as(builtin::tvm_struct_get())) {
       ICHECK_EQ(op->args.size(), 3U);
       os << GetStructRef(op->dtype, op->args[0], op->args[1], op->args[2].as<IntImmNode>()->value);
@@ -1115,6 +1121,11 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
       os << " != ";
       this->PrintExpr(op->args[0], os);
       os << ")";
+    } else if (op->op.same_as(builtin::lookup_param())) {
+      ICHECK_EQ(op->args.size(), 1);
+      const StringImmNode* str = op->args[0].as<StringImmNode>();
+      ICHECK(str != nullptr);
+      os << "__tvm_param__" << str->value;
     } else {
       LOG(FATAL) << "Unresolved call " << op->op;
     }
@@ -1129,7 +1140,7 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
 // from CodeGenCHost
 void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*)
   if (op->op.same_as(builtin::tvm_stack_alloca())) {
-    std::string stack_name = GetUniqueName("stack");
+    std::string stack_name = name_supply_->FreshName("stack");
     const std::string& type = op->args[0].as<StringImmNode>()->value;
     const IntImmNode* num = op->args[1].as<IntImmNode>();
     ICHECK(num != nullptr);
@@ -1163,7 +1174,7 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
     std::string packed_func_name = func_name + "_packed";
     if (declared_globals_.insert(packed_func_name).second) {
       // Still reserve the name among unique names.
-      ICHECK(GetUniqueName(packed_func_name) == packed_func_name)
+      ICHECK(name_supply_->FreshName(packed_func_name) == packed_func_name)
           << "Expected name " << packed_func_name << " to not be taken";
       decl_stream << "static void* " << packed_func_name << " = NULL;\n";
     }
@@ -1201,9 +1212,16 @@ void CodeGenC7x::PrintVecBinaryOp(const std::string& op, DataType t, PrimExpr lh
 }
 
 // adapted from CodegenC
-void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*)
-  if (is_call_builtin(op->index, "tir.c7x.stream_access")) {
-    StreamAccess access(op->index.as<CallNode>());
+void CodeGenC7x::VisitExpr_(const BufferLoadNode* op, std::ostream& os) {  // NOLINT(*)
+  ICHECK_EQ(op->indices.size(), 1) << "Load from non-flat memory not supported.";
+
+  DataType value_dtype = op->dtype;
+  PrimExpr index = op->indices[0];
+  Var buffer_var = op->buffer->data;
+  DataType element_dtype = op->buffer->dtype;
+
+  if (is_call_builtin(index, "tir.c7x.stream_access")) {
+    StreamAccess access(index.as<CallNode>());
     // cl7x/opt7x aborts on: pout[i] = __SE1ADV(float16) != (float16)0.0f ? p2[i] : (float16)0.0f;
     // work around: pout[i] = (t = __SE1ADV(float16), t) != (float16)0.0f ? p2[i] : (float16)0.0f;
     if (in_vector_cond)  os << "(vse_t" << se_in_vec_cond_count << " = ";
@@ -1216,29 +1234,39 @@ void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*
     if (in_vector_cond)  os << ", vse_t" << se_in_vec_cond_count++ << ")";
     return;
   }
+
   int lanes = op->dtype.lanes();
   // delcare type.
-  if (op->dtype.lanes() == 1) {
-    std::string ref = GetBufferRef(op->dtype, op->buffer_var.get(), op->index);
+  if (value_dtype.lanes() == element_dtype.lanes()) {
+    std::string ref = GetBufferRef(op->dtype, op->buffer.get(), index);
     HandleVolatileLoads(ref, op, os);
   } else {
-    ICHECK(is_one(op->predicate)) << "predicated load is not supported";
-
+    bool can_vector_load = false;
     arith::PVar<PrimExpr> base;
-    if (arith::ramp(base, 1, op->dtype.lanes()).Match(op->index)) {
-      std::string ref = GetVecLoad(op->dtype, op->buffer_var.get(), base.Eval());
+    if (arith::ramp(base, 1, op->dtype.lanes()).Match(index)) {
+      const RampNode* ramp = index.as<RampNode>();
+      ICHECK(ramp);
+      arith::ModularSet me = arith::Analyzer().modular_set(ramp->base);
+      // The condition: {k * coeff + base} divisible by the alignment for any k
+      if (me->coeff % op->dtype.lanes() == 0 && me->base % op->dtype.lanes() == 0) {
+        can_vector_load = true;
+      }
+    }
+
+    if (can_vector_load) {
+      std::string ref = GetVecLoad(op->dtype, op->buffer.get(), base.Eval());
       HandleVolatileLoads(ref, op, os);
     } else {
       std::ostringstream svalue_expr;
-      std::string sindex = SSAGetID(PrintExpr(op->index), op->index.dtype());
-      std::string vid = GetVarID(op->buffer_var.get());
+      std::string sindex = SSAGetID(PrintExpr(index), index.dtype());
+      std::string vid = GetVarID(buffer_var.get());
       DataType elem_type = op->dtype.element_of();
       for (int i = 0; i < lanes; ++i) {
         std::ostringstream value_temp;
-        if (!HandleTypeMatch(op->buffer_var.get(), elem_type)) {
+        if (!HandleTypeMatch(buffer_var.get(), elem_type)) {
           value_temp << "((";
-          if (op->buffer_var.get()->dtype.is_handle()) {
-            auto it = alloc_storage_scope_.find(op->buffer_var.get());
+          if (buffer_var.get()->dtype.is_handle()) {
+            auto it = alloc_storage_scope_.find(buffer_var.get());
             if (it != alloc_storage_scope_.end()) {
               PrintStorageScope(it->second, value_temp);
             }
@@ -1249,7 +1277,7 @@ void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*
           value_temp << vid;
         }
         value_temp << '[';
-        PrintVecElemLoad(sindex, op->index.dtype(), i, value_temp);
+        PrintVecElemLoad(sindex, index.dtype(), i, value_temp);
         value_temp << ']';
         PrintVecElemLoadExpr(op->dtype, i, value_temp.str(), svalue_expr);
       }
@@ -1259,19 +1287,24 @@ void CodeGenC7x::VisitExpr_(const LoadNode* op, std::ostream& os) {  // NOLINT(*
 }
 
 // adapted from CodegenC
-void CodeGenC7x::VisitStmt_(const StoreNode* op) {
-  //stream << "// VisitStmt<StoreNode>\n";
-  DataType t = op->value.dtype();
-  if (is_call_builtin(op->index, "tir.c7x.stream_access")) {
-    StreamAccess access(op->index.as<CallNode>());
-    std::string vid = GetVarID(Downcast<Var>(op->buffer_var).get());
+void CodeGenC7x::VisitStmt_(const BufferStoreNode* op) {
+  ICHECK_EQ(op->indices.size(), 1) << "Store to non-flat memory not supported.";
+
+  DataType value_dtype = op->value.dtype();
+  DataType element_dtype = op->buffer->dtype;
+  PrimExpr index_expr = op->indices[0];
+  Var buffer_var = op->buffer->data;
+
+  if (is_call_builtin(index_expr, "tir.c7x.stream_access")) {
+    StreamAccess access(index_expr.as<CallNode>());
+    std::string vid = GetVarID(buffer_var.get());
     std::string rhs_value = this->PrintExpr(op->value);
     // example: __SA0ADV(float16, ptr)
     std::ostringstream sa_os;
     sa_os << "__" << access.engine;
     if (access.adv) sa_os << "ADV";
     sa_os << "(";
-    PrintType(t, sa_os);
+    PrintType(value_dtype, sa_os);
     sa_os << ", " << vid << ")";
 
     // If access requires predication, generate a predicate and a predicated
@@ -1282,24 +1315,24 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
     // Note: For scalar access __vstore_pred cannot be used. Convert the
     // __vpred to a scalar using __create_scalar and use assignment.
     if (access.pred) {
-      auto rhs_var = Var("value", t);
+      auto rhs_var = Var("value", value_dtype);
       auto pred_var = Var("pred", DataType::Handle());
 
       new_variables_.push_back(rhs_var);
       new_variables_.push_back(pred_var);
 
       this->PrintIndent();
-      PrintType(t, stream);
+      PrintType(value_dtype, stream);
       stream << " " << AllocVarID(rhs_var.get()) << " = " << rhs_value << ";\n";
 
       this->PrintIndent();
       stream << "__vpred " << AllocVarID(pred_var.get()) << " = "
              << "__" << access.engine << "_VPRED(";
-      PrintType(t, stream);
+      PrintType(value_dtype, stream);
       stream << ");\n";
 
       this->PrintIndent();
-      if (t.lanes() == 1) // scalar variable, use scalar assignment
+      if (value_dtype.lanes() == 1) // scalar variable, use scalar assignment
       {
         stream << "if (__create_scalar(" << GetVarID(pred_var.get()) << ")) { \n";
         int if_scope = this->BeginScope();
@@ -1322,34 +1355,33 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
       stream << "*" << sa_os.str() << " = " << rhs_value << ";\n";
     }
   }
-  else if (t.lanes() == 1) {
+  else if (value_dtype.lanes() == element_dtype.lanes()) {
     std::string value = this->PrintExpr(op->value);
-    std::string ref = this->GetBufferRef(t, op->buffer_var.get(), op->index);
+    std::string ref = this->GetBufferRef(value_dtype, op->buffer.get(), index_expr);
     this->PrintIndent();
     stream << ref << " = " << value << ";\n";
   } else {
-    ICHECK(is_one(op->predicate)) << "Predicated store is not supported";
     arith::PVar<PrimExpr> base;
 
-    if (arith::ramp(base, 1, t.lanes()).Match(op->index)) {
+    if (arith::ramp(base, 1, value_dtype.lanes()).Match(index_expr)) {
       std::string value = this->PrintExpr(op->value);
-      this->PrintVecStore(op->buffer_var.get(), t, base.Eval(), value);
+      this->PrintVecStore(op->buffer.get(), value_dtype, base.Eval(), value);
     } else {
       // The assignment below introduces side-effect, and the resulting value cannot
       // be reused across multiple expression, thus a new scope is needed
       int vec_scope = BeginScope();
 
-      // store elements seperately
-      std::string index = SSAGetID(PrintExpr(op->index), op->index.dtype());
+      // store elements separately
+      std::string index = SSAGetID(PrintExpr(index_expr), index_expr.dtype());
       std::string value = SSAGetID(PrintExpr(op->value), op->value.dtype());
-      std::string vid = GetVarID(op->buffer_var.get());
-      for (int i = 0; i < t.lanes(); ++i) {
+      std::string vid = GetVarID(buffer_var.get());
+      for (int i = 0; i < value_dtype.lanes(); ++i) {
         this->PrintIndent();
-        DataType elem_type = t.element_of();
-        if (!HandleTypeMatch(op->buffer_var.get(), elem_type)) {
+        DataType elem_type = value_dtype.element_of();
+        if (!HandleTypeMatch(buffer_var.get(), elem_type)) {
           stream << "((";
-          if (op->buffer_var.get()->dtype.is_handle()) {
-            auto it = alloc_storage_scope_.find(op->buffer_var.get());
+          if (buffer_var.get()->dtype.is_handle()) {
+            auto it = alloc_storage_scope_.find(buffer_var.get());
             if (it != alloc_storage_scope_.end()) {
               PrintStorageScope(it->second, stream);
             }
@@ -1360,7 +1392,7 @@ void CodeGenC7x::VisitStmt_(const StoreNode* op) {
           stream << vid;
         }
         stream << '[';
-        PrintVecElemLoad(index, op->index.dtype(), i, stream);
+        PrintVecElemLoad(index, index_expr.dtype(), i, stream);
         stream << "] = ";
         PrintVecElemLoad(value, op->value.dtype(), i, stream);
         stream << ";\n";
@@ -1571,6 +1603,7 @@ void CodeGenC7x::VisitStmt_(const LetStmtNode* op) {
   }
   PrintIndent();
   std::string value = PrintExpr(op->value);
+  PrintIndent();
   if (op->var.dtype() == DataType::Handle() && handle_data_type_.count(op->var.get())) {
     PrintType(handle_data_type_.at(op->var.get()), stream);
     stream << "* " << AllocVarID(op->var.get()) << " = (";
@@ -1583,10 +1616,9 @@ void CodeGenC7x::VisitStmt_(const LetStmtNode* op) {
     PrintType(op->var.dtype(), stream);
     stream << ">(" << value << ");\n";
   } else {
-    PrintType(op->var.dtype(), stream);
-    stream << ' ' << AllocVarID(op->var.get()) << " = " << value << ";\n";
+      PrintType(op->var.dtype(), this->stream);
+      this->stream << ' ' << AllocVarID(op->var.get()) << " = " << value << ";\n";
   }
-
   PrintStmt(op->body);
 }
 
@@ -1607,7 +1639,7 @@ void CodeGenC7x::VisitStmt_(const AllocateNode* op) {
   std::string vid = AllocVarID(op->buffer_var.get());
 
   this->PrintIndent();
-  int32_t constant_size = op->constant_allocation_size();
+  int32_t constant_size = op->ConstantAllocationSize();
   ICHECK_GT(constant_size, 0) << "Can only handle constant size stack allocation for now";
   PrintStorageScope(scope, stream);
   //PrintType(op->dtype, stream);
@@ -1748,11 +1780,19 @@ void CodeGenC7x::VisitStmt_(const EvaluateNode* op) {
       return;
     } else if (call->op.same_as(builtin::tvm_struct_set())) {
       ICHECK_EQ(call->args.size(), 4);
+      int kind = call->args[2].as<IntImmNode>()->value;
+      std::string ref = GetStructRef(call->args[3].dtype(), call->args[0], call->args[1], kind);
       std::string value = PrintExpr(call->args[3]);
-      std::string ref = GetStructRef(call->args[3].dtype(), call->args[0], call->args[1],
-                                     call->args[2].as<IntImmNode>()->value);
+      std::string cast;
+      if (kind == builtin::kArrStrides) {
+        // cast void* to int64_t*
+        cast = call->args[3]->dtype.is_handle() ? "(int64_t*)" : "";
+      } else if (kind == builtin::kArrDeviceType) {
+        // cast int to enum
+        cast = "(DLDeviceType)";
+      }
       this->PrintIndent();
-      this->stream << ref << " = " << value << ";\n";
+      this->stream << ref << " = " << cast << value << ";\n";
       return;
     } else if (call->op.same_as(builtin::call_extern())) {
       String func = Downcast<StringImm>(call->args[0])->value;
@@ -1803,7 +1843,7 @@ void CodeGenC7x::VisitStmt_(const EvaluateNode* op) {
   std::string vid = this->PrintExpr(op->value);
   if (vid != "") {
     this->PrintIndent();
-    this->stream << "(void)" << vid << ";\n";
+    this->stream << vid << ";\n";
   }
 }
 
@@ -1829,8 +1869,8 @@ void CodeGenC7x::PrintGetFuncFromBackend(const std::string& func_name,
 
 void CodeGenC7x::PrintFuncCall(const std::string& packed_func_name, int num_args) {
   this->PrintIndent();
-  std::string ret_val = GetUniqueName("ret_val");
-  std::string ret_type_code = GetUniqueName("ret_type_code");
+  std::string ret_val = name_supply_->FreshName("ret_val");
+  std::string ret_type_code = name_supply_->FreshName("ret_type_code");
   this->stream << "TVMValue " << ret_val << ";\n";
   this->PrintIndent();
   this->stream << "int " << ret_type_code << ";\n";
@@ -1874,8 +1914,20 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   using tvm::runtime::Registry;
   bool output_ssa = false;
   bool emit_asserts = false;
+
+  std::unordered_set<std::string> devices;
+  if (mod->GetAttr<Map<GlobalVar, String>>("device_contexts") != nullptr) {
+    Map<GlobalVar, String> device_contexts =
+        mod->GetAttr<Map<GlobalVar, String>>("device_contexts").value();
+    for (auto const& context : device_contexts) {
+      devices.insert(context.second.data());
+    }
+  }
+
   CodeGenC7x cg;
   cg.Init(output_ssa, emit_asserts, target->str());
+  cg.SetConstantsByteAlignment(target->GetAttr<Integer>("constants-byte-alignment").value_or(16));
+  PrimFunc aot_executor_fn;
 
   // debug
   if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN")) {
@@ -1883,34 +1935,57 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
     LOG_INFO << PrettyPrint(mod);
   }
 
-  Map<String, LinkedParam> linked_params;
-  // bool found_linked_params = false;
-  bool could_have_linked_params = target->GetAttr<Bool>("link-params").value_or(Bool(false));
+  std::vector<std::pair<tvm::GlobalVar, tvm::BaseFunc>> funcs;
   for (auto kv : mod->functions) {
-    if (could_have_linked_params &&
-        kv.first->name_hint == ::tvm::runtime::symbol::tvm_lookup_linked_param) {
-      Map<String, ObjectRef> attrs_dict = Downcast<Map<String, ObjectRef>>(kv.second->attrs->dict);
-      CHECK(attrs_dict.find(::tvm::tir::attr::kLinkedParams) != attrs_dict.end())
-          << "no " << ::tvm::tir::attr::kLinkedParams << " attribute found!";
-      linked_params =
-          Downcast<Map<String, LinkedParam>>(attrs_dict[::tvm::tir::attr::kLinkedParams]);
-      //found_linked_params = true;
+    // Make sure that the executor function is the last one to be code generated so that all the
+    // symbols are available to __tvm_main__
+    auto fun_name = std::string(kv.first->name_hint);
+    bool is_aot_executor_fn = kv.second->GetAttr<Bool>("runner_function", Bool(false)).value();
+
+    if (is_aot_executor_fn) {
+      aot_executor_fn = Downcast<PrimFunc>(kv.second);
       continue;
     }
+    funcs.push_back(kv);
+  }
 
+  // Sort functions
+  std::sort(funcs.begin(), funcs.end(),
+            [](std::pair<tvm::GlobalVar, tvm::BaseFunc> kv_a,
+               std::pair<tvm::GlobalVar, tvm::BaseFunc> kv_b) {
+              std::string name_hint_a = kv_a.first->name_hint;
+              std::string name_hint_b = kv_b.first->name_hint;
+              return name_hint_a < name_hint_b;
+            });
+
+  // Add all functions except __tvm_main__
+  for (auto& kv : funcs) {
     ICHECK(kv.second->IsInstance<PrimFuncNode>()) << "CodegenC7x: Can only take PrimFunc";
     auto f = Downcast<PrimFunc>(kv.second);
     cg.AddFunction(f);
   }
 
-  cg.PrintTrailer();
+  // Add __tvm_main__
+  if (aot_executor_fn.defined()) {
+    cg.AddFunction(aot_executor_fn);
+  }
 
   #if 0
-  if (could_have_linked_params) {
-    ICHECK(found_linked_params) << "-link-params given but none found";
-    cg.LinkParameters(linked_params);
+  // NOTE: it's possible that kRuntime attr is not attached when the mod was built with tvm.build().
+  // See issue #10373.
+  auto opt_runtime = mod->GetAttr<relay::Runtime>(tvm::attr::kRuntime);
+  relay::Runtime runtime;
+  if (opt_runtime.get() != nullptr) {
+    runtime = opt_runtime.value();
+  } else {
+    runtime = relay::Runtime::Create("cpp", {});
+  }
+  if (aot_executor_fn.defined() && runtime->name == relay::kTvmRuntimeCpp) {
+    cg.InitGlobalContext();
   }
   #endif
+
+  cg.PrintTrailer();
 
   if (target->GetAttr<Bool>("system-lib").value_or(Bool(false))) {
     ICHECK_EQ(target->GetAttr<String>("runtime").value_or(""), "c")

@@ -134,5 +134,5 @@ void TVMPackedFunc_SetArgs(TVMPackedFunc* pf, const TVMArgs* args) {
   memcpy(&(pf->args), args, sizeof(TVMArgs));
 }
 
-TVMPackedFunc* g_fexecs;
+TVMPackedFunc* g_fexecs = NULL;  // Begin TI: initialize global to NULL
 uint32_t g_fexecs_count;

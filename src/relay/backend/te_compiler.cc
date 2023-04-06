@@ -286,12 +286,20 @@ class TECompilerImpl : public TECompilerNode {
         With<Target> with_target(it.first->target);
         runtime::Module ext_mod = (*pf)(src_func);
         if (ext_mod.defined()) {
+          // Begin TI: ImplementsFunction()/GetFunction() should only be called at runtime,
+          //           not compile time
+          // For tidl or tvm_tidl subgraphs, we will dynamically load "libvx_tidl_rt.so"
+          //   in GetFunction().  In addition, we could be compiling on X86 and inferring
+          //   on Arm.  So, we want to avoid GetFunction() call at compile time.
+          #if 0
           // TODO(mbs): Can this be an ICHECKs?
           if (!ext_mod->ImplementsFunction(opt_symbol_name.value())) {
             VLOG(1) << "Note that the external codegen for '" << opt_compiler.value()
                     << "' returned a runtime module which does not appear to implement '"
                     << opt_symbol_name.value() << "'";
           }
+          #endif
+          // End TI
           ret.push_back(ext_mod);
         } else {
           // It is valid for the external codegen function to return null:

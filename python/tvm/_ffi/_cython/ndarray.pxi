@@ -99,11 +99,6 @@ cdef class NDArrayBase:
         CHECK_CALL(c_api_ret_code)
         return target_nd
 
-    def _copyto(self, target_nd):
-        """Internal function that implements copy to target ndarray."""
-        CALL(TVMArrayCopyFromTo(self.chandle, (<NDArrayBase>target_nd).chandle, NULL))
-        return target_nd
-
     def to_dlpack(self):
         """Produce an array from a DLPack Tensor without copying memory
 
