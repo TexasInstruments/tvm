@@ -142,8 +142,23 @@ function setup_tvm_tidl_tests_common {
     cp ~/.tvm_test_data/data/* ${WORKSPACE}/tests/python/relay/ti_tests/testdata
 }
 
+function set_soc {
+    platform=$1
+    if [ $platform = "AM62A" ]
+    then
+        export SOC="am62a"
+    elif [ $platform = "J7" ]
+    then 
+        export SOC="am68pa"
+    elif [ $platform = "J721S2" ]
+    then
+        export SOC="am68a"
+    fi
+}
+
 function setup_tvm_tidl_tests {
     platform=$1
+    set_soc $platform
     # Set up environment variables for TVM+TIDL compilation
     export TIDL_TOOLS_PATH=${TVM_DEPS_PATH}/tidl_tools/latest/${platform}/tidl_tools
     export EVM_IP=sdtocg-${platform,,}-0.hou.asp.ti.com  # ${platform,,} to lower case

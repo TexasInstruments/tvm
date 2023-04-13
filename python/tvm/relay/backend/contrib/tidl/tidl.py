@@ -1766,6 +1766,8 @@ class TIDLAnnotation:
         self._register_supported_op("nn.leaky_relu")
         self._register_supported_op("nn.prelu")
         self._register_supported_op("sigmoid")
+        # "tanh" is not supported on AM62A
+        self._register_constrained_op("tanh")
         self._register_constrained_op("nn.upsampling")
         self._register_constrained_op("nn.upsampling3d")
         self._register_constrained_op("qnn.conv2d")

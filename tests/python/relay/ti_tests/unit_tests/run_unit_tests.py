@@ -15,6 +15,8 @@ unit_tests = [
 "scatter_nd.py",
 "topk.py",
 "argsort.py",
+"tanh_tidl.py",
+"conv2d_transpose_IOHW.py",
 ]
 
 failed_tests = []

@@ -97,6 +97,10 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
         num_elements = np.prod(shape)
         rng = np.random.default_rng()
         data = rng.choice(np.arange(num_elements * 2), size=shape, replace=False).astype('int32')
+      elif var.endswith("_ind"):
+        data = np.stack([np.stack([np.stack([np.arange(4) for _ in range(4)]) for _ in range(4)]) for _ in range(1)]).astype('int32')
+      elif var.endswith("_tanh"):
+        data = np.arange(-3.0, 3.0, 6.0 / np.prod(shape),dtype=float).reshape(shape)
       else:
         data = np.random.randint(0, 255, size=shape).astype('float32') / 256.0
       np.save(get_data_file(artifacts_dir, var), data)
