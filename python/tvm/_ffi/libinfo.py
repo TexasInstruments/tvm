@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 """Library information."""
-import os
 import sys
+import os
 
 
 def split_env_var(env_var, split):

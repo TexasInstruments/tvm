@@ -19,10 +19,10 @@
 
 set -eux
 
-if [ "${BRANCH_NAME}" == "v0.10.0" ]; then
+if [ "${BRANCH_NAME}" == "main" ]; then
     changed_files=$(git diff --no-commit-id --name-only -r HEAD~1)
 else
-    changed_files=$(git diff --no-commit-id --name-only -r origin/v0.10.0)
+    changed_files=$(git diff --no-commit-id --name-only -r origin/main)
 fi
 
 FILES_THAT_SHOULDNT_TRIGGER_REBUILDS=(

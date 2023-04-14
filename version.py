@@ -25,10 +25,10 @@ List of affected files:
 - tvm-root/conda/recipe/meta.yaml
 - tvm-root/web/package.json
 """
-import argparse
-import logging
 import os
 import re
+import argparse
+import logging
 import subprocess
 
 # Modify the following value during release
