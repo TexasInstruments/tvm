@@ -23,6 +23,8 @@ if [ -z "${EVM_IP}" ]; then
     exit 1
 fi
 
+export PATH=${TVM_DEPS_PATH}/cmake-latest/bin:$PATH
+
 
 function build_tvm {
 

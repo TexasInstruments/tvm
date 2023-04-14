@@ -162,7 +162,7 @@ class CodeGenC7x final : public CodeGenC {
 
   void PrintType(DataType t, std::ostream& os) final;  // NOLINT(*)
   void PrintType(const Type& type, std::ostream& os);  // NOLINT(*)
-  void PrintFuncPrefix() final;                        // NOLINT(*)
+  void PrintFuncPrefix(std::ostream& os) final;        // NOLINT(*)
   void PrintFinalReturn() final;                       // NOLINT(*)
   void PrintTrailer();
 

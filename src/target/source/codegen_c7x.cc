@@ -348,7 +348,7 @@ void CodeGenC7x::AddFunction(const PrimFunc& f) {
   DeclarePackedCalls(f);
 
   bool no_alias = f->HasNonzeroAttr(tir::attr::kNoAlias);
-  this->PrintFuncPrefix();
+  this->PrintFuncPrefix(stream);
   this->stream << " " << static_cast<std::string>(global_symbol.value()) << "(";
 
   for (size_t i = 0; i < f->params.size(); ++i) {
@@ -563,15 +563,15 @@ void CodeGenC7x::LinkParameters(Map<String, LinkedParam> params) {
 #endif
 
 // verbatim from CodegenCHost
-void CodeGenC7x::PrintFuncPrefix() {  // NOLINT(*)
+void CodeGenC7x::PrintFuncPrefix(std::ostream& os) {  // NOLINT(*)
   #if 0
-  stream << "#ifdef __cplusplus\n"
-         << "extern \"C\"\n"
-         << "#endif\n"
-         << "TVM_DLL int32_t";
+  os << "#ifdef __cplusplus\n"
+     << "extern \"C\"\n"
+     << "#endif\n"
+     << "TVM_DLL int32_t";
   #endif
-  stream << "extern \"C\"\n";
-  stream << "int32_t";
+  os << "extern \"C\"\n";
+  os << "int32_t";
 }
 
 // verbatim from CodegenCHost
@@ -1750,11 +1750,11 @@ void CodeGenC7x::VisitStmt_(const IfThenElseNode* op) {
   PrintStmt(op->then_case);
   this->EndScope(then_scope);
 
-  if (op->else_case.defined()) {
+  if (op->else_case) {
     PrintIndent();
     stream << "} else {\n";
     int else_scope = BeginScope();
-    PrintStmt(op->else_case);
+    PrintStmt(op->else_case.value());
     this->EndScope(else_scope);
   }
   PrintIndent();

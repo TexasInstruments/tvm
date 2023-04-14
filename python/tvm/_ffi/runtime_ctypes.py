@@ -217,6 +217,7 @@ class Device(ctypes.Structure):
     kDLSDAccel = 33
     kOpenGL = 34
     kDLMicroDev = 35
+    kDLC7X = 70
 
     _fields_ = [("device_type", ctypes.c_int), ("device_id", ctypes.c_int)]
     MASK2STR = {
@@ -238,6 +239,7 @@ class Device(ctypes.Structure):
         kDLSDAccel: "sdaccel",
         kOpenGL: "opengl",
         kDLMicroDev: "microdev",
+        kDLC7X: "c7x",
     }
 
     STR2MASK = {
@@ -262,6 +264,7 @@ class Device(ctypes.Structure):
         "ext_dev": kDLExtDev,
         "hexagon": kDLHexagon,
         "webgpu": kDLWebGPU,
+        "c7x": kDLC7X,
     }
 
     def __init__(self, device_type, device_id):

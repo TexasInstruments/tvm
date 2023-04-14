@@ -891,6 +891,8 @@ def C7xDMATransform(f, mod, ctx):
     outer_loops_info = {}
     # Stack of ForStmt visited
     loop_nest = []
+    # map from "c7x_dma_copy" op to created dma handle
+    dma_copy_handle_map = {}
 
     # pre-order walk: keep track of variables and operations involved 
     # in dma copies
@@ -934,6 +936,13 @@ def C7xDMATransform(f, mod, ctx):
             dims = ([1] * (4-len(dims))) + dims
         return dims
 
+    # post-order walk: append dma handle to dma copy intrinsics in tir,
+    #   so that dma handle does not get optimized away by later passes (e.g. tir.RemoveNoOp)
+    def _dma_handle_post(op):
+        if op in dma_copy_handle_map:
+           new_args = op.args[1:] + [dma_copy_handle_map[op]]
+           return tvm.tir.call_extern("int32", "c7x_dma_copy", *new_args, span=op.span)
+
     # Run the pre/post passes above
     stmt = tvm.tir.stmt_functor.ir_transform(
         f.body, _dma_pre, _dma_post,
@@ -951,6 +960,7 @@ def C7xDMATransform(f, mod, ctx):
             if var in local_var_info:
                 dma_name = var.name.split('.')[0] + ".dma"
         dma = tvm.tir.Var(dma_name, "handle")
+        dma_copy_handle_map[dma_call] = dma
         # hoist the alloc statements for local buffers
         for var in (src,dst):
             if var in local_var_info:
@@ -1009,6 +1019,9 @@ def C7xDMATransform(f, mod, ctx):
                       *src_dma_icnts, *src_dma_strides[1:], *dst_dma_icnts, *dst_dma_strides[1:])
         setup = tvm.tir.LetStmt(dma, setup, tvm.tir.Evaluate(1))   # dummy body
         stmts.append(setup)
+
+    # Run the pre/post pass, append dma handle to dma copy intrinsics
+    stmt = tvm.tir.stmt_functor.ir_transform(stmt, None, _dma_handle_post, ["tir.Call"])
 
     # hoist alloc, and dma setup to top of function body
     stmt = merge_block(stmts, stmt)
