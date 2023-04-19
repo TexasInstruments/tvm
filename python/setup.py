@@ -263,3 +263,7 @@ if not CONDA_BUILD:
 
         if os.path.isdir(path_to_be_removed):
             shutil.rmtree(path_to_be_removed)
+
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/src"))
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/include"))
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/3rdparty"))
