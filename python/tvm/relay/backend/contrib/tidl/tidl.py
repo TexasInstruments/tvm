@@ -43,6 +43,7 @@ from .reduce_subgraph_size import reduce_subgraph_size
 from .visualize import visualize_relay_graph
 from .build_c7x_mod import enable_c7x_mod
 from .prepare import prepare_graph_for_partitioning
+from .prepare import prune_graph_for_ODPostProc_inputs
 
 tidl_annotations_registered = False
 
@@ -1261,7 +1262,9 @@ class TIDLImport:
                  tidl_target="tidl", tidl_platform="J7", data_layout="NCHW",
                  tensor_bits=8, tidl_calib_flags=0, tidl_bias_calib_iters=50,
                  output_feature_16bit_names_list='', params_16bit_names_list='',
-                 mixed_precision_factor=-1.0):
+                 mixed_precision_factor=-1.0,
+                 tidl_od_meta_arch_type = -1, tidl_od_num_graph_outputs = 1,
+                 tidl_od_meta_layers_names_list = "", tidl_od_postproc_inputs=[]):
         self.import_lib = import_lib
         self.calib_tool = calib_tool
         self.tidl_tools_path = tidl_tools_path
@@ -1274,7 +1277,11 @@ class TIDLImport:
         self.tidl_bias_calib_iters = tidl_bias_calib_iters
         self.output_feature_16bit_names_list = output_feature_16bit_names_list
         self.params_16bit_names_list = params_16bit_names_list
-        self.mixed_precision_factor = mixed_precision_factor;
+        self.mixed_precision_factor = mixed_precision_factor
+        self.tidl_od_meta_arch_type = tidl_od_meta_arch_type
+        self.tidl_od_num_graph_outputs = tidl_od_num_graph_outputs
+        self.tidl_od_meta_layers_names_list = tidl_od_meta_layers_names_list
+        self.tidl_od_postproc_inputs = tidl_od_postproc_inputs
         self.info_dict = {}
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
         self.temp_folder = os.path.join(artifacts_folder, 'tempDir/')
@@ -1564,10 +1571,28 @@ class TIDLImport:
             # Initialize subgraph input/output exprs to quantization mapping
             inout_quant_dict = obtain_inout_quant_dict(subgraph, subgraph_id, relay_quantization)
 
+            # If subgraph contains "tidl_odpostproc" layer, only import up to the inputs
+            #   of this layer, TIDL will add the postprocessing layers using MetaArch info 
+            def find_tidl_odpostproc(node, node_list):
+                if isinstance(node, relay.expr.Call) and node.op.name == "tidl_odpostproc":
+                    node_list.append(node)
+            tidl_odpostproc_nodes = []
+            traverse_func = functools.partial(find_tidl_odpostproc, node_list=tidl_odpostproc_nodes)
+            relay.analysis.post_order_visit(subgraph, traverse_func)
+            if len(tidl_odpostproc_nodes) == 0:
+                subgraph_body = subgraph.body
+            else:
+                assert len(tidl_odpostproc_nodes) == 1, "Only one tidl_postproc is allowed"
+                subgraph_body = relay.expr.Tuple(tidl_odpostproc_nodes[0].args)
+                output_names = self.tidl_od_postproc_inputs
+                import_lib_setup_odpostproc = tvm.get_global_func("TIDL_relaySetupODPostProc")
+                import_lib_setup_odpostproc(self.tidl_od_meta_arch_type,
+                        self.tidl_od_num_graph_outputs, self.tidl_od_meta_layers_names_list)
+
             # Scan through all relay.expr.Call nodes and import each to TIDL
             all_nodes_tidl = {}
             traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_tidl)
-            relay.analysis.post_order_visit(subgraph, traverse_func)
+            relay.analysis.post_order_visit(subgraph_body, traverse_func)
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params, output_names,
@@ -2007,6 +2032,10 @@ class TIDLCompiler:
             self.c7x_codegen = 0
             self.advanced_options = {}
             self.ti_internal_nc_flag = (0x1 | 0x40 | 0x200 | 0x400)
+            self.options = {}
+            # options dict can be used to unify with option names used by ONNXRT and TFLiteRT flow
+            # e.g. self.options['object_detection:meta_layers_names_list'] = None
+            # e.g. self.options['object_detection:meta_arch_type'] = None
 
             # Read arguments provided through regular args
             self.max_num_layers = max_num_layers
@@ -2087,6 +2116,37 @@ class TIDLCompiler:
                 0  - no compilation due to missing TIDL tools
         """
 
+        tidl_od_meta_arch_type = -1
+        tidl_od_num_graph_outputs = 1
+        tidl_od_meta_layers_names_list = ""
+        tidl_od_postproc_inputs = []
+        import_lib = None
+
+        if (True):  # OD TODO: check if object_detection metaArch options are specified
+            os.makedirs(self.temp_folder, exist_ok=True)
+            with open(os.path.join(self.temp_folder, "relay_graph.input.txt"), "w") as relay_txt:
+                print(mod_orig.astext(show_meta_data=False), file=relay_txt)
+            tidl_od_meta_layers_names_list = self.options['object_detection:meta_layers_names_list'] = "/cgnas/edgeai-modelzoo/models/vision/detection/coco/edgeai-mmdet/ssd_mobilenetv2_fpn_lite_512x512_20201110_model.prototxt"
+            tidl_od_meta_arch_type = self.options['object_detection:meta_arch_type'] = 3
+            tidl_od_num_graph_outputs = len(mod_orig['main'].body.fields) \
+                    if isinstance(mod_orig['main'].body, relay.expr.Tuple) else 1
+            # TODO: if the object_detections are specified, call TIDL_relayGetODMetaArchInfo()
+            #   to get the input node names, output shapes and output dtypes
+            #   Hard code here to test the flow (TO be cleaned up)
+            # call TIDL_relayGetODMetaArchInfo to get the following info
+            import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
+            import_lib_get_od_info = tvm.get_global_func("TIDL_relayGetODMetaArchInfo")
+            import_lib_get_od_info(tidl_od_meta_arch_type,
+                    tidl_od_num_graph_outputs, tidl_od_meta_layers_names_list)
+            tidl_od_postproc_inputs = [ "704", "712", "720", "728", "736", "744", "700", "708", "716", "724", "732", "740" ]
+            tidl_od_output_shapes = [ (1, 1, 200, 5), (1, 1, 1, 200) ]
+            tidl_od_output_dtypes = [ "float32", "float32" ]
+            # from meta data, get number of outputs and their shapes, use those to define operator,
+            # tidl_odpostproc, that can be offloaded to TIDL, default impl just return zeros,
+            # This is to help get the graph output type (tensors and shapes) correct early on
+            mod_orig = prune_graph_for_ODPostProc_inputs(mod_orig, tidl_od_postproc_inputs,
+                    tidl_od_output_shapes, tidl_od_output_dtypes)
+
         # Skip TIDL import and C7x code generation.  Proceed directly to
         # re-build the C7x deployable module and the Arm deployable module,
         # reusing the existing source in the tempDir from the previous compilation.
@@ -2114,13 +2174,15 @@ class TIDLCompiler:
         os.makedirs(self.temp_folder, exist_ok=True)
         for root, dirs, files in os.walk(self.temp_folder, topdown=False):
             for f in files:
-                os.remove(os.path.join(root, f))
+                if f != "relay_graph.input.txt":
+                    os.remove(os.path.join(root, f))
             for d in dirs:
                 os.rmdir(os.path.join(root, d))
 
         # Open TIDL import library
         if os.path.exists(self.tidl_import_lib):
-            import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
+            if import_lib == None:
+                import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
             tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
             is_nchw = data_layout == "NCHW"
             quant_style = 3 if (self.quantization_scale_type == 1) else 2
@@ -2201,7 +2263,11 @@ class TIDLCompiler:
                                          self.tidl_calib_flags, self.tidl_bias_calib_iters,
                                          self.output_feature_16bit_names_list,
                                          self.params_16bit_names_list,
-                                         self.mixed_precision_factor)
+                                         self.mixed_precision_factor,
+                                         tidl_od_meta_arch_type,
+                                         tidl_od_num_graph_outputs,
+                                         tidl_od_meta_layers_names_list,
+                                         tidl_od_postproc_inputs)
                 print("Generating subgraph boundary tensors for calibration...")
                 subgraph_tensors_list, relay_quantization, relay_etypes = generate_subgraph_tensors(
                                  self.tidl_target, mod, params, graph_input_list, self.temp_folder,

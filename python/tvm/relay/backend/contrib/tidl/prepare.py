@@ -227,3 +227,115 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod = relay.transform.DynamicToStatic()(mod)
 
     return mod
+
+
+def prune_graph_for_ODPostProc_inputs(mod: tvm.IRModule,
+        ODPostProc_inputs: typing.List[str],
+        od_output_shapes: typing.List[typing.Tuple],
+        od_output_dtypes: typing.List[str]) -> tvm.IRModule:
+    """Prune the graph to compute the ODPostProc inputs only.
+       PostProc part of the graph will be pruned and the actual processing
+       will be added by TIDL import using Meta Arch automatically.
+    """
+    import functools
+    from tvm import topi
+    from tvm import te
+    from tvm.target import generic_func, override_native_generic_func
+    from tvm.relay.op import op as reg
+    from tvm.relay.op import strategy as _strategy
+    from tvm.relay.op.op import OpStrategy, OpPattern
+
+    def traverse_expr(node, node_dict, names):
+        if isinstance(node, relay.expr.Call) and node.span.source_name.name in names:
+            # post visit: the last node with the same name wins
+            node_dict[node.span.source_name.name] = node
+
+    def tidl_odpostproc_type_rel(arg_types, attrs):
+        nonlocal od_output_shapes
+        nonlocal od_output_dtypes
+        output_types = [ relay.TensorType(out, dtype)
+                         for out, dtype in zip(od_output_shapes, od_output_dtypes) ]
+        return relay.TupleType(output_types)
+
+    def tidl_odpostproc(inputs):
+        return relay.expr.Call(reg.get("tidl_odpostproc"), inputs)
+
+    def tidl_odpostproc_macs(call):
+        return 2**48  # a big MAC count, always offloaded to TIDL (i.e. not pruned)
+
+    def register_tidl_postproc_as_supported():
+        @tvm.ir.register_op_attr("tidl_odpostproc", "target.tidl")
+        def _func_wrapper(expr):
+            return True
+        return _func_wrapper
+
+    @override_native_generic_func("tidl_odpostproc_strategy")
+    def tidl_odpostproc_strategy(attrs, inputs, out_type, target):
+        "pseduo strategy for tidl_odpostproc on host, produce all 0s"
+
+        def pseudo_tidl_odpostproc_compute(attrs, inputs, out_type):
+            out_shapes = [t.shape for t in out_type.fields]
+            out_dtypes = [t.dtype for t in out_type.fields]
+
+            def gen_ir(shape, dtype, out):
+                buf_size = 1
+                for dim_size in shape:
+                    buf_size *= dim_size
+                ib = tvm.tir.ir_builder.create()
+                out_buf = ib.buffer_ptr(out)
+                with ib.for_range(0, buf_size, "fused") as fused:
+                    out_buf[fused] = 0.0 if dtype == "float32" else 0
+                return ib.get()
+
+            outputs = []
+            for i in range(len(out_shapes)):
+                out_buf = tvm.tir.decl_buffer(out_shapes[i], out_dtypes[i],
+                                              f"od_out_buf_{i}", data_alignment=8)
+                out_i = te.extern([out_shapes[i]], [],
+                                  lambda ins, outs: gen_ir(out_shapes[i], out_dtypes[i], outs[0]),
+                                  dtype=[out_dtypes[i]],
+                                  in_buffers=[],
+                                  out_buffers=[out_buf],
+                                  name="pseudo_tidl_odpostproc", tag="pseudo_tidl_odpostproc_host",
+                                 )
+                outputs.append(out_i)
+            return outputs
+
+        from tvm.relay.op.op import OpStrategy, OpPattern
+        strategy = OpStrategy()
+        strategy.add_implementation(
+            pseudo_tidl_odpostproc_compute,
+            _strategy.wrap_topi_schedule(topi.generic.schedule_extern),
+            name="pseudo_tidl_odpostproc",
+        )
+        return strategy
+
+    # Create an operator that takes ODPostProc input nodes and returns TIDL processed outputs
+    op_name = "tidl_odpostproc"
+    reg.register(op_name)
+    reg.get(op_name).set_num_inputs(len(ODPostProc_inputs))
+    for i in range(len(ODPostProc_inputs)):
+        reg.get(op_name).add_argument(f"ODPostProc_input{i}", "Tensor", "ODPostProc input")
+    reg.get(op_name).add_type_rel(op_name, tidl_odpostproc_type_rel)
+    reg.get(op_name).set_support_level(10)
+    reg.get(op_name).set_attr("FMacCount", tidl_odpostproc_macs)
+    reg.register_strategy(op_name, tidl_odpostproc_strategy)
+    reg.register_pattern("tidl_odpostproc", OpPattern.OPAQUE)
+    register_tidl_postproc_as_supported()
+
+    # Find relay graph nodes that correspond to ODPostProc_inputs names
+    names_to_nodes = {}
+    traverse_func = functools.partial(traverse_expr,
+                                      node_dict=names_to_nodes, names=ODPostProc_inputs)
+    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    ODPostProc_inputs_nodes = [ names_to_nodes[k] for k in ODPostProc_inputs ]
+
+    # Create a "pseudo" relay layer to represent TIDL OD PostProcessing, return tuple
+    new_body = tidl_odpostproc(ODPostProc_inputs_nodes)
+    od_outputs = [ relay.expr.TupleGetItem(new_body, i) for i in range(len(od_output_shapes)) ]
+    new_body = relay.expr.Tuple(od_outputs)
+
+    main_func = mod['main']
+    new_func = relay.Function(params=main_func.params, body=new_body, attrs=main_func.attrs)
+    mod['main'] = new_func
+    return mod
