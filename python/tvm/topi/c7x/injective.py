@@ -246,6 +246,7 @@ def schedule_injective_from_existing(s: te.Schedule,
     #     complicated vector masks
     # - For broadcast/elemwise ops, output tensor and input tensor always have the same axis
     #   ordering.
+
     if is_unsupported_op(tensor=C, is_invalid_op=(lambda t: not tag.is_broadcast(s[t].op.tag) and \
                                                   s[t].op.name not in ops_treat_as_injective)):
         return s
@@ -301,6 +302,13 @@ def double_buffer_with_dma(s: te.Schedule,
             size *= utils.get_const_int(dim_size)
         return size
 
+    def dma_size(t: te.tensor.Tensor, baxis: int, nblocks: int, elem_bytes: int) -> int:
+        size = 1
+        for dim_size in t.shape[baxis - 1:]:
+            size *= utils.get_const_int(dim_size)
+
+        return (size // nblocks) * elem_bytes
+
     cc = C
 
     # TODO: allow these to vary by target configuration
@@ -331,7 +339,6 @@ def double_buffer_with_dma(s: te.Schedule,
 
     # Find split point, including axis to split if needed
     baxis, nblocks, blocksize = find_split(dims, elem_bytes, max_block)
-
     # If there is no split point (e.g. split results in odd iterations), return
     # If the whole loop nest does not need split, do not dma, return
     if blocksize == 0 or baxis == 0:
@@ -345,14 +352,15 @@ def double_buffer_with_dma(s: te.Schedule,
 
     local_inputs = []
 
+    DMA_INPUT_THRESHOLD = 128 
     for t in op.input_tensors:
         is_placeholder = isinstance(t.op, tvm.te.PlaceholderOp)
-        if len(t.shape) > 1:
+        if len(t.shape) > 1 and dma_size(t, baxis, nblocks, elem_bytes) > DMA_INPUT_THRESHOLD:
             scope_name = f"local{len(local_inputs)}"
             register_c7x_local_mem(scope_name)
             l = s.cache_read(t, scope_name, op)
             local_inputs.append((l, is_placeholder))
-    if len(dims) > 1:
+    if len(dims) > 1 and dma_size(C, baxis, nblocks, elem_bytes) > DMA_INPUT_THRESHOLD:
         register_c7x_local_mem("local")
         cc = s.cache_write(C, "local")
         inner = s[cc].op.axis[-1]
