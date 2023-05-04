@@ -204,6 +204,10 @@ def schedule_injective_from_existing(s: te.Schedule,
         for axis_len in cc.shape[baxis:]:
             inner_length *= axis_len
 
+        #if baxis is last axis, instead vectorize the last axis
+        if baxis == len(s[C].op.axis):
+            inner = sch[cc].op.axis[-1]
+            inner_length = C.shape[-1]
         # Do not split/vectorize if the number of inner loop iterations is
         # less than the vectorization factor
         if inner_length < split_factor:

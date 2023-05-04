@@ -17,6 +17,7 @@ unit_tests = [
 "argsort.py",
 "tanh_tidl.py",
 "conv2d_transpose_IOHW.py",
+"multiply_large_last_dim.py",
 ]
 
 failed_tests = []
