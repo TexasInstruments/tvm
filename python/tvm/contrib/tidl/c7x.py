@@ -839,6 +839,10 @@ def c7x_dma_injector(src : tvm.tir.Buffer,
       logging.debug(f"DMA disqualified for non-constant shape: {dst.shape} or strides: {src.strides}, {dst.strides}")
       return None
 
+    assert('global' in src.scope() or 'global' in dst.scope())
+    assert('local' in src.scope() or 'local' in dst.scope())
+    copy_in = 'global' in src.scope() and 'local' in dst.scope()
+
     # compute the dma icnts and strides for the inner loops (this copying loop nest)
     elem_bytes = tvm.runtime.DataType(src.dtype).bits // 8
     loop_bounds = [ x.value for x in dst.shape ]
@@ -863,7 +867,7 @@ def c7x_dma_injector(src : tvm.tir.Buffer,
     expr = tvm.tir.call_extern("int32", "c7x_dma_copy", src.data, dst.data,
                                elem_bytes, sync_axis, src.elem_offset, dst.elem_offset,
                                *src_dma_icnts, *src_dma_strides,
-                               *dst_dma_icnts, *dst_dma_strides)
+                               *dst_dma_icnts, *dst_dma_strides, copy_in)
     stmt = tvm.tir.Evaluate(expr)
     return stmt
 
@@ -979,6 +983,8 @@ def C7xDMATransform(f, mod, ctx):
         src_dma_strides = dma_call.args[11:15]
         dst_dma_icnts   = dma_call.args[15:19]
         dst_dma_strides = dma_call.args[19:23]
+        copy_in = dma_call.args[23]
+        
 
         outer_loops = outer_loops_info[dma_call]
         outer_loops_vars = [x.loop_var for x in outer_loops]
@@ -999,9 +1005,7 @@ def C7xDMATransform(f, mod, ctx):
 
         # Add outer loops, do double buffering
         if (num_outer_loops > 0):
-            # The on-chip block's indexing expression only depends on inner block loop variables.
-            # If the index expr depends on the outer loop vars, then it is off-chip.
-            if any(s != 0 for s in src_outer_strides[:num_outer_loops]): #copying in, dst is on-chip
+            if copy_in: #copying in, dst is on-chip
                 axis = c7x_dma_add_outer_dims(sync_axis, elem_bytes, num_blocks,
                                 outer_loop_bounds, src_outer_strides,
                                 dst_dma_icnts, dst_dma_strides, src_dma_icnts, src_dma_strides)
