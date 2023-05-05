@@ -57,7 +57,7 @@ def compile_model(model_name: str, platform: str,
     os.environ["TIDL_RELAY_MAX_BATCH_SIZE"] = str(batch_size)
 
   # Obtain model and convert to Relay
-  mod, params = get_relay_model(model_name, batch_size)
+  mod, params, advanced_options = get_relay_model(model_name, batch_size)
 
   # Get inputs to use for calibraton (required for TIDL offload)
   calibration_input_list = get_calib_inputs(model_name, batch_size)
@@ -70,7 +70,8 @@ def compile_model(model_name: str, platform: str,
   # Compile the model using TVM and place the output in the artifacts_folder
   result = compile.compile_relay(mod, params, calibration_input_list, platform, compile_for_device,
                                  enable_tidl_offload, enable_c7x_codegen,
-                                 artifacts_folder, tidl_tensor_bits=get_tidl_bits(model_name))
+                                 artifacts_folder, tidl_tensor_bits=get_tidl_bits(model_name),
+                                 advanced_options=advanced_options)
   return result
 
 

@@ -50,6 +50,11 @@ test_od = {
   'save_od' : True,
 }
 
+test_od_no_scores = {
+  'test_data' : ['street_small'],
+  'save_od2' : True,
+}
+
 
 tvm_models_dir = os.path.join(os.environ["HOME"], ".tvm_test_data/models")
 
@@ -119,6 +124,18 @@ models = {
     'calib_data': ['cat', 'cat2'],
     'test': test_top5,
   },
+
+  'mv2_od_onnx' : {
+    'file': ["file", "/cgnas/edgeai-modelzoo/models/vision/detection/coco/edgeai-mmdet/ssd_mobilenetv2_fpn_lite_512x512_20201110_model.onnx", "ssd_mobilenetv2_fpn_lite_512x512_20201110_model", "ssd_mobilenetv2_fpn_lite_512x512_20201110_model"],
+    'input_info': {**inputs_224, 'name':"input", 'shape':(1,3,512,512), 'is_nchw':True,
+                   'resize_wh':[512,512], 'crop_wh':[512,512]},
+    'calib_data': ['cat', 'cat2'],
+    'test': test_od_no_scores,
+    'advanced_options': {
+      'object_detection:meta_layers_names_list': "/cgnas/edgeai-modelzoo/models/vision/detection/coco/edgeai-mmdet/ssd_mobilenetv2_fpn_lite_512x512_20201110_model.prototxt",
+      'object_detection:meta_arch_type': 3
+    },
+  },
 }
 
 
@@ -168,7 +185,9 @@ def get_model_file(model_name):
       torch.onnx.export(model, data, model_file,
                         export_params=True, opset_version=11, do_constant_folding=True)
     return model_file
-
+  elif models[model_name]['file'][0] == "file":
+    _, model_file, _, _ = models[model_name]['file']
+    return model_file
 
 def get_relay_model(model_name : str, batch_size:int=0):
   """Obtain model and convert to Relay"""
@@ -246,16 +265,19 @@ def get_relay_model(model_name : str, batch_size:int=0):
   if (batch_size != 0):
     input_shape = (batch_size, *input_shape[1:])
 
+  advanced_options = models[model_name].get('advanced_options')
+  mod, params = None, None
+
   if model_name.endswith("_tf"):
-    return from_tf(model_file, model_name)
+    mod, params = from_tf(model_file, model_name)
   elif model_name.endswith("_tfl"):
-    return from_tfl(model_file, model_name)
+    mod, params = from_tfl(model_file, model_name)
   elif model_name.endswith("_onnx") or model_name.endswith("_timm"):
-    return from_onnx(model_file, model_name)
+    mod, params = from_onnx(model_file, model_name)
   elif model_name.endswith("_mxnet"):
-    return from_mxnet(model_file, model_name)
+    mod, params = from_mxnet(model_file, model_name)
   elif model_name.endswith("_pth"):
-    return from_pytorch(model_file, model_name)
-  else:
-    return None, None
+    mod, params = from_pytorch(model_file, model_name)
+
+  return mod, params, advanced_options
 

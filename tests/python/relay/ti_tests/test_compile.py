@@ -23,6 +23,8 @@ from models import models
 
 
 skipped_configs = [
+  # od postproc offload only available with tidl
+  [ 'mv2_od_onnx', '*', '*', '--notidl', '*', 0 ],
   # large feature map size in batch processing, unable to import to TIDL
   [ 'mv2_onnx', 'AM62A', '*', '--tidl', '*', 2 ],
   [ 'mv2_pth', 'AM62A', '*', '--tidl', '*', 2 ],
@@ -43,6 +45,7 @@ def test_compile(in_models, platforms, targets, tidls, c7xs):
             for n in (models[model]['batch_size'] if 'batch_size' in models[model] else [0]):
               print(f"\n\nCompiling config: {[model, platform, t_h, t_nt, c_nc, n]} ...")
               if [model, platform, '*', t_nt, '*', n] in skipped_configs or \
+                 [model, '*', '*', t_nt, '*', n] in skipped_configs or \
                  [model, platform, t_h, t_nt, c_nc, n] in skipped_configs:
                 print("Skipped")
                 continue

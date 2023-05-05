@@ -1241,6 +1241,13 @@ class TensorDescriptor(ctypes.Structure):
                 ('width', ctypes.c_int),
                 ('name', ctypes.c_char_p)]
 
+class ODPostProcInfo(ctypes.Structure):
+    """ Post Processing params defined in ctypes for passing to TIDL C library """
+    _fields_ = [('in_node_names', ctypes.c_char * 512 * 64),
+                ('num_in_nodes', ctypes.c_int), ('num_out_nodes', ctypes.c_int),
+                ('out_nodes', TensorDescriptor * 64)]
+
+
 class TIDLImport:
     """TIDL import module.
     Parameters
@@ -2016,6 +2023,11 @@ class TIDLCompiler:
                                    # 9 : same defaults as accuracy level 1
                                  }
 
+    default_od_options = [
+        'object_detection:meta_layers_names_list',
+        'object_detection:meta_arch_type',
+    ]
+
     def __init__(self, platform="J7", version="7.3", max_num_layers=225, max_total_memory_mb=448, **kwargs):
         self.tidl_platform = platform
         self.version = version
@@ -2031,8 +2043,8 @@ class TIDLCompiler:
             self.accuracy_level = 1
             self.c7x_codegen = 0
             self.advanced_options = {}
+            self.od_options = {}
             self.ti_internal_nc_flag = (0x1 | 0x40 | 0x200 | 0x400)
-            self.options = {}
             # options dict can be used to unify with option names used by ONNXRT and TFLiteRT flow
             # e.g. self.options['object_detection:meta_layers_names_list'] = None
             # e.g. self.options['object_detection:meta_arch_type'] = None
@@ -2063,6 +2075,8 @@ class TIDLCompiler:
                             accu_level_options[key] = self.advanced_options[key]
                     elif key in calib_options:
                         calib_options[key] = self.advanced_options[key]
+                    elif key in self.default_od_options:
+                        self.od_options[key] = self.advanced_options[key]
             for key in accu_level_options:
                 calib_options[key] = accu_level_options[key]
 
@@ -2122,25 +2136,33 @@ class TIDLCompiler:
         tidl_od_postproc_inputs = []
         import_lib = None
 
-        if (True):  # OD TODO: check if object_detection metaArch options are specified
-            os.makedirs(self.temp_folder, exist_ok=True)
-            with open(os.path.join(self.temp_folder, "relay_graph.input.txt"), "w") as relay_txt:
-                print(mod_orig.astext(show_meta_data=False), file=relay_txt)
-            tidl_od_meta_layers_names_list = self.options['object_detection:meta_layers_names_list'] = "/cgnas/edgeai-modelzoo/models/vision/detection/coco/edgeai-mmdet/ssd_mobilenetv2_fpn_lite_512x512_20201110_model.prototxt"
-            tidl_od_meta_arch_type = self.options['object_detection:meta_arch_type'] = 3
+        if (self.od_options): 
+            # with open(os.path.join(self.temp_folder, "relay_graph.input.txt"), "w") as relay_txt:
+            #     print(mod_orig.astext(show_meta_data=False), file=relay_txt)
+            tidl_od_meta_layers_names_list = self.od_options['object_detection:meta_layers_names_list']
+            tidl_od_meta_arch_type = self.od_options['object_detection:meta_arch_type']
             tidl_od_num_graph_outputs = len(mod_orig['main'].body.fields) \
                     if isinstance(mod_orig['main'].body, relay.expr.Tuple) else 1
-            # TODO: if the object_detections are specified, call TIDL_relayGetODMetaArchInfo()
-            #   to get the input node names, output shapes and output dtypes
-            #   Hard code here to test the flow (TO be cleaned up)
             # call TIDL_relayGetODMetaArchInfo to get the following info
+            # input node names, output shapes and output dtypes
             import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
+            od_postproc_info = ODPostProcInfo()
             import_lib_get_od_info = tvm.get_global_func("TIDL_relayGetODMetaArchInfo")
             import_lib_get_od_info(tidl_od_meta_arch_type,
-                    tidl_od_num_graph_outputs, tidl_od_meta_layers_names_list)
-            tidl_od_postproc_inputs = [ "704", "712", "720", "728", "736", "744", "700", "708", "716", "724", "732", "740" ]
-            tidl_od_output_shapes = [ (1, 1, 200, 5), (1, 1, 1, 200) ]
-            tidl_od_output_dtypes = [ "float32", "float32" ]
+                                    tidl_od_num_graph_outputs, tidl_od_meta_layers_names_list,
+                                    ctypes.cast(ctypes.byref(od_postproc_info), ctypes.c_void_p))
+            tidl_od_postproc_inputs = [name.value.decode() for name 
+                                        in od_postproc_info.in_node_names[:od_postproc_info.num_in_nodes]]
+            tidl_od_output_shapes = [(node.n, node.channel, node.height, node.width) for node 
+                                        in od_postproc_info.out_nodes[:od_postproc_info.num_out_nodes]]
+            element_type_map = {
+                0: "uint8",
+                1: "int8",
+                6: "float32"
+            }
+            tidl_od_output_dtypes = [element_type_map[node.element_type] for node
+                                     in od_postproc_info.out_nodes[:od_postproc_info.num_out_nodes]]
+
             # from meta data, get number of outputs and their shapes, use those to define operator,
             # tidl_odpostproc, that can be offloaded to TIDL, default impl just return zeros,
             # This is to help get the graph output type (tensors and shapes) correct early on

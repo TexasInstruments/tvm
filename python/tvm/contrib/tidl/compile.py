@@ -18,7 +18,7 @@
 
 
 import os
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Any
 
 import tvm
 from tvm import relay
@@ -33,7 +33,8 @@ def compile_relay(mod: tvm.IRModule,
                   enable_tidl_offload: bool,
                   enable_c7x_codegen: bool,
                   artifacts_folder: str,
-                  tidl_tensor_bits: int = 8) -> bool:
+                  tidl_tensor_bits: int = 8,
+                  advanced_options: Dict[str, Any] = None) -> bool:
   """ Compile Relay IR module based on the parameters specified
 
   Parameters
@@ -84,7 +85,7 @@ def compile_relay(mod: tvm.IRModule,
     from tvm.relay.backend.contrib.tidl import tidl
 
     # Calibration options corresponding to quantized tensor bits
-    advanced_options = {
+    advanced_options_default = {
       8 : {
         'calibration_iterations' : 10,
         # Following options take effect only at accuracy level 9, are ignored otherwise
@@ -101,6 +102,11 @@ def compile_relay(mod: tvm.IRModule,
       }
     }
 
+    
+    advanced_options_updated = advanced_options_default[tidl_tensor_bits]
+    if advanced_options:
+      advanced_options_updated.update(advanced_options)
+
     tidl_compiler = tidl.TIDLCompiler(platform=platform, # TI device category (E.g. J7)
                                       version="8.4", # Processor SDK version, currently unused
                                       tidl_tools_path=tidl_tools_path,
@@ -110,8 +116,7 @@ def compile_relay(mod: tvm.IRModule,
                                       deny_list="",
                                       c7x_codegen=(1 if enable_c7x_codegen else 0),
                                       accuracy_level=(1 if (tidl_tensor_bits == 8) else 0),
-                                      advanced_options=advanced_options[tidl_tensor_bits])
-
+                                      advanced_options=advanced_options_updated)
     # Perform partitioning
     mod, _ = tidl_compiler.enable(mod, params, calibration_input_list)
 
