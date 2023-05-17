@@ -1863,6 +1863,11 @@ class TIDLAnnotation:
     def allow_func(self, op_name, expr):
         """ Allow function: constraint checking is delegated to the import library """
 
+        ### TIDL does not support scalar as the first argument
+        if isinstance(expr.args[0].checked_type, relay.TensorType) and \
+                  len(expr.args[0].checked_type.shape) == 0:
+            return False
+
         ### TIDL batch proecessing does not support all types of layers
         if op_name in ["image.resize2d", "strided_slice"]:
             if expr.args[0].checked_type.shape[0] > 1:
