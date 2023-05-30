@@ -55,6 +55,10 @@ test_od_no_scores = {
   'save_od2' : True,
 }
 
+test_od_yolo = {
+  'test_data' : ['street_small'],
+  'save_od_yolo' : True,
+}
 
 tvm_models_dir = os.path.join(os.environ["HOME"], ".tvm_test_data/models")
 
@@ -134,6 +138,19 @@ models = {
     'advanced_options': {
       'object_detection:meta_layers_names_list': "/cgnas/edgeai-modelzoo/models/vision/detection/coco/edgeai-mmdet/ssd_mobilenetv2_fpn_lite_512x512_20201110_model.prototxt",
       'object_detection:meta_arch_type': 3
+    },
+  },
+
+  'yolov5_od_onnx' : {
+    'file': ["file", "/cgnas/edgeai-yolov5/pretrained_models/models/keypoint/coco/edgeai-yolov5/yolov5s6_pose_640_ti_lite_54p9_82p2.onnx", "yolov5s6_pose_640_ti_lite_54p9_82p2", "yolov5s6_pose_640_ti_lite_54p9_82p2"],
+    'input_info': {**inputs_224, 'name':"images", 'shape':(1,3,640,640), 'is_nchw':True,
+                   'resize_wh':[640,640], 'crop_wh':[640,640]},
+    'calib_data': ['street_small'],
+    'test': test_od_yolo,
+    'tidl_bits' : 16,
+    'advanced_options': {
+      'object_detection:meta_layers_names_list': "/cgnas/edgeai-yolov5/pretrained_models/models/keypoint/coco/edgeai-yolov5/yolov5s6_pose_640_ti_lite_metaarch.prototxt",
+      'object_detection:meta_arch_type': 6
     },
   },
 }

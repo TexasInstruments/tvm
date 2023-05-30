@@ -203,6 +203,32 @@ def save_od2(model_name, res, artifacts_folder):
   cv2.imwrite(out_file, output_img)
   print(f"Object detection results in {out_file}")
 
+def save_od_yolo(model_name, res, artifacts_folder):
+  """ Save image with boudning boxes from object detection results """
+  import cv2
+  img_file = get_testdata_file(models[model_name]['test']['test_data'][0])
+  w, h = models[model_name]['input_info']['crop_wh']
+  orig_img = cv2.imread(img_file)
+  resized_img = cv2.resize(orig_img, (w, h), interpolation=cv2.INTER_CUBIC)
+  output = res[0]
+
+  for box in np.squeeze(output):
+    label = box[5]
+    if box[4] > 0.34:
+      cv2.rectangle(resized_img, (int(box[0]), int(box[1])),
+                                 (int(box[2]), int(box[3])),
+                                 colors[int(label)%len(colors)], 2)
+      keypoints = box[6:]
+      for i in range(0, len(keypoints), 3):
+        if keypoints[i+2] > 0.5:
+          cv2.circle(resized_img, (int(keypoints[i]), int(keypoints[i+1])), radius=1,
+                    color=colors[int(label)%len(colors)], thickness=-1)
+  output_img = cv2.resize(resized_img, (orig_img.shape[0], orig_img.shape[1]),
+                          interpolation=cv2.INTER_CUBIC)
+  out_file = os.path.join(artifacts_folder, "output.png")
+  cv2.imwrite(out_file, output_img)
+  print(f"Object detection results in {out_file}")
+
 def check_test_results(model_name, res, artifacts_folder):
   """ Check inference results """
   if 'in_top5' in models[model_name]['test']:
@@ -222,6 +248,9 @@ def check_test_results(model_name, res, artifacts_folder):
   elif 'save_od2' in models[model_name]['test']:
     if models[model_name]['test']['save_od2']:
       save_od2(model_name, res, artifacts_folder)
+  elif 'save_od_yolo' in models[model_name]['test']:
+    if models[model_name]['test']['save_od_yolo']:
+      save_od_yolo(model_name, res, artifacts_folder)
 
   return True
 
