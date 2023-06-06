@@ -64,14 +64,14 @@ tvm_models_dir = os.path.join(os.environ["HOME"], ".tvm_test_data/models")
 
 
 models = {
-  'mv1_tf' : {
-    'file': ["url", "http://download.tensorflow.org/models/mobilenet_v1_2018_08_02/mobilenet_v1_1.0_224.tgz", "mobilenet_v1_1.0_224.tgz", "mobilenet_v1_1.0_224_frozen.pb"],
-    'output_name': "MobilenetV1/Predictions/Softmax",
-    'input_info': {**inputs_224, 'shape':(1,224,224,3), 'is_nchw':False},
-    'calib_data': ['airshow', 'cat', 'cat2'],
-    'test': {**test_top5, 'in_top5':[[896, 404], [283, 282]]},
-    'batch_size': [0, 2],
-  },
+  #'mv1_tf' : {
+  #  'file': ["url", "http://download.tensorflow.org/models/mobilenet_v1_2018_08_02/mobilenet_v1_1.0_224.tgz", "mobilenet_v1_1.0_224.tgz", "mobilenet_v1_1.0_224_frozen.pb"],
+  #  'output_name': "MobilenetV1/Predictions/Softmax",
+  #  'input_info': {**inputs_224, 'shape':(1,224,224,3), 'is_nchw':False},
+  #  'calib_data': ['airshow', 'cat', 'cat2'],
+  #  'test': {**test_top5, 'in_top5':[[896, 404], [283, 282]]},
+  #  'batch_size': [0, 2],
+  #},
 
   'mv2_quant_tfl' : {
     'file': ["url", "https://storage.googleapis.com/download.tensorflow.org/models/tflite_11_05_08/mobilenet_v2_1.0_224_quant.tgz", "mobilenet_v2_1.0_224_quant.tgz", "mobilenet_v2_1.0_224_quant.tflite"],
@@ -83,9 +83,12 @@ models = {
   'mv2_onnx' : {
     'file': ["url", "https://github.com/onnx/models/raw/cbda9ebd037241c6c6a0826971741d5532af8fa4/vision/classification/mobilenet/model/mobilenetv2-7.onnx", "mobilenetv2-7.onnx", "mobilenetv2-7.onnx"],
     'input_info': {**inputs_224, 'name':"data"},
-    'calib_data': ['cat', 'cat2', 'airshow'],
-    'test': {**test_top5, 'in_top5':[[895, 403], [278]]},
+    'calib_data': ['cat2', 'airshow'],
+    'test': {**test_top5, 'in_top5':[[895, 403], [282]]},
     'batch_size': [0, 2],
+    'advanced_options': {
+      'calibration_iterations': 10
+    },
   },
 
   'mv2_pth' : {

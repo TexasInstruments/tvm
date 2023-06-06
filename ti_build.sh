@@ -24,18 +24,30 @@ if [ -z "${EVM_IP}" ]; then
 fi
 
 export PATH=${TVM_DEPS_PATH}/cmake-latest/bin:$PATH
+# returns "18.04" or "22.04"
+OS_VERSION=`cat /etc/os-release | grep VERSION_ID= | sed -e "s|VERSION_ID=\"||" | sed -e "s|\"||"`
+if [ "$OS_VERSION" == "18.04" ]; then
+    SSH_OPTIONS="-o StrictHostKeyChecking=no"
+else
+    SSH_OPTIONS="-o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa"
+fi
 
 
 function build_tvm {
 
     local BUILD_DIR=${WORKSPACE}/build
     local CLANG_VERSION=clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04
+    if [ "$OS_VERSION" == "18.04" ]; then
+        local LLVM_CONFIG=${TVM_DEPS_PATH}/${CLANG_VERSION}/bin/llvm-config
+    else
+        local LLVM_CONFIG=llvm-config
+    fi
 
     # Build TVM
     rm -rf $BUILD_DIR
     mkdir $BUILD_DIR
     cd $BUILD_DIR
-    cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=YES -DUSE_MICRO=ON -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_LLVM="${TVM_DEPS_PATH}/$CLANG_VERSION/bin/llvm-config --link-static" -DHIDE_PRIVATE_SYMBOLS=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/arm-tidl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} ..
+    cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=YES -DUSE_MICRO=ON -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_LLVM="${LLVM_CONFIG} --link-static" -DHIDE_PRIVATE_SYMBOLS=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/arm-tidl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} -DUSE_CGT7X_ROOT=${TVM_DEPS_PATH}/ti-cgt-c7000_3.1.0.LTS ..
     make -j$(nproc)
 
     # Create the python package
@@ -58,7 +70,7 @@ function build_aarch64_ge {
 
     # Initialize the ssh connection to EVM, save EVM into .known_hosts
     ssh-keygen -f "/home/sdomcbld/.ssh/known_hosts" -R "${EVM_IP}"
-    ssh -o "StrictHostKeyChecking no" root@${EVM_IP} 'uname -a'
+    ssh ${SSH_OPTIONS} root@${EVM_IP} 'uname -a'
     scp libtvm_runtime.so root@${EVM_IP}:
     cd -
 }
@@ -79,24 +91,28 @@ function test_tvm {
     python3 -m pip install -U pip
 
     # Install TVM in the venv
-    pip3 install ${WORKSPACE}/python/dist/tvm-*-cp36-cp36m-linux_x86_64.whl
+    pip3 install ${WORKSPACE}/python/dist/tvm-*-linux_x86_64.whl
 
     # Install packages required to compile models with TVM
     pip3 install graphviz
-    pip3 install tflite==2.4.0 onnx==1.9.0 mxnet==1.7.0.post2 gluoncv==0.8.0 torch==1.10.2 tensorflow==1.14.0 timm==0.5.4
-    pip3 install --no-deps torchvision==0.11.2
-
-    # Required for building docs
-    pip3 install sphinx
+    if [ "$OS_VERSION" == "18.04" ]; then
+        pip3 install tflite==2.4.0 onnx==1.9.0 torch==1.10.2 tensorflow==1.14.0 timm==0.5.4
+        pip3 install --no-deps torchvision==0.11.2
+        # Required for building docs
+        pip3 install sphinx
+    else
+        pip3 install tflite==2.10.0 onnx==1.14.0 torch==2.0.1 torchvision==0.15.2 timm==0.9.2
+        # Use sphinx from apt get, pip sphinx is broken
+    fi
 
     # Initialize the ssh connection to EVM, save EVM into .known_hosts
-    ssh -o "StrictHostKeyChecking no" root@${EVM_IP} 'uname -a'
+    ssh ${SSH_OPTIONS} root@${EVM_IP} 'uname -a'
 
     # Compile model on host, generate artifacts directory and copy to EVM
     ./relay_mul.py --compile --copy_to_evm ${EVM_IP}
 
     # Run model on EVM
-    ssh root@${EVM_IP} './relay_mul.py --inference'
+    ssh ${SSH_OPTIONS} root@${EVM_IP} './relay_mul.py --inference'
     local retval=$?
 
     if [ $retval -eq 0 ]
@@ -115,7 +131,7 @@ function test_tvm {
         return $retval
     fi
     scp -rq artifacts_relay_mul_c7x_target relay_mul root@${EVM_IP}:
-    ssh root@${EVM_IP} 'LD_LIBRARY_PATH=. ./relay_mul'
+    ssh ${SSH_OPTIONS} root@${EVM_IP} 'LD_LIBRARY_PATH=. ./relay_mul'
     if [ $retval -ne 0 ]
     then
         return $retval
@@ -124,7 +140,7 @@ function test_tvm {
     # Build docs
     local DOCS_DIR=${WORKSPACE}/ti-docs
     cd $DOCS_DIR
-    make clean; make
+    make clean; make >& sphinx.log
     if [ $retval -ne 0 ]
     then
         return $retval
@@ -139,7 +155,7 @@ function setup_tvm_tidl_tests_common {
     pip3 install pytest opencv-python
     mkdir -p ${WORKSPACE}/ti_tests_logs
     mkdir -p ${WORKSPACE}/tests/python/relay/ti_tests/testdata
-    cp ~/.tvm_test_data/data/* ${WORKSPACE}/tests/python/relay/ti_tests/testdata
+    cp ${TVM_DEPS_PATH}/testdata/* ${WORKSPACE}/tests/python/relay/ti_tests/testdata
 }
 
 function set_soc {
@@ -168,10 +184,10 @@ function setup_tvm_tidl_tests {
     ssh-keygen -f "/home/sdomcbld/.ssh/known_hosts" -R "${EVM_IP}"
     OTHER_IP=`host ${EVM_IP} | cut -d' ' -f4`
     ssh-keygen -f "/home/sdomcbld/.ssh/known_hosts" -R "${OTHER_IP}"
-    ssh -o "StrictHostKeyChecking no" root@${EVM_IP} 'uname -a'
+    ssh ${SSH_OPTIONS} root@${EVM_IP} 'uname -a'
 
     # Export workspace dir and mount it on EVM
-    ssh root@${EVM_IP} 'mkdir -p /home/sdomcbld; mount -t nfs sdomc-build4.dhcp.ti.com:/home/sdomcbld /home/sdomcbld'
+    ssh ${SSH_OPTIONS} root@${EVM_IP} 'mkdir -p /home/sdomcbld; mount -t nfs sdomc-build4.dhcp.ti.com:/home/sdomcbld /home/sdomcbld'
 }
 
 function run_tvm_tidl_unit_tests {
@@ -188,7 +204,7 @@ function run_tvm_tidl_unit_tests {
     fi
 
     # Run inference tests on EVM (export workspace dir and mount it on EVM)
-    ssh root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/unit_tests; python3 ./run_unit_tests.py --platform ${platform}"
+    ssh ${SSH_OPTIONS} root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/unit_tests; python3 ./run_unit_tests.py --platform ${platform}"
     retval=$?
 
     return $retval
@@ -215,14 +231,14 @@ function run_tvm_tidl_tests {
     fi
 
     # Run inference tests on EVM (export workspace dir and mount it on EVM)
-    ssh root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests; python3 ./test_infer.py --platform ${platform}"
+    ssh ${SSH_OPTIONS} root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests; python3 ./test_infer.py --platform ${platform}"
     retval=$?
     if [ $retval -ne 0 ]; then
         return $retval
     fi
 
     # Run dlr cpp tests on EVM
-    ssh root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/test_dlr_cpp; python3 ./test_dlr_cpp.py ${platform}"
+    ssh ${SSH_OPTIONS} root@${EVM_IP} "cd /home/sdomcbld/workspace/build-tvm-tidl/bem/neo-tvm/tests/python/relay/ti_tests/test_dlr_cpp; python3 ./test_dlr_cpp.py ${platform}"
     retval=$?
 
     return $retval

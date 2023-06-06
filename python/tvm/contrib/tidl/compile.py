@@ -87,7 +87,8 @@ def compile_relay(mod: tvm.IRModule,
     # Calibration options corresponding to quantized tensor bits
     advanced_options_default = {
       8 : {
-        'calibration_iterations' : 10,
+        #'calibration_iterations' : 10,
+        'calibration_iterations' : 3,
         # Following options take effect only at accuracy level 9, are ignored otherwise
         'activation_clipping' : 1,
         'weight_clipping' : 1,
