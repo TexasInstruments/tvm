@@ -37,7 +37,7 @@ from tvm.relay.expr_functor import ExprMutator
 from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
 from tvm.contrib import graph_executor
-from tvm.contrib.tidl.c7x import supported_platform
+from tvm.contrib.tidl.c7x import supported_platform, platform_map
 #import tvm.relay.op.contrib.tidl as tidl_annotation
 from .reduce_subgraph_size import reduce_subgraph_size
 from .visualize import visualize_relay_graph
@@ -2029,10 +2029,10 @@ class TIDLCompiler:
     ]
 
     def __init__(self, platform="J7", version="7.3", max_num_layers=225, max_total_memory_mb=448, **kwargs):
-        self.tidl_platform = platform
         self.version = version
         if supported_platform(platform): # and float(version) >= 7.3:
             # Set default values for J7, PSDK 7.0 or newer
+            self.tidl_platform = platform_map(platform)
             self.tidl_target = "tidl"
             self.tidl_tools_path = None
             self.artifacts_folder = None

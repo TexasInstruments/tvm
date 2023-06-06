@@ -20,8 +20,21 @@
 import tvm
 import logging
 
+
+platform_dict = {
+        "am68pa": "J7",
+        "am68a": "J721S2",
+        "am69a": "J721S2",
+        "J784S4": "J721S2",
+        "am62a": "AM62A"
+    }
+
 def supported_platform(platform): 
-    return platform in ["J7", "J721S2", "AM62A"]
+    return platform in ["J7", "J721S2", "AM62A"] or platform in platform_dict
+
+
+def platform_map(platform):
+    return platform_dict[platform] if platform in platform_dict else platform
 
 #----------------------------------------------------------------
 # Sets up custom Target and PassConfig contexts for C7x. 

@@ -20,6 +20,7 @@ unit_tests = [
 "multiply_large_last_dim.py",
 "multiply_2_dim_broadcast.py",
 "priorities.py",
+"SOC_envvar.py",
 ]
 
 failed_tests = []
