@@ -250,6 +250,9 @@ class TIDLJ7Module : public runtime::ModuleNode {
     env_string = getenv("TIDL_RT_MAX_PREEMPT_DELAY");
     if (env_string)
       params.maxPreEmptDelay = atof(env_string);
+    env_string = getenv("TIDL_RT_CORE_NUM");
+    if (env_string)
+      params.coreNum = atoi(env_string);
     TIDL_LOG << "#TVM# net size: " << info.net_data.size();
     TIDL_LOG << "#TVM# ioparams size: " << info.params_data.size();
 
@@ -656,6 +659,9 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
     env_string = getenv("TVM_RT_TRACE_SIZE");
     if (env_string)
       params.tvm_rt_trace_size = atoi(env_string);
+    env_string = getenv("TIDL_RT_CORE_NUM");
+    if (env_string)
+      params.coreNum = atoi(env_string);
     TIDL_LOG << "#TVM# c7x_deploy_mod size: " << params.deploy_mod_size;
 
     if (TVMRT_create_(&params, &tvmrt_handle) != 0) {
