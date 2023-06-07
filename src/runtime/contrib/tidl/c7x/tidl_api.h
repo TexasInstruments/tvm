@@ -40,6 +40,8 @@ typedef struct {
   uint64_t tvm_rt_trace_ptr;
   int32_t  tvm_rt_trace_size;
   int32_t  tvm_rt_trace_node;
+  int32_t  tvm_rt_target_priority;
+  int32_t  tvm_rt_core_num;
 } tvm_tidl_rt_info;
 
 //---------------------------------------------------------------------

@@ -154,6 +154,7 @@ EXTERN_C void* init_tidl_subgraph(void *network,
     createParams.traceLogLevel                 = rt_info->tidl_trace_log_level;
     createParams.traceWriteLevel               = rt_info->tidl_trace_write_level;
     createParams.maxPreEmptDelay               = rt_info->max_preempt_delay;
+    createParams.targetPriority                = rt_info->tvm_rt_target_priority;
   }
   createParams.reservedCtrl                  = 0;
 #if (HOST_EMULATION)
