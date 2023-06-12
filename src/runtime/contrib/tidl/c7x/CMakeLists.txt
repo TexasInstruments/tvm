@@ -26,11 +26,20 @@ file(GLOB ivision_path_tmp ${USE_TIDL_PSDKR_PATH}/ivision)
 file(GLOB pdk_path_tmp ${USE_TIDL_PSDKR_PATH}/pdk*)
 
 list(LENGTH cgt7x_root_tmp cgt7x_root_len)
+if (${cgt7x_root_len} EQUAL 0)
+  file(GLOB cgt7x_root_tmp ${USE_CGT7X_ROOT})
+endif()
+
+list(LENGTH cgt7x_root_tmp cgt7x_root_len)
 list(LENGTH ivision_path_tmp ivision_path_len)
 list(LENGTH pdk_path_tmp pdk_path_len)
 
-if ((${cgt7x_root_len} EQUAL 0) OR (${pdk_path_len} EQUAL 0) OR (${pdk_path_len} EQUAL 0))
-  message(FATAL_ERROR "Cannot find ti-cgt-c7000_*, ivision, pdk* in ${USE_TIDL_PSDKR_PATH}")
+if (${cgt7x_root_len} EQUAL 0)
+  message(FATAL_ERROR "Cannot find C7000 code generation tools in ${USE_TIDL_PSDKR_PATH} or ${USE_CGT7X_ROOT}")
+endif()
+
+if ((${pdk_path_len} EQUAL 0) OR (${pdk_path_len} EQUAL 0))
+  message(FATAL_ERROR "Cannot find ivision, pdk* in ${USE_TIDL_PSDKR_PATH}")
 endif()
 
 list(GET cgt7x_root_tmp 0 cgt7x_root)
@@ -45,16 +54,16 @@ list(APPEND build_env_paths "PDK_PATH=${pdk_path}")
 message("-- Build with contrib.tidl.c7x libs, path= ${build_env_paths}")
 
 add_custom_target(tidl_c7x_libs
-                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tvm_crt -j$(nproc)
-                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.dsp_syms -j$(nproc)
-                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tidl_api -j$(nproc)
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tvm_crt
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.dsp_syms 
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tidl_api 
                   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                  )
 
 add_custom_target(tidl_c7x_libs_mv7504
-                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.tvm_crt -j$(nproc)
-                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.dsp_syms -j$(nproc)
-                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.tidl_api -j$(nproc)
+                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.tvm_crt 
+                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.dsp_syms 
+                 COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.tidl_api 
                  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                 )
 
