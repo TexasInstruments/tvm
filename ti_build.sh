@@ -188,6 +188,7 @@ function setup_tvm_tidl_tests {
 
     # Export workspace dir and mount it on EVM
     ssh ${SSH_OPTIONS} root@${EVM_IP} 'mkdir -p /home/sdomcbld; mount -t nfs sdomc-build4.dhcp.ti.com:/home/sdomcbld /home/sdomcbld'
+    ssh ${SSH_OPTIONS} root@${EVM_IP} 'mkdir -p /cgnas; mount -t nfs sdomc-build0.hou.asp.ti.com:/cgnas /cgnas'
 }
 
 function run_tvm_tidl_unit_tests {

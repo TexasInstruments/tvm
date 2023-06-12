@@ -31,6 +31,15 @@ inputs_224 = {
   'scale': [0.0078125, 0.0078125, 0.0078125],
 }
 
+inputs_npy = {
+  'name': "input",
+  'is_nchw': True,
+  'dtype': "float32",
+  'resize_wh': None,
+  'crop_wh': None,
+  'mean': None,
+  'scale': None,
+}
 
 test_top5 = {
   'test_data' : ['airshow', 'cat'],
@@ -58,6 +67,10 @@ test_od_no_scores = {
 test_od_yolo = {
   'test_data' : ['street_small'],
   'save_od_yolo' : True,
+}
+
+test_save_npy = {
+  'save_npy' : True,
 }
 
 tvm_models_dir = os.path.join(os.environ["HOME"], ".tvm_test_data/models")
@@ -145,6 +158,20 @@ models = {
     'advanced_options': {
       'object_detection:meta_layers_names_list': "/cgnas/edgeai-yolov5/pretrained_models/models/keypoint/coco/edgeai-yolov5/yolov5s6_pose_640_ti_lite_metaarch.prototxt",
       'object_detection:meta_arch_type': 6
+    },
+  },
+
+  'lidar_od_onnx' : {
+    'file': ["file", "/cgnas/edgeai-modelzoo/models/vision/detection_3d/kitti/mmdet3d/lidar_point_pillars_10k_496x432_3class_qat-p2.onnx", "lidar_point_pillars_10k_496x432_3class_qat-p2", "lidar_point_pillars_10k_496x432_3class_qat-p2"],
+    'input_info': [ {**inputs_npy, 'name':"x.3", 'shape':(1,10,32,10000), 'calib_input':'/cgnas/tvm/deps/testdata/point_pillars/pp.npy'},
+                    {**inputs_npy, 'name':"data.1", 'shape':(1,64,214272), 'calib_input':'/cgnas/tvm/deps/testdata/point_pillars/data.npy'},
+                    {**inputs_npy, 'name':"coors", 'shape':(1,64,10000), 'calib_input':'/cgnas/tvm/deps/testdata/point_pillars/coors.npy'}, ],
+    'test': {**test_save_npy, 'inputs': None},
+    'tidl_bits' : 8,
+    'advanced_options': {
+      'object_detection:meta_layers_names_list': "/cgnas/edgeai-modelzoo/models/vision/detection_3d/kitti/mmdet3d/lidar_point_pillars_10k_496x432_3class.prototxt",
+      'object_detection:meta_arch_type': 7,
+      'calibration_iterations': 1
     },
   },
 }
@@ -250,7 +277,8 @@ def get_relay_model(model_name : str, batch_size:int=0):
   def from_onnx(model_file, model_name):
     import onnx
 
-    mod, params = relay.frontend.from_onnx(onnx.load(model_file), shape={input_node : input_shape})
+    #mod, params = relay.frontend.from_onnx(onnx.load(model_file), shape={input_node : input_shape})
+    mod, params = relay.frontend.from_onnx(onnx.load(model_file), shape=inputs_shape_dict)
     print(f"ONNX model {model_name} imported to Relay IR.")
     return mod, params
 
@@ -271,10 +299,19 @@ def get_relay_model(model_name : str, batch_size:int=0):
   model_file = get_model_file(model_name)
 
   # Convert the model to Relay
-  input_node = models[model_name]['input_info']['name']
-  input_shape = models[model_name]['input_info']['shape']
-  if (batch_size != 0):
-    input_shape = (batch_size, *input_shape[1:])
+  inputs = models[model_name]['input_info']
+  if not isinstance(inputs, list):
+    inputs = [inputs]
+  inputs_shape_dict = {}
+  inputs_dtype_dict = {}
+  for inp in inputs:
+    input_node = inp['name']
+    input_shape = inp['shape']
+    input_dtype = inp['dtype']
+    if (batch_size != 0):
+      input_shape = (batch_size, *input_shape[1:])
+    inputs_shape_dict[input_node] = input_shape
+    inputs_dtype_dict[input_node] = input_dtype
 
   advanced_options = models[model_name].get('advanced_options')
   mod, params = None, None

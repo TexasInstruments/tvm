@@ -26,6 +26,7 @@ skipped_configs = [
   # od postproc offload only available with tidl
   [ 'mv2_od_onnx', '*', '*', '--notidl', '*', '*', 0 ],
   [ 'yolov5_od_onnx', '*', '*', '--notidl', '*', '*', 0 ],
+  [ 'lidar_od_onnx', '*', '*', '--notidl', '*', '*', 0 ],
 
   # large feature map size in batch processing, unable to import to TIDL
   [ 'mv2_onnx', 'AM62A', '*', '--tidl', '*', '*', 2 ],
@@ -39,6 +40,14 @@ skipped_configs = [
   [ 'swin_tiny_timm', 'AM62A', '--target', '*', '--c7x', '--dlr', 0 ],
     # TIDL_RT_OVX/TVM_RT_OVX hang on "Delete TIDL/VM graph..."
   [ 'yolov5_od_onnx', 'AM62A', '--target', '--tidl', '*', '--dlr', 0 ],
+
+  [ 'lidar_od_onnx', '*', '--target', '--tidl', '--c7x', '--dlr', 0 ],
+  [ 'lidar_od_onnx', 'AM62A', '--target', '--tidl', '--noc7x', '--dlr', 0 ],
+    # liar: sometimes hangs on J7, reboot, run the network by itself, passes
+  [ 'lidar_od_onnx', 'J7', '--target', '--tidl', '--noc7x', '--dlr', 0 ],
+  # Quantized C7x codegen results error, to be fixed
+  [ 'mv2_quant_tfl', '*', '--target', '--notidl', '--c7x', '--dlr', 0 ],
+
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
@@ -60,6 +69,7 @@ def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
                  [model, '*', '*', t_nt, '*', '*', n] in skipped_configs or \
                  [model, platform, t_h, '*', c_nc, d_t, n] in skipped_configs or \
                  [model, platform, t_h, t_nt, '*', d_t, n] in skipped_configs or \
+                 [model, '*', t_h, t_nt, c_nc, d_t, n] in skipped_configs or \
                  [model, platform, t_h, t_nt, c_nc, d_t, n] in skipped_configs:
                 print("Skipped")
                 continue

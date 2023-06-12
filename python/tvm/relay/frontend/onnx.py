@@ -2915,7 +2915,10 @@ class ScatterElements(OnnxOpConverter):
     @classmethod
     def _impl_v11(cls, inputs, attr, params):
         axis = cls._args_check(inputs, attr)
-
+        # Begin TI: fix bug for single return from _args_check
+        if isinstance(axis, list):
+            axis = axis[0]
+        # End TI
         return _op.scatter_elements(inputs[0], inputs[1], inputs[2], axis, "update")
 
     @classmethod

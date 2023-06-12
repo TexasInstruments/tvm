@@ -33,7 +33,7 @@ testdata = {
   },
   'street_small' : {
     'file': ["url", "https://github.com/dmlc/web-data/blob/master/gluoncv/detection/street_small.jpg?raw=true", "street_small.jpg"]
-  }
+  },
 }
 
 colors = [ (255, 0, 0), (0, 255, 0), (0, 0, 255), (128, 128, 0), (128, 0, 128), (0, 128, 128),
@@ -44,6 +44,9 @@ colors = [ (255, 0, 0), (0, 255, 0), (0, 0, 255), (128, 128, 0), (128, 0, 128), 
 def get_calibdata_file(testdata_name):
   """ Return the testdata file, given the model name """
   # workaround SSL: CERTIFICATE_VERIFY_FAILED
+  if not testdata_name in testdata:
+    return testdata_name
+
   import ssl
   ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -56,6 +59,8 @@ def get_calibdata_file(testdata_name):
 
 def get_testdata_file(testdata_name):
   """ Return the local testdata file, given the model name """
+  if not testdata_name in testdata:
+    return testdata_name
   if testdata[testdata_name]['file'][0] == "url":
     _, url, save_name = testdata[testdata_name]['file']
     return f"testdata/{save_name}"
@@ -91,8 +96,10 @@ def load_image(img_file, resize_wh, crop_wh, mean, scale, needs_nchw, needs_quan
 
 
 def get_input_from_files(model_name, files, batch_size=0):
+  import numpy as np
   input_name = models[model_name]['input_info']['name']
   batch      = models[model_name]['input_info']['shape'][0] if batch_size == 0 else batch_size
+  shape      = models[model_name]['input_info']['shape']
   resize_wh  = models[model_name]['input_info']['resize_wh']
   crop_wh    = models[model_name]['input_info']['crop_wh']
   mean       = models[model_name]['input_info']['mean']
@@ -107,19 +114,51 @@ def get_input_from_files(model_name, files, batch_size=0):
     batch_images = []
     for i in range(batch):
       f = files[ (j * batch  + i) % num_files]
-      batch_images.append(load_image(f, resize_wh, crop_wh, mean, scale, is_nchw, is_quant))
+      if ".npy" in f:
+        batch_images.append(np.load(f).reshape(shape))
+      else:
+        batch_images.append(load_image(f, resize_wh, crop_wh, mean, scale, is_nchw, is_quant))
     inputs.append({input_name : np.concatenate(batch_images)})
   return inputs
 
 
+def get_multi_inputs_from_files(model_name, files, batch_size=0):
+  multi_inputs = {}
+  for i in range(len(models[model_name]['input_info'])):
+    input_name = models[model_name]['input_info'][i]['name']
+    batch      = models[model_name]['input_info'][i]['shape'][0] if batch_size == 0 else batch_size
+    shape      = models[model_name]['input_info'][i]['shape']
+    resize_wh  = models[model_name]['input_info'][i]['resize_wh']
+    crop_wh    = models[model_name]['input_info'][i]['crop_wh']
+    mean       = models[model_name]['input_info'][i]['mean']
+    scale      = models[model_name]['input_info'][i]['scale']
+    is_nchw    = models[model_name]['input_info'][i]['is_nchw']
+    channels   = models[model_name]['input_info'][i]['shape'][1 if is_nchw else 3]
+    is_quant   = models[model_name]['input_info'][i]['dtype'] == "uint8"
+
+    num_batches = 1
+    file = files[input_name]
+    if ".npy" in file:
+      npy_data = np.load(file).reshape(shape)
+      multi_inputs.update({input_name: npy_data})
+    else:
+      img_data = load_image(file, resize_wh, crop_wh, mean, scale, is_nchw, is_quant)
+      multi_inputs.update({input_name: img_data})
+  return [ multi_inputs ]
+
 def get_calib_inputs(model_name, batch_size=0):
   """ Return pre-processed calibration data"""
+  if isinstance(models[model_name]['input_info'], list):
+    calib_files = {input['name']: get_calibdata_file(input['calib_input']) for input in models[model_name]['input_info']}
+    return get_multi_inputs_from_files(model_name, calib_files, batch_size)
   calib_files = [get_calibdata_file(x) for x in models[model_name]['calib_data']]
   return get_input_from_files(model_name, calib_files, batch_size)
 
 
 def get_test_inputs(model_name, batch_size=0):
   """ Return pre-processed test data"""
+  if isinstance(models[model_name]['input_info'], list):
+    return get_calib_inputs(model_name, batch_size)
   test_files = [get_testdata_file(x) for x in models[model_name]['test']['test_data']]
   return get_input_from_files(model_name, test_files, batch_size)
 
@@ -229,6 +268,13 @@ def save_od_yolo(model_name, res, artifacts_folder):
   cv2.imwrite(out_file, output_img)
   print(f"Object detection results in {out_file}")
 
+def save_npy(model_name, res, artifacts_folder):
+  """ Save raw net output """
+  import numpy as np
+  out_file = os.path.join(artifacts_folder, "output.npy")
+  np.save(out_file, res)
+  print(f"Object detection results in {out_file}")
+
 def check_test_results(model_name, res, artifacts_folder):
   """ Check inference results """
   if 'in_top5' in models[model_name]['test']:
@@ -251,6 +297,9 @@ def check_test_results(model_name, res, artifacts_folder):
   elif 'save_od_yolo' in models[model_name]['test']:
     if models[model_name]['test']['save_od_yolo']:
       save_od_yolo(model_name, res, artifacts_folder)
+  elif 'save_npy' in models[model_name]['test']:
+    if models[model_name]['test']['save_npy']:
+      save_npy(model_name, res, artifacts_folder)
 
   return True
 

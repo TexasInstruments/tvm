@@ -26,6 +26,7 @@ skipped_configs = [
   # od postproc offload only available with tidl
   [ 'mv2_od_onnx', '*', '*', '--notidl', '*', 0 ],
   [ 'yolov5_od_onnx', '*', '*', '--notidl', '*', 0 ],
+  [ 'lidar_od_onnx', '*', '*', '--notidl', '*', 0 ],
   # large feature map size in batch processing, unable to import to TIDL
   [ 'mv2_onnx', 'AM62A', '*', '--tidl', '*', 2 ],
   [ 'mv2_pth', 'AM62A', '*', '--tidl', '*', 2 ],
