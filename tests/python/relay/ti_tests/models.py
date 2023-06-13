@@ -88,15 +88,6 @@ models = {
     'batch_size': [0, 2],
   },
 
-  'mv3_large_mxnet' : {
-    'file': ["mxnet", "mobilenetv3_large"],
-    'input_info': {**inputs_224, 'name':"data"},
-    'calib_data': ['cat', 'cat2', 'airshow'],
-    'test': test_top5,
-    'tidl_bits' : 16,
-    #'batch_size': [0, 2], # pending TIDL import bug fix on multi-consumers
-  },
-
   'mv2_pth' : {
     'file': ["torchvision", "mobilenet_v2"],
     'input_info': {**inputs_224, 'name':"data", 'mean':[123.675,116.28,103.53], 'scale':[0.017125,0.017507,0.017429]},
@@ -114,18 +105,18 @@ models = {
     'test': test_seg,
   },
 
-  'yolo3_mv1_mxnet' : {
-    'file': ["mxnet", "yolo3_mobilenet1.0_coco"],
-    'input_info': {**inputs_224, 'name':"data", 'shape':(1,3,416,416), 'is_nchw':True,
-                   'resize_wh':[416,416], 'crop_wh':[416,416]},
-    'calib_data': ['street_small'],
-    'test': test_od,
-  },
-
   'swin_tiny_timm' : {
     'file': ["timm", "swin_tiny_patch4_window7_224"],
     'input_info': {**inputs_224, 'name':"input.1"},
     'calib_data': ['cat', 'cat2'],
+    'test': test_top5,
+  },
+
+  'mv3_large_timm' : {
+    'file': ["timm", "mobilenetv3_large_100"],
+    'input_info': {**inputs_224, 'name':"input.1"},
+    'tidl_bits' : 16,
+    'calib_data': ['cat', 'cat2', 'airshow'],
     'test': test_top5,
   },
 
