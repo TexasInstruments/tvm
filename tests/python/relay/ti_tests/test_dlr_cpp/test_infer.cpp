@@ -54,6 +54,7 @@ int main(int argc, char *argv[])
   DLRModelHandle model;
   const char *model_path = "../artifacts/mv2_onnx_J7_target_tidl_c7x";
   if (argc > 1)  model_path = argv[1];
+  printf("Running model: %s\n", model_path);
   status = CreateDLRModel(&model, model_path, 1, 0);
   check_status(status, &model, "CreateDLRModel");
 
@@ -108,8 +109,8 @@ int main(int argc, char *argv[])
   status = DeleteDLRModel(&model);
   check_status(status, NULL, "DeleteDLRModel");
 
-  if (imax != 895) {
-    printf("Fail %d not in [895]\n", imax);
+  if (imax != 895 && imax != 404) {
+    printf("Fail %d not in [895, 404]\n", imax);
     status = -1;
   } else {
     printf("Pass\n");

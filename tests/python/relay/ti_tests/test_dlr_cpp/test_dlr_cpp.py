@@ -20,17 +20,18 @@ import os
 import sys
 import subprocess
 
+platform = "J7" if len(sys.argv) <= 1 else sys.argv[1]
+
 try:
-  subprocess.run(["sh", "-v", "./native_compile.sh"], check=True)
+  subprocess.run(["sh", "-v", "./native_compile.sh", f"{platform}"], check=True)
 except:
   print("Failed: test_dlr_cpp compilation")
   sys.exit(1)
 
 try:
   os.environ['LD_LIBRARY_PATH'] = "/usr/lib/python3.8/site-packages/dlr"
-  platform = "J7" if len(sys.argv) <= 1 else sys.argv[1]
   artifacts_dir = f"../artifacts/mv2_onnx_{platform}_target_tidl_c7x"
-  subprocess.run(["./native.out", artifacts_dir], check=True)
+  subprocess.run([f"./native_{platform}.out", artifacts_dir], check=True)
 except:
   print("Failed: test_dlr_cpp inference")
   sys.exit(1)
