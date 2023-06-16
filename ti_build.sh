@@ -155,7 +155,7 @@ function setup_tvm_tidl_tests_common {
     pip3 install pytest opencv-python
     mkdir -p ${WORKSPACE}/ti_tests_logs
     mkdir -p ${WORKSPACE}/tests/python/relay/ti_tests/testdata
-    cp ${TVM_DEPS_PATH}/testdata/* ${WORKSPACE}/tests/python/relay/ti_tests/testdata
+    cp -r ${TVM_DEPS_PATH}/testdata/* ${WORKSPACE}/tests/python/relay/ti_tests/testdata
 }
 
 function set_soc {
