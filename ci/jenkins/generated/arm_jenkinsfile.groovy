@@ -60,7 +60,7 @@
 // 'python3 jenkins/generate.py'
 // Note: This timestamp is here to ensure that updates to the Jenkinsfile are
 // always rebased on main before merging:
-// Generated at 2023-02-24T10:59:48.308906
+// Generated at 2023-04-25T11:40:51.453275
 
 import org.jenkinsci.plugins.pipeline.modeldefinition.Utils
 // These are set at runtime from data in ci/jenkins/docker-images.yml, update
@@ -149,8 +149,9 @@ def init_git() {
     // Only set upstream_revision to HEAD and skip merging to avoid a race with another commit merged to a branch.
     update_upstream_revision("HEAD")
   } else {
-    // This is PR branch so merge with latest upstream.
-    merge_with_upstream()
+    // This is PR branch so merge with latest main.
+    // merge_with_main()
+    update_upstream_revision("HEAD")
   }
 
   sh(
@@ -519,7 +520,7 @@ def make_cpp_tests(image, build_dir) {
 
 def cmake_build(image, path, make_flag) {
   sh (
-    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod",
+    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --build-dir ${path}",
     label: 'Run cmake build',
   )
 }
@@ -556,7 +557,7 @@ def build() {
         make_standalone_crt(ci_arm, 'build')
         make_cpp_tests(ci_arm, 'build')
         sh(
-            script: "./${jenkins_scripts_root}/s3.py --action upload --bucket ${s3_bucket} --prefix ${s3_prefix}/arm --items build/libtvm.so build/libvta_fsim.so build/libtvm_runtime.so build/config.cmake build/cpptest build/build.ninja build/CMakeFiles/rules.ninja build/crttest build/standalone_crt build/build.ninja",
+            script: "./${jenkins_scripts_root}/s3.py --action upload --bucket ${s3_bucket} --prefix ${s3_prefix}/arm --items build/libtvm.so build/libvta_fsim.so build/libtvm_runtime.so build/config.cmake build/cpptest build/build.ninja build/CMakeFiles/rules.ninja build/crttest build/standalone_crt build/build.ninja build/microtvm_template_projects",
             label: 'Upload artifacts to S3',
           )
           }

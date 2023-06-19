@@ -60,7 +60,7 @@
 // 'python3 jenkins/generate.py'
 // Note: This timestamp is here to ensure that updates to the Jenkinsfile are
 // always rebased on main before merging:
-// Generated at 2023-02-24T12:50:23.899457
+// Generated at 2023-04-26T17:36:59.403201
 
 import org.jenkinsci.plugins.pipeline.modeldefinition.Utils
 // These are set at runtime from data in ci/jenkins/docker-images.yml, update
@@ -149,8 +149,9 @@ def init_git() {
     // Only set upstream_revision to HEAD and skip merging to avoid a race with another commit merged to a branch.
     update_upstream_revision("HEAD")
   } else {
-    // This is PR branch so merge with latest upstream.
-    merge_with_upstream()
+    // This is PR branch so merge with latest main.
+    // merge_with_main()
+    update_upstream_revision("HEAD")
   }
 
   sh(
@@ -519,7 +520,7 @@ def make_cpp_tests(image, build_dir) {
 
 def cmake_build(image, path, make_flag) {
   sh (
-    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod",
+    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --build-dir ${path}",
     label: 'Run cmake build',
   )
 }
@@ -589,7 +590,7 @@ def build_image(image_name) {
     returnStdout: true,
     script: 'git log -1 --format=\'%h\''
   ).trim()
-  def full_name = "${image_name}:${env.BRANCH_NAME.replace('/', '-')}-${hash}-${env.BUILD_NUMBER}"
+  def full_name = "${image_name}:${env.BRANCH_NAME}-${hash}-${env.BUILD_NUMBER}".replace('/', '_')
   sh(
     script: "${docker_build} ${image_name} --spec ${full_name}",
     label: 'Build docker image'
@@ -845,7 +846,7 @@ def deploy() {
 
 
 
-if (rebuild_docker_images) {
+if (false && rebuild_docker_images) {
   stage('Docker Image Build') {
     parallel(
       'ci_arm': {

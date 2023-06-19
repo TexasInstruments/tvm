@@ -60,7 +60,7 @@
 // 'python3 jenkins/generate.py'
 // Note: This timestamp is here to ensure that updates to the Jenkinsfile are
 // always rebased on main before merging:
-// Generated at 2023-02-24T10:59:48.295360
+// Generated at 2023-04-25T11:40:51.612532
 
 import org.jenkinsci.plugins.pipeline.modeldefinition.Utils
 // These are set at runtime from data in ci/jenkins/docker-images.yml, update
@@ -149,8 +149,9 @@ def init_git() {
     // Only set upstream_revision to HEAD and skip merging to avoid a race with another commit merged to a branch.
     update_upstream_revision("HEAD")
   } else {
-    // This is PR branch so merge with latest upstream.
-    merge_with_upstream()
+    // This is PR branch so merge with latest main.
+    // merge_with_main()
+    update_upstream_revision("HEAD")
   }
 
   sh(
@@ -519,7 +520,7 @@ def make_cpp_tests(image, build_dir) {
 
 def cmake_build(image, path, make_flag) {
   sh (
-    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod",
+    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --build-dir ${path}",
     label: 'Run cmake build',
   )
 }

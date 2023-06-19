@@ -22,7 +22,7 @@ set -o pipefail
 
 repo_url="https://github.com/Arm-software/ethos-n-driver-stack"
 repo_dir="ethosn-driver"
-repo_revision="22.08"
+repo_revision="22.11"
 install_path="/opt/arm/$repo_dir"
 
 tmpdir=$(mktemp -d)
@@ -47,7 +47,8 @@ apt-install-and-clear -y \
     python-dev \
     python3 \
     scons \
-    wget
+    wget \
+    openssh-client
 
 cd "$tmpdir"
 git clone --branch "$repo_revision" "$repo_url" "$repo_dir"

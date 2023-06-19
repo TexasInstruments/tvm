@@ -26,6 +26,7 @@ from distutils.version import LooseVersion
 
 import os
 import tempfile
+import typing
 from packaging import version as package_version
 import pytest
 import numpy as np
@@ -60,6 +61,7 @@ from tensorflow.python.ops import image_ops
 from tensorflow.python.ops import gen_array_ops
 from tensorflow.python.ops import nn_impl
 from tensorflow.python.ops import variables
+from tensorflow import raw_ops
 
 try:
     from tensorflow import lite as interpreter_wrapper
@@ -292,11 +294,11 @@ def run_tflite_graph(tflite_model_buf, input_data):
 
 
 def compare_tflite_with_tvm(
-    in_data,
-    in_name,
-    input_tensors,
-    output_tensors,
-    init_global_variables=False,
+    in_data: typing.List[np.ndarray],
+    in_name: typing.List[str],
+    input_tensors: typing.List,
+    output_tensors: typing.List,
+    init_global_variables: bool = False,
     out_names=None,
     quantized=False,
     input_range=None,
@@ -318,6 +320,13 @@ def compare_tflite_with_tvm(
             sess.run(variables.global_variables_initializer())
         # convert to tflite model
         converter = tf.lite.TFLiteConverter.from_session(sess, input_tensors, output_tensors)
+
+        if len(input_tensors) > 1:
+            if len(input_tensors[0].shape) <= 4 and len(input_tensors[1].shape) <= 4:
+                converter._experimental_disable_batchmatmul_unfold = True
+            else:
+                converter._experimental_disable_batchmatmul_unfold = False
+
         converter.experimental_new_converter = experimental_new_converter
         if quantized:
             if int_quant_dtype == tf.int16:
@@ -733,24 +742,72 @@ def test_forward_cast():
 #######################################################################
 # Batch Mat Mul
 # ----
-def _test_batch_matmul(a_shape, b_shape, dtype, adjoint_a=False, adjoint_b=False):
+def _test_batch_matmul(
+    a_shape, b_shape, dtype, out_dtype, adjoint_a=False, adjoint_b=False, quantized=False
+):
     with tf.Graph().as_default():
         a = array_ops.placeholder(shape=a_shape, dtype=dtype, name="A")
         b = array_ops.placeholder(shape=b_shape, dtype=dtype, name="B")
-        result = math_ops.matmul(a, b, adjoint_a=adjoint_a, adjoint_b=adjoint_b, name="batchmatmul")
+        print(tf.__version__)
+
+        result = raw_ops.BatchMatMulV3(
+            x=a, y=b, Tout=out_dtype, adj_x=adjoint_a, adj_y=adjoint_b, name="batchmatmul"
+        )
+        input_range = {"A": (-100, 100), "B": (-100, 100)} if quantized else None
 
         a_np = np.random.uniform(high=5.0, size=a_shape).astype(dtype)
         b_np = np.random.uniform(high=5.0, size=b_shape).astype(dtype)
-        compare_tflite_with_tvm([a_np, b_np], [a.name, b.name], [a, b], [result])
+        compare_tflite_with_tvm(
+            [a_np, b_np],
+            [a.name, b.name],
+            [a, b],
+            [result],
+            experimental_new_converter=True,
+            quantized=quantized,
+            input_range=input_range,
+        )
 
 
-def test_forward_batch_matmul():
+@pytest.mark.parametrize("config", [("int8", "int32", True), ("float32", "float32", False)])
+def test_forward_batch_matmul(config):
     """BATCH_MAT_MUL"""
-    _test_batch_matmul((3, 5, 4), (3, 4, 5), "float32")
-    _test_batch_matmul((3, 5, 4), (3, 4, 5), "float32", True, True)
-    _test_batch_matmul((3, 5, 4), (3, 5, 4), "float32", True, False)
-    _test_batch_matmul((3, 5, 4), (3, 5, 4), "float32", False, True)
-    _test_batch_matmul((2, 3, 4, 5, 6), (2, 3, 4, 6, 5), "float32")
+    _test_batch_matmul(
+        (3, 5, 4), (3, 4, 5), dtype=config[0], out_dtype=config[1], quantized=config[2]
+    )
+    _test_batch_matmul(
+        (3, 5, 4),
+        (3, 4, 5),
+        dtype=config[0],
+        out_dtype=config[1],
+        adjoint_a=True,
+        adjoint_b=True,
+        quantized=config[2],
+    )
+    _test_batch_matmul(
+        (3, 5, 4),
+        (3, 5, 4),
+        dtype=config[0],
+        out_dtype=config[1],
+        adjoint_a=True,
+        adjoint_b=False,
+        quantized=config[2],
+    )
+    _test_batch_matmul(
+        (3, 5, 4),
+        (3, 5, 4),
+        dtype=config[0],
+        out_dtype=config[1],
+        adjoint_a=False,
+        adjoint_b=True,
+        quantized=config[2],
+    )
+    _test_batch_matmul(
+        (3, 4, 5, 6), (3, 4, 6, 5), dtype=config[0], out_dtype=config[1], quantized=config[2]
+    )
+    # BatchMatMul doesn't support larger than 4D tensors
+    # _test_batch_matmul(
+    #    (2, 3, 4, 5, 6), (2, 3, 4, 6, 5), dtype=config[0], out_dtype=config[1], quantized=config[2]
+    # )
 
 
 #######################################################################
@@ -5301,140 +5358,32 @@ def test_structure_and_span():
     _test_reshape_span()
 
 
-#######################################################################
-# Main
-# ----
+class TestConv2d:
+    """Import Conv2d operator from TFLite, build with Relay and test."""
+
+    input_shape, kernel_shape, padding = tvm.testing.parameters(
+        ((1, 128, 256, 6), (5, 5, 6, 10), "SAME"),
+        ((1, 128, 256, 6), (5, 5, 6, 10), "VALID"),
+        # conv2d_group cases
+        ((1, 30, 40, 6), (5, 5, 1, 6), "SAME"),
+        ((1, 30, 40, 6), (5, 5, 1, 6), "VALID"),
+    )
+
+    def test_conv2d(self, input_shape: tuple, kernel_shape: tuple, padding: str):
+        dtype = tf.float32
+        kernel_in = np.ones(kernel_shape)
+        with tf.Graph().as_default():
+            x = array_ops.placeholder(shape=input_shape, dtype=dtype.name, name="input")
+            kernel = tf.constant(kernel_in, dtype=dtype, name="filter_weight")
+            out = tf.nn.conv2d(x, kernel, strides=[1, 1, 1, 1], padding=padding, name="conv2d")
+            input_data = np.random.randn(*input_shape).astype(dtype.name)
+            compare_tflite_with_tvm(
+                [input_data],
+                ["input"],
+                [x],
+                [out],
+            )
+
+
 if __name__ == "__main__":
-    # BatchToSpaceND
-    test_forward_batch_to_space_nd()
-
-    # SpaceToBatchND
-    test_forward_space_to_batch_nd()
-
-    # Split
-    test_forward_split()
-
-    # Transpose
-    test_forward_transpose()
-
-    # Cast
-    test_forward_cast()
-
-    # BatchMatMul
-    test_forward_batch_matmul()
-
-    # Tile
-    test_forward_tile()
-
-    # Query
-    test_forward_shape()
-
-    # Transforms
-    test_forward_concatenation()
-    test_forward_pad()
-    test_forward_pack()
-    test_forward_unpack()
-    test_forward_reshape()
-    test_all_resize()
-    test_forward_range()
-    test_forward_squeeze()
-    test_forward_slice()
-    test_forward_topk()
-    test_forward_gather()
-    test_forward_gather_nd()
-    test_forward_stridedslice()
-    test_forward_depthtospace()
-    test_forward_spacetodepth()
-    test_forward_reverse_sequence()
-    test_forward_sparse_to_dense()
-    test_forward_select()
-    test_forward_quantize_dequantize()
-    test_forward_arg_min_max()
-    test_forward_expand_dims()
-    test_forward_reverse_v2()
-    test_forward_matrix_set_diag()
-    test_forward_matrix_diag()
-
-    # NN
-    test_forward_convolution()
-    test_forward_transpose_conv()
-    test_forward_logistic()
-    test_forward_pooling()
-    test_forward_l2_pool2d()
-    test_forward_softmax()
-    test_forward_tanh()
-    test_forward_relu()
-    test_forward_relu6()
-    test_forward_leaky_relu()
-    test_forward_relu_n1_to_1()
-    test_forward_log_softmax()
-    test_forward_fully_connected()
-    test_forward_l2_normalization()
-    test_forward_local_response_normalization()
-    test_forward_prelu()
-    test_forward_unidirectional_sequence_lstm()
-
-    # Elemwise
-    test_all_elemwise()
-    test_forward_add_n()
-
-    # Unary elemwise
-    test_all_unary_elemwise()
-    # Zeros Like
-    test_forward_zeros_like()
-
-    # Fill
-    test_forward_fill()
-
-    # Reduce
-    test_all_reduce()
-
-    # Logical
-    test_all_logical()
-
-    # Detection_PostProcess
-    test_detection_postprocess()
-
-    # NonMaxSuppressionV5
-    test_forward_nms_v5()
-
-    # Overwrite Converter
-    test_custom_op_converter()
-
-    # test structural_equal and span information
-    test_structure_and_span()
-
-    # End to End
-    test_forward_mobilenet_v1()
-    test_forward_mobilenet_v2()
-    test_forward_mobilenet_v3()
-    test_forward_inception_v3_net()
-    test_forward_inception_v4_net()
-    test_forward_inception_v4_net_batched()
-    test_forward_coco_ssd_mobilenet_v1()
-    test_forward_mediapipe_hand_landmark()
-
-    # End to End Sparse models
-    test_forward_sparse_mobilenet_v1()
-    test_forward_sparse_mobilenet_v2()
-
-    # End to End quantized
-    test_forward_qnn_inception_v1_net()
-    test_forward_qnn_mobilenet_v1_net()
-    test_forward_qnn_mobilenet_v2_net()
-    # This also fails with a segmentation fault in my run
-    # with Tflite 1.15.2
-    test_forward_qnn_mobilenet_v3_net()
-    test_forward_qnn_coco_ssd_mobilenet_v1()
-
-    # TFLite 2.1.0 quantized tests
-    test_forward_quantized_convolution()
-    test_forward_quantized_depthwise_convolution()
-    test_forward_tflite2_qnn_resnet50()
-    test_forward_tflite2_qnn_inception_v1()
-    test_forward_tflite2_qnn_mobilenet_v2()
-
-    test_forward_tflite_float16()
-
-    test_forward_tflite_int16()
-    test_forward_ds_cnn_int16()
+    tvm.testing.main()

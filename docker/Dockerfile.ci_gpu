@@ -17,7 +17,7 @@
 
 # CI docker GPU env
 # tag: v0.60
-FROM nvidia/cuda:11.0.3-cudnn8-devel-ubuntu18.04
+FROM nvidia/cuda:11.7.1-cudnn8-devel-ubuntu18.04
 
 COPY utils/apt-install-and-clear.sh /usr/local/bin/apt-install-and-clear
 
@@ -44,7 +44,7 @@ RUN bash /install/ubuntu_install_googletest.sh /googletest
 ENV TVM_VENV /venv/apache-tvm-py3.7
 COPY python/bootstrap/lockfiles /install/python/bootstrap/lockfiles
 COPY install/ubuntu_install_python.sh /install/ubuntu_install_python.sh
-RUN bash /install/ubuntu_install_python.sh
+RUN bash /install/ubuntu_install_python.sh 3.7
 ENV PATH ${TVM_VENV}/bin:$PATH
 ENV PYTHONNOUSERSITE 1  # Disable .local directory from affecting CI.
 

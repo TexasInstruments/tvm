@@ -492,6 +492,11 @@ class IntervalSetEvaluator : public ExprFunctor<IntervalSet(const PrimExpr&)> {
 
   IntervalSet VisitExpr_(const CastNode* op) final {
     IntervalSet value_set = this->Eval(op->value);
+    // short cut for the int set.
+    if (value_set->min_value.same_as(value_set->max_value)) {
+      if (value_set->IsEmpty()) return value_set;
+      return IntervalSet::SinglePoint(cast(op->dtype, value_set->min_value));
+    }
     PrimExpr min_value =
         value_set->HasLowerBound() ? cast(op->dtype, value_set->min_value) : neg_inf();
     PrimExpr max_value =
@@ -723,6 +728,13 @@ bool IntSet::IsSinglePoint() const {
   return (s_int && s_int->IsSinglePoint());
 }
 
+bool IntSet::CanProveSinglePoint(Analyzer* ana) const {
+  const IntervalSetNode* s_int = (*this).as<IntervalSetNode>();
+  if (!s_int) return false;
+  if (s_int->IsSinglePoint()) return true;
+  return ana->CanProveEqual(s_int->min_value, s_int->max_value);
+}
+
 bool IntSet::CanProvePositive() const {
   Analyzer analyzer;
   const IntervalSetNode* s_int = (*this).as<IntervalSetNode>();
@@ -865,6 +877,7 @@ IntSet UnionLowerBound(const Array<IntSet>& sets) {
   PrimExpr min_inclusive{nullptr};
   PrimExpr max_inclusive(nullptr);
   for (const IntSet& int_set : sets) {
+    if (int_set.IsNothing()) continue;
     if (const auto* interval_set = int_set.as<IntervalSetNode>()) {
       PrimExpr new_min_inclusive = interval_set->min_value;
       PrimExpr new_max_inclusive = interval_set->max_value;
@@ -942,9 +955,15 @@ IntSet EvalSet(PrimExpr e, const Map<Var, IntSet>& dom_map) {
 }
 
 IntSet IntSet::Vector(PrimExpr x) {
-  Analyzer ana;
-  Map<Var, IntSet> dmap;
-  return IntervalSetEvaluator(&ana, dmap, {}, true).Eval(x);
+  // short cut: simply get single point
+  if (x.dtype().lanes() == 1) {
+    return IntSet::SinglePoint(x);
+  } else {
+    // vector case.
+    Analyzer ana;
+    Map<Var, IntSet> dmap;
+    return IntervalSetEvaluator(&ana, dmap, {}, true).Eval(x);
+  }
 }
 
 IntSet EvalSet(PrimExpr e, const Map<IterVar, IntSet>& dom_map) {

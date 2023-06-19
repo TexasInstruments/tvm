@@ -28,7 +28,6 @@ from typing import List
 import os
 import struct
 import numpy as np
-import tflite.Model
 import math
 from enum import IntEnum
 import tensorflow as tf
@@ -133,7 +132,7 @@ def create_test_runner(
     ethosu_variant = ethosu_variant.upper()
 
     prologue = """
-    uart_init();
+    UartStdOutInit();
     EthosuInit();
 
     struct ethosu_driver* ethos_u = ethosu_reserve_driver();
@@ -158,7 +157,7 @@ def create_test_runner(
         epilogue="""
         ethosu_release_driver(ethos_u);
         """,
-        includes=["uart.h", "ethosu_55.h", "ethosu_mod.h", "hard_fault.h"],
+        includes=["uart_stdout.h", "ethosu_55.h", "ethosu_mod.h", "hard_fault.h"],
         parameters={
             "ETHOSU_TEST_ROOT": test_root,
             "NPU_MACS": ethosu_macs,
@@ -311,7 +310,15 @@ def get_tflite_graph(tf_func, shapes, ranges=None):
     converter.inference_output_type = tf.int8
     tflite_graph = converter.convert()
 
-    tflite_model = tflite.Model.Model.GetRootAsModel(tflite_graph, 0)
+    # Get TFLite model from buffer
+    try:
+        import tflite
+
+        tflite_model = tflite.Model.GetRootAsModel(tflite_graph, 0)
+    except AttributeError:
+        import tflite.Model
+
+        tflite_model = tflite.Model.Model.GetRootAsModel(tflite_graph, 0)
 
     relay_module, params = relay.frontend.from_tflite(tflite_model)
     mod = partition_for_ethosu(relay_module, params)
@@ -691,11 +698,15 @@ def make_ethosu_binary_elementwise(
     ifm2_layout="NHWC",
     ofm_layout="NHWC",
     rounding_mode="TFL",
+    use_rescale: bool = False,
+    rescale_scale: int = 0,
+    rescale_shift: int = 0,
+    lut=relay.const([], dtype="int8"),
 ):
     ethosu_binary_elementwise = ethosu_ops.ethosu_binary_elementwise(
         ifm=ifm,
         ifm2=ifm2,
-        lut=relay.const([], dtype="int8"),
+        lut=lut,
         operator_type=operator_type,
         ifm_scale=1,
         ifm_zero_point=0,
@@ -714,6 +725,9 @@ def make_ethosu_binary_elementwise(
         ifm_layout=ifm_layout,
         ifm2_layout=ifm2_layout,
         ofm_layout=ofm_layout,
+        use_rescale=use_rescale,
+        rescale_scale=rescale_scale,
+        rescale_shift=rescale_shift,
     )
     return ethosu_binary_elementwise
 

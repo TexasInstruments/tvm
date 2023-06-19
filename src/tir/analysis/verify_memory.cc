@@ -88,14 +88,6 @@ class MemoryAccessVerifier final : protected StmtExprVisitor {
     }
   }
 
-  void VisitExpr_(const LoadNode* op) final {
-    LOG(FATAL) << "Unexpected use of deprecated LoadNode.  Please use BufferLoadNode instead.";
-  }
-
-  void VisitStmt_(const StoreNode* op) final {
-    LOG(FATAL) << "Unexpected use of deprecated StoreNode.  Please use BufferStoreNode instead.";
-  }
-
   void VisitExpr_(const BufferLoadNode* op) final {
     HandleLoadStoreToVariable(op->buffer->data);
     return StmtExprVisitor::VisitExpr_(op);
@@ -182,7 +174,7 @@ std::vector<String> VerifyMemory_(const PrimFunc& func) {
 
   VLOG(1) << "verifying memory for target '" << target.value()->str()
           << "' for primitive:" << std::endl
-          << PrettyPrint(func);
+          << func;
 
   if (func->GetAttr<Integer>(tvm::attr::kCallingConv, Integer(CallingConv::kDefault)) ==
       CallingConv::kDefault) {

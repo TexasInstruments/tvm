@@ -73,7 +73,7 @@ def Move_PUV0(a: T.handle, b: T.handle) -> None:
 @tvm.script.ir_module
 class Fused_NN_Dense:
     @T.prim_func
-    def main(placeholder: T.Buffer[(64, 768), "float32"], placeholder_1: T.Buffer[(768, 768), "float32"], T_matmul_NT: T.Buffer[(64, 768), "float32"]) -> None:
+    def main(placeholder: T.Buffer((64, 768), "float32"), placeholder_1: T.Buffer((768, 768), "float32"), T_matmul_NT: T.Buffer((64, 768), "float32")) -> None:
         for i0, i1, i2 in T.grid(64, 768, 768):
             with T.block("T_matmul_NT"):
                 i, j, k = T.axis.remap("SSR", [i0, i1, i2])
@@ -85,9 +85,9 @@ class Fused_NN_Dense:
 
 @T.prim_func
 def before_matmul_vectorize(
-    placeholder: T.Buffer[(64, 768), "float32"],
-    placeholder_1: T.Buffer[(768, 768), "float32"],
-    T_matmul_NT: T.Buffer[(64, 768), "float32"],
+    placeholder: T.Buffer((64, 768), "float32"),
+    placeholder_1: T.Buffer((768, 768), "float32"),
+    T_matmul_NT: T.Buffer((64, 768), "float32"),
 ) -> None:
     with T.block("root"):
         T.reads()
@@ -115,9 +115,9 @@ def before_matmul_vectorize(
 
 @T.prim_func
 def after_matmul_vectorize(
-    placeholder: T.Buffer[(64, 768), "float32"],
-    placeholder_1: T.Buffer[(768, 768), "float32"],
-    T_matmul_NT: T.Buffer[(64, 768), "float32"],
+    placeholder: T.Buffer((64, 768), "float32"),
+    placeholder_1: T.Buffer((768, 768), "float32"),
+    T_matmul_NT: T.Buffer((64, 768), "float32"),
 ) -> None:
     T_matmul_NT_global = T.alloc_buffer([64, 768], dtype="float32")
     for i0_0, i1_0, i0_1, i1_1 in T.grid(1, 16, 1, 3):
@@ -142,6 +142,42 @@ def after_matmul_vectorize(
                     T_matmul_NT[v0, v1] = T_matmul_NT_global[v0, v1]
 
 
+@T.prim_func
+def before_postproc_add(
+    lhs: T.Buffer((1, 8, 56, 56, 32), "uint8"),
+    rhs: T.Buffer((1, 8, 56, 56, 32), "uint8"),
+    add_compute: T.Buffer((1, 8, 56, 56, 32), "uint8"),
+) -> None:
+    with T.block("root"):
+        T.block_attr({"meta_schedule.parallel":64, "meta_schedule.vectorize":128})
+        for n, c0, h, w, c1 in T.grid(1, 8, 56, 56, 32):
+            with T.block("add_compute"):
+                v0, v1, v2, v3, v4 = T.axis.remap("SSSSS", [n, c0, h, w, c1])
+                T.reads(lhs[v0, v1, v2, v3, v4], rhs[v0, v1, v2, v3, v4])
+                T.writes(add_compute[v0, v1, v2, v3, v4])
+                add_compute[v0, v1, v2, v3, v4] = lhs[v0, v1, v2, v3, v4] + rhs[v0, v1, v2, v3, v4]
+
+
+@T.prim_func
+def after_postproc_add(
+    lhs: T.Buffer((1, 8, 56, 56, 32), "uint8"),
+    rhs: T.Buffer((1, 8, 56, 56, 32), "uint8"),
+    add_compute: T.Buffer((1, 8, 56, 56, 32), "uint8"),
+) -> None:
+    with T.block("root"):
+        for n_c0_h_w_c1_fused_0 in T.parallel(0, 6272):
+            for n_c0_h_w_c1_fused_1 in T.vectorized(0, 128):
+                with T.block("add_compute"):
+                    v0 = T.axis.spatial(1, 0)
+                    v1 = T.axis.spatial(8, (n_c0_h_w_c1_fused_0 * 128 + n_c0_h_w_c1_fused_1) // 100352)
+                    v2 = T.axis.spatial(56, (n_c0_h_w_c1_fused_0 * 128 + n_c0_h_w_c1_fused_1) % 100352 // 1792)
+                    v3 = T.axis.spatial(56, (n_c0_h_w_c1_fused_0 * 128 + n_c0_h_w_c1_fused_1) % 1792 // 32)
+                    v4 = T.axis.spatial(32, (n_c0_h_w_c1_fused_0 * 128 + n_c0_h_w_c1_fused_1) % 32)
+                    T.reads(lhs[v0, v1, v2, v3, v4], rhs[v0, v1, v2, v3, v4])
+                    T.writes(add_compute[v0, v1, v2, v3, v4])
+                    add_compute[v0, v1, v2, v3, v4] = lhs[v0, v1, v2, v3, v4] + rhs[v0, v1, v2, v3, v4]
+
+
 # fmt: on
 # pylint: enable=invalid-name,no-member,line-too-long,too-many-nested-blocks,no-self-argument,not-callable
 
@@ -161,6 +197,14 @@ def test_vectorize_inner_loop():
     tvm.ir.assert_structural_equal(sch.mod["main"], after_matmul_vectorize)
 
 
+def test_parallel_vectorize_add():
+    sch = Schedule(before_postproc_add)
+    rule = RewriteParallelVectorizeUnroll()
+    assert rule.apply(sch)
+    tvm.ir.assert_structural_equal(sch.mod["main"], after_postproc_add)
+
+
 if __name__ == "__main__":
     test_meta_schedule_postproc_rewrite_parallel_unroll_vectorize()
     test_vectorize_inner_loop()
+    test_parallel_vectorize_add()
