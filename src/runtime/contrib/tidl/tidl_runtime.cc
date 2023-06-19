@@ -479,6 +479,11 @@ class TIDLJ7Module : public runtime::ModuleNode {
 
   const char* type_key() const { return "tidl"; }
 
+  /*! \brief Get the property of the runtime module .*/
+  int GetPropertyMask() const final {
+    return ModulePropertyMask::kBinarySerializable | ModulePropertyMask::kRunnable;
+  }
+
   void SaveToFile(const std::string& file_name,
                   const std::string& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
@@ -689,6 +694,11 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
   }
 
   const char* type_key() const { return "tidl"; }
+
+  /*! \brief Get the property of the runtime module .*/
+  int GetPropertyMask() const final {
+    return ModulePropertyMask::kBinarySerializable | ModulePropertyMask::kRunnable;
+  }
 
   void SaveToFile(const std::string& file_name,
                   const std::string& format) final {

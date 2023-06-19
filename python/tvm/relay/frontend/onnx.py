@@ -559,6 +559,10 @@ def layer_norm(x, eps, gamma, beta):
 
 def get_source_name(node, type_dict):
     """A helper function to get source information of onnx nodes."""
+    # Begin TI: ObjectDetection PostProcessing Meta Arch need output tensor names
+    if len(node.output) == 1:
+        return node.output[0]
+    # End TI
     if node.name:
         return node.name
     else:

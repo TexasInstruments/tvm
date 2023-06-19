@@ -658,6 +658,9 @@ endif()
 # Set flags for clang
 include(cmake/modules/ClangFlags.cmake)
 set(CRC16_INCLUDE_PATH "3rdparty/libcrc/include")
+# Begin TI: work around build issue (cannot find header file)
+include_directories(SYSTEM ${CRC16_INCLUDE_PATH})
+# End TI
 target_include_directorieS(
   tvm_objs
   PRIVATE "${CRC16_INCLUDE_PATH}")

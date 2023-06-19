@@ -37,6 +37,7 @@
 #include <tvm/tir/op_attr_types.h>
 #include <tvm/runtime/logging.h>
 #include <tvm/arith/analyzer.h>
+#include <tvm/relay/base.h>
 
 #include <sstream>
 #include <string>
@@ -152,8 +153,9 @@ public:
     StmtExprVisitor::VisitExpr(op->false_value);
   }
   // Look for @tir.c7x.stream_access(...) and update vse_ if used in vector condition
-  void VisitExpr_(const LoadNode* op) override {
-    if (in_vector_cond && is_call_builtin(op->index, "tir.c7x.stream_access"))
+  void VisitExpr_(const BufferLoadNode* op) override {
+    PrimExpr index = op->indices[0];
+    if (in_vector_cond && is_call_builtin(index, "tir.c7x.stream_access"))
       vse_.push_back(op->dtype);
 
     // Recurse to handle the case where there is more than one
@@ -1932,7 +1934,7 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   // debug
   if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN")) {
     LOG_INFO << "BuildC7x";
-    LOG_INFO << PrettyPrint(mod);
+    LOG_INFO << tvm::relay::PrettyPrint(mod);
   }
 
   std::vector<std::pair<tvm::GlobalVar, tvm::BaseFunc>> funcs;
