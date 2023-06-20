@@ -45,9 +45,6 @@ skipped_configs = [
   [ 'lidar_od_onnx', 'AM62A', '--target', '--tidl', '--noc7x', '--dlr', 0 ],
     # liar: sometimes hangs on J7, reboot, run the network by itself, passes
   [ 'lidar_od_onnx', 'J7', '--target', '--tidl', '--noc7x', '--dlr', 0 ],
-  # Quantized C7x codegen results error, to be fixed
-  [ 'mv2_quant_tfl', '*', '--target', '--notidl', '--c7x', '--dlr', 0 ],
-
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
