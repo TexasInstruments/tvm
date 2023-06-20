@@ -2041,7 +2041,7 @@ class TIDLCompiler:
             self.max_num_subgraphs = 16
             self.deny_list = []
             self.accuracy_level = 1
-            self.c7x_codegen = 0
+            self.c7x_codegen = 1
             self.advanced_options = {}
             self.od_options = {}
             self.ti_internal_nc_flag = (0x1 | 0x40 | 0x200 | 0x400)
@@ -2266,7 +2266,7 @@ class TIDLCompiler:
         #     TVMError: Check failed: ret == 0 (-1 vs. 0) : Assert fail: (((tir.tvm_struct_get(arg1, 0, 5) == (uint8)0) && (tir.tvm_struct_get(arg1, 0, 6) == (uint8)64)) && (tir.tvm_struct_get(arg1, 0, 7) == (uint16)1)), arg1.dtype is expected to be int64
         # Skip applying ConvertLayout pass to quantized models for now.
         # TODO: revisit this issue after finishing quantized model support for TIDL offload
-        if not has_qnn_ops:
+        if not has_qnn_ops and data_layout != 'NCHW':
             with tvm.transform.PassContext(opt_level=3):
                 convert_pass = [relay.transform.ConvertLayout({'nn.conv2d': ['NCHW', 'default']})]
                 mod = tvm.transform.Sequential(convert_pass)(mod) # only affects non-TIDL subgraphs
