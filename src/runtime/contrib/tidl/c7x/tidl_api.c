@@ -155,6 +155,7 @@ EXTERN_C void* init_tidl_subgraph(void *network,
     createParams.traceWriteLevel               = rt_info->tidl_trace_write_level;
     createParams.maxPreEmptDelay               = rt_info->max_preempt_delay;
     createParams.targetPriority                = rt_info->tvm_rt_target_priority;
+    createParams.coreId                        = rt_info->tvm_rt_core_num - 1;
   }
   createParams.reservedCtrl                  = 0;
 #if (HOST_EMULATION)
@@ -210,7 +211,8 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   //   TIDL_init
   if (status == IALG_EOK)
   {
-    status = TIDL_VISION_FXNS.ialg.algInit(NULL, memRec, NULL,
+    IALG_Handle handle = (IALG_Handle) memRec[0].base;
+    status = TIDL_VISION_FXNS.ialg.algInit(handle, memRec, NULL,
 				(IALG_Params *)(&createParams));
     if (status != IALG_EOK)  printf("init_tidl_subgraph: algInit failed\n");
   }
