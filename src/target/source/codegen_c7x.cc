@@ -1243,6 +1243,7 @@ void CodeGenC7x::VisitExpr_(const BufferLoadNode* op, std::ostream& os) {  // NO
     std::string ref = GetBufferRef(op->dtype, op->buffer.get(), index);
     HandleVolatileLoads(ref, op, os);
   } else {
+    #if 0
     bool can_vector_load = false;
     arith::PVar<PrimExpr> base;
     if (arith::ramp(base, 1, op->dtype.lanes()).Match(index)) {
@@ -1256,6 +1257,10 @@ void CodeGenC7x::VisitExpr_(const BufferLoadNode* op, std::ostream& os) {  // NO
     }
 
     if (can_vector_load) {
+    #else
+    arith::PVar<PrimExpr> base;
+    if (arith::ramp(base, 1, op->dtype.lanes()).Match(index)) {
+    #endif
       std::string ref = GetVecLoad(op->dtype, op->buffer.get(), base.Eval());
       HandleVolatileLoads(ref, op, os);
     } else {

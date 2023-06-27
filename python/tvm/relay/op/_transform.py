@@ -218,6 +218,17 @@ def compute_scatter_nd(attrs, inputs, output_type):
 
 _reg.register_strategy("scatter_nd", strategy.scatter_nd_strategy)
 
+# Begin TI
+# tidl_scatter_nd
+@_reg.register_compute("tidl_scatter_nd")
+def compute_tidl_scatter_nd(attrs, inputs, output_type):
+    """Compute definition of tidl_scatter_nd"""
+    return [topi.tidl_scatter_nd(inputs[0], inputs[1], inputs[2], attrs.mode)]
+
+
+_reg.register_strategy("tidl_scatter_nd", strategy.tidl_scatter_nd_strategy)
+#End TI
+
 # cumsum
 @_reg.register_compute("cumsum")
 def compute_cumsum(attrs, inputs, output_type):

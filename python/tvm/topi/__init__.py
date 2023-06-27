@@ -47,6 +47,7 @@ from .einsum import *
 from .unique import *
 from .searchsorted import *
 from .signal import *
+from .tidl_scatter import *
 from . import generic
 from . import nn
 from . import x86

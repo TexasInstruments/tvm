@@ -21,6 +21,8 @@ unit_tests = [
 "multiply_2_dim_broadcast.py",
 "priorities.py",
 "SOC_envvar.py",
+"scatter_nd_tidl.py",
+"scatter_nd_extern.py",
 ]
 
 failed_tests = []

@@ -51,6 +51,7 @@ from .op import random
 from .op.reduce import *
 from .op.tensor import *
 from .op.transform import *
+from .op.tidl import *
 from .op.algorithm import *
 from . import frontend
 from . import backend

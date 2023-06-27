@@ -1615,6 +1615,30 @@ def wrap_compute_scatter_nd(topi_compute):
     return _compute_scatter_nd
 
 
+# Begin TI
+# tidl scatter_nd
+@override_native_generic_func("tidl_scatter_nd_strategy")
+def tidl_scatter_nd_strategy(attrs, inputs, out_type, target):
+    """tidl_scatter_nd generic strategy"""
+    strategy = _op.OpStrategy()
+    strategy.add_implementation(
+        wrap_compute_tidl_scatter_nd(topi.tidl_scatter_nd),
+        wrap_topi_schedule(topi.generic.schedule_extern),
+        name="tidl_scatter_nd.generic",
+    )
+    return strategy
+
+
+def wrap_compute_tidl_scatter_nd(topi_compute):
+    """Wrap tidl_scatter_nd topi compute"""
+
+    def _compute_tidl_scatter_nd(attrs, inputs, _):
+        return [topi_compute(inputs[0], inputs[1], inputs[2], attrs.mode)]
+
+    return _compute_tidl_scatter_nd
+#End TI
+
+
 # bitserial_conv2d
 def wrap_compute_bitserial_conv2d(topi_compute):
     """wrap bitserial_conv2d topi compute"""
