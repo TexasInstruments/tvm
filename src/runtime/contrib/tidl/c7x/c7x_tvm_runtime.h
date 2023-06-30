@@ -148,6 +148,7 @@ class AllocL2Context
     }
     return ptr;
   }
+  int32_t avail_size() { return tvm_tidl_l2_scratch_avail_size(); }
 };
 
 //---------------------------------------------------------------------------------
