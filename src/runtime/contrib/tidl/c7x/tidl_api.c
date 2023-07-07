@@ -71,6 +71,7 @@ typedef struct
   TIDL_outArgs*      outArgs;     // Ouput arguments
   int                is_nchw;     // From relay.nfo. 1 => no layout conversion
                                   // required before TIDL invocation
+  TIDL_CreateParams* createParams;// TIDL createParams, need to keep outside of TIDL
 } TIDL_subgraph_instance;
 
 
@@ -135,47 +136,48 @@ EXTERN_C void* init_tidl_subgraph(void *network,
 
   // Setup TIDL construction parameters.
   // Mostly defaults from setDefaultParams()
-  TIDL_CreateParams  createParams;
-  TIDL_createParamsInit(&createParams);
+  TIDL_CreateParams  *createParams = tidl_malloc(sizeof(TIDL_CreateParams));
+  instance->createParams = createParams;
+  TIDL_createParamsInit(createParams);
 
   tvm_tidl_rt_info *rt_info = (tvm_tidl_rt_info *) in_rt_info;
   extern int32_t TVM_lockInterrupts();
   extern void    TVM_unlockInterrupts(int32_t);
 
-  createParams.visionParams.algParams.size   = sizeof(TIDL_CreateParams);
-  createParams.visionParams.cacheWriteBack   = NULL;
-  createParams.currLayersGroupId             = 1;
-  createParams.isInbufsPaded                 = 1;
-  createParams.optimiseExtMem                = TIDL_OptimiseExtMemL1;
-  createParams.quantRangeExpansionFactor     = 1.0;
-  createParams.quantRangeUpdateFactor        = 0.0;
+  createParams->visionParams.algParams.size   = sizeof(TIDL_CreateParams);
+  createParams->visionParams.cacheWriteBack   = NULL;
+  createParams->currLayersGroupId             = 1;
+  createParams->isInbufsPaded                 = 1;
+  createParams->optimiseExtMem                = TIDL_OptimiseExtMemL1;
+  createParams->quantRangeExpansionFactor     = 1.0;
+  createParams->quantRangeUpdateFactor        = 0.0;
   if (rt_info != NULL)
   {
-    createParams.traceLogLevel                 = rt_info->tidl_trace_log_level;
-    createParams.traceWriteLevel               = rt_info->tidl_trace_write_level;
-    createParams.maxPreEmptDelay               = rt_info->max_preempt_delay;
-    createParams.targetPriority                = rt_info->tvm_rt_target_priority;
-    createParams.coreId                        = rt_info->tvm_rt_core_num - 1;
+    createParams->traceLogLevel                 = rt_info->tidl_trace_log_level;
+    createParams->traceWriteLevel               = rt_info->tidl_trace_write_level;
+    createParams->maxPreEmptDelay               = rt_info->max_preempt_delay;
+    createParams->targetPriority                = rt_info->tvm_rt_target_priority;
+    createParams->coreId                        = rt_info->tvm_rt_core_num - 1;
   }
-  createParams.reservedCtrl                  = 0;
+  createParams->reservedCtrl                  = 0;
 #if (HOST_EMULATION)
-  createParams.flowCtrl                      = TIDL_FLOW_CTRL_REF_ONLY;
+  createParams->flowCtrl                      = TIDL_FLOW_CTRL_REF_ONLY;
 #else
-  createParams.flowCtrl                      = TIDL_FLOW_CTRL_DEFAULT ;
+  createParams->flowCtrl                      = TIDL_FLOW_CTRL_DEFAULT ;
 #endif
-  createParams.traceBaseName                 = NULL;
-  createParams.udmaDrvObj                    = udmaDrvObjPtr;
+  createParams->traceBaseName                 = NULL;
+  createParams->udmaDrvObj                    = udmaDrvObjPtr;
 
-  createParams.net                           = instance->network;
+  createParams->net                           = instance->network;
 
-  createParams.pFxnLock                      = TVM_lockInterrupts;
-  createParams.pFxnUnLock                    = TVM_unlockInterrupts;
-  createParams.TIDLVprintf                   = printTIDLLog;
+  createParams->pFxnLock                      = TVM_lockInterrupts;
+  createParams->pFxnUnLock                    = TVM_unlockInterrupts;
+  createParams->TIDLVprintf                   = printTIDLLog;
   //createParams.TIDLVprintf                   = vprintf;
-  createParams.tracePtr                      = NULL;
-  createParams.TIDLWriteBinToFile            = NULL;
-  createParams.TIDLReadBinFromFile           = NULL;
-  createParams.TIDL_CustomLayerProcess       = NULL;
+  createParams->tracePtr                      = NULL;
+  createParams->TIDLWriteBinToFile            = NULL;
+  createParams->TIDLReadBinFromFile           = NULL;
+  createParams->TIDL_CustomLayerProcess       = NULL;
 
   // Setup memRecs and solicit memory requests.
   // Each memRec is a pool of memory requested by TIDL.
@@ -193,7 +195,7 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   //   TIDL_alloc
   if (status == IALG_EOK)
   {
-    status = TIDL_VISION_FXNS.ialg.algAlloc((IALG_Params *)(&createParams),
+    status = TIDL_VISION_FXNS.ialg.algAlloc((IALG_Params *)(createParams),
                                              NULL, memRec);
     if (status != IALG_EOK)  printf("init_tidl_subgraph: algAlloc failed\n");
   }
@@ -213,7 +215,7 @@ EXTERN_C void* init_tidl_subgraph(void *network,
   {
     IALG_Handle handle = (IALG_Handle) memRec[0].base;
     status = TIDL_VISION_FXNS.ialg.algInit(handle, memRec, NULL,
-				(IALG_Params *)(&createParams));
+				(IALG_Params *)(createParams));
     if (status != IALG_EOK)  printf("init_tidl_subgraph: algInit failed\n");
   }
 
@@ -239,7 +241,7 @@ EXTERN_C void* init_tidl_subgraph(void *network,
     {
       inArgs->iVisionInArgs.size = sizeof(TIDL_InArgs);
       inArgs->iVisionInArgs.subFrameInfo = 0;
-      inArgs->enableLayerPerfTraces = (createParams.traceLogLevel > 0) ? 1 : 0;
+      inArgs->enableLayerPerfTraces = (createParams->traceLogLevel > 0) ? 1 : 0;
     }
     else
     {
@@ -345,6 +347,7 @@ EXTERN_C int32_t free_tidl_subgraph(void *instance_)
 
   free_mem_records(instance->memRec, instance->numMemRec);
   tidl_free(instance->memRec, instance->numMemRec * sizeof(IALG_MemRec));
+  tidl_free(instance->createParams, sizeof(TIDL_CreateParams));
 
   if (instance->network_size > 0)
     tidl_free(instance->network, instance->network_size);
