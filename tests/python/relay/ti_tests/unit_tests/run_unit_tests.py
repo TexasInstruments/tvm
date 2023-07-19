@@ -23,6 +23,7 @@ unit_tests = [
 "SOC_envvar.py",
 "scatter_nd_tidl.py",
 "scatter_nd_extern.py",
+"ya_scatter_nd.py",
 ]
 
 failed_tests = []
