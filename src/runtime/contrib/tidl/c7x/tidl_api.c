@@ -165,7 +165,6 @@ EXTERN_C void* init_tidl_subgraph(void *network,
 #else
   createParams->flowCtrl                      = TIDL_FLOW_CTRL_DEFAULT ;
 #endif
-  createParams->traceBaseName                 = NULL;
   createParams->udmaDrvObj                    = udmaDrvObjPtr;
 
   createParams->net                           = instance->network;

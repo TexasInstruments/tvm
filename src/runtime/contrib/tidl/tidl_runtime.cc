@@ -240,7 +240,7 @@ class TIDLJ7Module : public runtime::ModuleNode {
     params.ioBufDescPtr = (void *) info.params_data.data();
     params.net_capacity = info.net_data.size();
     params.io_capacity  = info.params_data.size();
-    params.traceBaseName = const_cast<char *>(trace_base_name.c_str());
+    strncpy((char *)params.traceBaseName, const_cast<char *>(trace_base_name.c_str()), TIDLRT_STRING_SIZE);
     params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
     params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
     params.TIDLVprintf = TIDLVprintf;
