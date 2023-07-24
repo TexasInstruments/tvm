@@ -65,7 +65,7 @@ function build_aarch64_ge {
     mkdir $BUILD_DIR_AARCH64
     cd $BUILD_DIR_AARCH64
 
-    cmake -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/arm-tidl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} -DCMAKE_TOOLCHAIN_FILE=../cmake/modules/contrib/ti-aarch64-linux-gcc-toolchain.cmake ..
+    cmake -DUSE_SORT=ON -DUSE_TIDL=ON -DUSE_TIDL_RT_PATH=$(ls -d ${PSDKR_PATH}/tidl_j7*/arm-tidl/rt) -DUSE_TIDL_PSDKR_PATH=${PSDKR_PATH} -DUSE_CGT7X_ROOT=${TVM_DEPS_PATH}/ti-cgt-c7000_3.1.0.LTS -DCMAKE_TOOLCHAIN_FILE=../cmake/modules/contrib/ti-aarch64-linux-gcc-toolchain.cmake ..
     make -j$(nproc) runtime
 
     # Initialize the ssh connection to EVM, save EVM into .known_hosts
