@@ -35,6 +35,13 @@ RMDIR   = rm -fr
 QUIET  ?= @
 
 SILICON_VERSION ?= 7100
-PKG_CFLAGS  = -o3 --abi=eabi --gcc --c11 -DSOC_J721E
+PKG_CFLAGS  = -o3 --abi=eabi --gcc --c11
 CFLAGS += $(PKG_CFLAGS)
-CFLAGS += -mv$(SILICON_VERSION)
+
+ifeq (7100_j784s4, $(SILICON_VERSION))
+  CFLAGS += -mv7100
+  CFLAGS += -DSOC_J784S4
+else
+  CFLAGS += -mv$(SILICON_VERSION)
+  CFLAGS += -DSOC_J721E
+endif

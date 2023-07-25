@@ -60,6 +60,13 @@ add_custom_target(tidl_c7x_libs
                   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                  )
 
+add_custom_target(tidl_c7x_libs_j784s4
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100_j784s4 -f Makefile.tvm_crt
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100_j784s4 -f Makefile.dsp_syms
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100_j784s4 -f Makefile.tidl_api
+                  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+                 )
+
 add_custom_target(tidl_c7x_libs_mv7504
                  COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.tvm_crt 
                  COMMAND make ${build_env_paths} SILICON_VERSION=7504 -f Makefile.dsp_syms 
@@ -74,12 +81,18 @@ list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/dsp_syms.out)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/dsp_syms.out.obj)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/tvm_crt.lib)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100_j784s4/build)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100_j784s4/dsp_syms.out)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100_j784s4/dsp_syms.out.obj)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100_j784s4/tvm_crt.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100_j784s4/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100_j784s4/)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/build)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/dsp_syms.out)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/dsp_syms.out.obj)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/tvm_crt.lib)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/tidl_api.lib)
-list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/)
 
 

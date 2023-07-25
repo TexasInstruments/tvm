@@ -160,15 +160,14 @@ function setup_tvm_tidl_tests_common {
 
 function set_soc {
     platform=$1
-    if [ $platform = "AM62A" ]
-    then
+    if [ $platform = "AM62A" ]; then
         export SOC="am62a"
-    elif [ $platform = "J7" ]
-    then 
+    elif [ $platform = "J7" ]; then
         export SOC="am68pa"
-    elif [ $platform = "J721S2" ]
-    then
+    elif [ $platform = "J721S2" ]; then
         export SOC="am68a"
+    elif [ $platform = "J784S4" ]; then
+        export SOC="am69a"
     fi
 }
 

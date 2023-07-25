@@ -322,7 +322,8 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
     tvm_c7x_root = os.path.join(tvm_root, "src/runtime/contrib/tidl/c7x")
     abs_temp_folder = os.path.abspath(tidl_compiler.temp_folder)
     log_file = os.path.join(abs_temp_folder, "c7x_deploy_tvm.log")
-    silicon_version = '7504' if tidl_compiler.tidl_platform == "AM62A" else "7100"
+    silicon_version = '7504' if tidl_compiler.tidl_platform == "AM62A" else (
+                      '7100_j784s4' if tidl_compiler.tidl_platform == "J784S4" else "7100")
     command  = f'make SILICON_VERSION={silicon_version} TVM_ROOT={tvm_root} TVM_C7X_ROOT={tvm_c7x_root} QUIET= ' + \
                f' -C {abs_temp_folder} -f {tvm_c7x_root}/Makefile.c7x_mod -j$(nproc)'
     print(command)

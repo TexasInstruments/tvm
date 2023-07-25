@@ -35,6 +35,7 @@ skipped_configs = [
   # Not enough memory to run the model
   [ 'yolo3_mv1_mxnet', 'J7', '--target', '--notidl', '--c7x', '--dlr', 0 ],
   [ 'yolo3_mv1_mxnet', 'J721S2', '--target', '--notidl', '--c7x', '--dlr', 0 ],
+  [ 'yolo3_mv1_mxnet', 'J784S4', '--target', '--notidl', '--c7x', '--dlr', 0 ],
 
   [ 'yolo3_mv1_mxnet', 'AM62A', '--target', '*', '--c7x', '--dlr', 0 ],
   [ 'swin_tiny_timm', 'AM62A', '--target', '*', '--c7x', '--dlr', 0 ],

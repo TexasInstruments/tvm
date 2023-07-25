@@ -32,7 +32,7 @@ from platform import processor
 from typing import List
 
 def supported_platform(platform): 
-    return platform in ["J7", "J721S2", "AM62A"]
+    return platform in ["J7", "J721S2", "J784S4", "AM62A"]
 
 def parse_args():
   import argparse

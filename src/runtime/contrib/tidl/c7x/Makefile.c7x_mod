@@ -31,6 +31,12 @@ ASM_SOURCES = $(wildcard *_embed.asm)
 OBJS     =$(patsubst %.c,%.obj,$(SOURCES))
 OBJS    +=$(patsubst %.asm,%.obj,$(ASM_SOURCES))
 
+ifeq (7100_j784s4, $(SILICON_VERSION))
+  RTS_LIB = rts7100_le.lib
+else
+  RTS_LIB = rts$(SILICON_VERSION)_le.lib
+endif
+
 CGT7X_EXT_LIBS ?=
 
 all: $(EXE_NAME)
@@ -50,7 +56,7 @@ $(EXE_NAME): $(OBJS)
             -z -i $(TVM_C7X_ROOT)/$(SILICON_VERSION) \
                -l tidl_api.lib \
                -l tvm_crt.lib \
-               -l rts$(SILICON_VERSION)_le.lib \
+               -l $(RTS_LIB) \
                $(CGT7X_EXT_LIBS) \
                -l $(TVM_C7X_ROOT)/c7x_tvm.cmd \
             -o $@ -m $@.map

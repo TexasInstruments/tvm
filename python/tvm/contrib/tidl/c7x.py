@@ -24,13 +24,12 @@ import logging
 platform_dict = {
         "am68pa": "J7",
         "am68a": "J721S2",
-        "am69a": "J721S2",
-        "J784S4": "J721S2",
+        "am69a": "J784S4",
         "am62a": "AM62A"
     }
 
 def supported_platform(platform): 
-    return platform in ["J7", "J721S2", "AM62A"] or platform in platform_dict
+    return platform in ["J7", "J721S2", "J784S4", "AM62A"] or platform in platform_dict
 
 
 def platform_map(platform):

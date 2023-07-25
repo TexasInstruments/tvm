@@ -4,6 +4,8 @@ c7x_tvm.cmd
 c7x_tvm_runtime.h
 7100/dsp_syms.out
 7100/dsp_syms.out.obj
+7100_j784s4/dsp_syms.out
+7100_j784s4/dsp_syms.out.obj
 7504/dsp_syms.out
 7504/dsp_syms.out.obj
 Makefile.c7x_mod
@@ -11,6 +13,8 @@ make.inc
 tidl_api.h
 7100/tidl_api.lib
 7100/tvm_crt.lib
+7100_j784s4/tidl_api.lib
+7100_j784s4/tvm_crt.lib
 7504/tidl_api.lib
 7504/tvm_crt.lib
 tidl_api_mem.h
