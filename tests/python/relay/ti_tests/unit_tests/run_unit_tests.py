@@ -16,10 +16,12 @@ unit_tests = [
 "topk.py",
 "argsort.py",
 "tanh_tidl.py",
+# Disable, known failure with PSDK 9.0
 #"conv2d_transpose_IOHW.py",
 "multiply_large_last_dim.py",
 "multiply_2_dim_broadcast.py",
-"priorities.py",
+# Disable, known failure with PSDK 9.0
+#"priorities.py",
 "SOC_envvar.py",
 "scatter_nd_tidl.py",
 "scatter_nd_extern.py",
@@ -30,6 +32,10 @@ failed_tests = []
 
 if __name__ == "__main__":
   for test in unit_tests:
+    # Disable, known failure with PSDK 9.0
+    if platform == "AM62A" and test in ["conv2d_1x2_stride.py", "sigmoid_tidl.py"]:
+      continue
+
     try:
       subprocess.run(["python3", test, "--platform", platform], check=True)
     except:

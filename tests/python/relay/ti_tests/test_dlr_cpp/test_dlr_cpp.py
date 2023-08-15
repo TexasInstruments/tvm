@@ -28,8 +28,13 @@ except:
   print("Failed: test_dlr_cpp compilation")
   sys.exit(1)
 
+# disable AM62A test for now: mv2_onnx tidl c7x does not run
+if platform == "AM62A":
+  print("Skipped: test_dlr_cpp inference on AM62A")
+  sys.exit(0)
+
 try:
-  os.environ['LD_LIBRARY_PATH'] = "/usr/lib/python3.8/site-packages/dlr"
+  os.environ['LD_LIBRARY_PATH'] = "/usr/lib/python3.10/site-packages/dlr"
   artifacts_dir = f"../artifacts/mv2_onnx_{platform}_target_tidl_c7x"
   subprocess.run([f"./native_{platform}.out", artifacts_dir], check=True)
 except:

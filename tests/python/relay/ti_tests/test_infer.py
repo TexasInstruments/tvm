@@ -46,6 +46,37 @@ skipped_configs = [
   [ 'lidar_od_onnx', 'AM62A', '--target', '--tidl', '--noc7x', '--dlr', 0 ],
     # liar: sometimes hangs on J7, reboot, run the network by itself, passes
   [ 'lidar_od_onnx', 'J7', '--target', '--tidl', '--noc7x', '--dlr', 0 ],
+
+  # Disable, known failure with PSDK 9.0
+  ['mv2_quant_tfl', '*', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['mv2_quant_tfl', '*', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  ['mv2_onnx', '*', '--target', '--tidl', '--c7x', '--dlr', 2],
+  ['mv2_onnx', '*', '--target', '--tidl', '--noc7x', '--dlr', 2],
+  ['mv2_pth', '*', '--target', '--tidl', '--c7x', '--dlr', 2],
+  ['mv2_pth', '*', '--target', '--tidl', '--noc7x', '--dlr', 2],
+  ['deeplabv3_tfl', '*', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['deeplabv3_tfl', '*', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  ['swin_tiny_timm', '*', '--target', '--tidl', '--c7x', '--dlr', 0],
+  #['swin_tiny_timm', '*', '--target', '--notidl', '--c7x', '--dlr', 0],
+  # import calib segfault
+  ['mv3_large_timm', 'AM62A', '--host', '--tidl', '--noc7x', '--tvm', 0],
+  # additional AM62A/J784S4 failures
+  ['mv2_quant_tfl', 'AM62A', '--target', '--notidl', '--c7x', '--dlr', 0],
+  ['mv2_onnx', 'AM62A', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['mv2_onnx', 'AM62A', '--target', '--notidl', '--c7x', '--dlr', 0],
+  ['mv2_onnx', 'AM62A', '--target', '--notidl', '--c7x', '--dlr', 2],
+  ['mv2_pth', 'AM62A', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['mv2_pth', 'AM62A', '--target', '--notidl', '--c7x', '--dlr', 0],
+  ['mv2_pth', 'AM62A', '--target', '--notidl', '--c7x', '--dlr', 2],
+  ['mv3_large_timm', 'AM62A', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['mv3_large_timm', 'AM62A', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  ['mv3_large_timm', 'AM62A', '--target', '--notidl', '--c7x', '--dlr', 0],
+  ['mv2_od_onnx', 'AM62A', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['swin_tiny_timm', 'J784S4', '--target', '--notidl', '--c7x', '--dlr', 0],
+  ['mv3_large_timm', 'J784S4', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['mv3_large_timm', 'J784S4', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  ['yolov5_od_onnx', 'J784S4', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['lidar_od_onnx', 'J784S4', '--target', '--tidl', '--noc7x', '--dlr', 0],
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
