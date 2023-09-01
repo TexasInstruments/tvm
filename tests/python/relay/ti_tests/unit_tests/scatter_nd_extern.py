@@ -25,9 +25,9 @@ from unit_utils import is_on_target, gen_reference, check_reference, platform, a
 model_name = "scatter_nd_extern"
 artifacts_dir , artifacts_data_dir = artifacts_folders(model_name)
 
-input_shapes = [("data", (2240, 64)),
+input_shapes = [("data", (2240, 32)),
                 ("indices_i2240", (1, 58080, 1)),
-                ("updates", (1, 58080, 64)) ]
+                ("updates", (1, 58080, 32)) ]
 weight_shapes = []
 
 def add_c7x_tidl_scatter_nd_strategy():

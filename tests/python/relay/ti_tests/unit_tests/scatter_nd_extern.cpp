@@ -87,41 +87,42 @@ void update_local(float *local, int begin, int end, int *indices_ptr, float *upd
   SAConfig<float, veclen> SA_Config7(veclen, vec_slice_iters, 1, 1, 1, 1, 0, 0, 0, 0, 0);
   SEConfig<float, veclen> SE_Config8(veclen, vec_slice_iters, 1, 1, 1, 1, 0, 0, 0, 0, 0);
 
-  __SA0_OPEN(SA_Config3.params());
+  __SA1_OPEN(SA_Config3.params());
   __SE1_OPEN((void *)(updates_ptr), SE_Config4.params());
   for (int i = 0; i < fused_updates_dimension; ++i) {
     int index = 0;
     if (num_indices == 1) {
-      index = *strm_agen<0, int>::get_adv(indices_ptr);
+      index = *strm_agen<1, int>::get_adv(indices_ptr);
     } else {
       for (int l = 0; l < num_indices; l++) {
-        index += indices_offsets[l] * (*strm_agen<0, int>::get_adv(indices_ptr));
+        index += indices_offsets[l] * (*strm_agen<1, int>::get_adv(indices_ptr));
       }
     }
 
     if (begin <= index && index < end) {
       local_slice = local + (index-begin)*fused_data_dimension;
-      __SA1_OPEN(SA_Config5.params());
+      __SA0_OPEN(SA_Config5.params());
       __SE0_OPEN(local_slice, SE_Config6.params());
     } else {
       local_slice = (float *) &dummy;
-      __SA1_OPEN(SA_Config7.params());
+      __SA0_OPEN(SA_Config7.params());
       __SE0_OPEN(local_slice, SE_Config8.params());
     }
 
     for (int j = 0; j < vec_slice_iters; ++j) {
       float_vec data   = strm_eng<0, float_vec>::get_adv();
       float_vec update = strm_eng<1, float_vec>::get_adv();
-      __vpred pred     = strm_agen<1, float_vec>::get_vpred();
-      float_vec* addr  = strm_agen<1, float_vec>::get_adv(local_slice);
+      __vpred pred     = strm_agen<0, float_vec>::get_vpred();
+      float_vec* addr  = strm_agen<0, float_vec>::get_adv(local_slice);
       __vstore_pred(pred, addr, data + update);
     }
-    __SA1_CLOSE();
+    __SA0_CLOSE();
     __SE0_CLOSE();
   }
-  __SA0_CLOSE();
+  __SA1_CLOSE();
   __SE1_CLOSE();
 }
+
 
 extern "C" int scatter_nd_ext(DLTensor *data, DLTensor *indices, DLTensor *updates, DLTensor *out)
 {
@@ -161,10 +162,19 @@ extern "C" int scatter_nd_ext(DLTensor *data, DLTensor *indices, DLTensor *updat
   }
 
   int32_t num_blocks = 1;
-  while (outer_data_dimension * fused_data_dimension * sizeof(float) / num_blocks > l2_size)
-    num_blocks += 1;
+  float *local_data = NULL;
+  uint32_t data_size_bytes = outer_data_dimension * fused_data_dimension * sizeof(float);
+  if (data_size_bytes <= l2_size) {  /* performing update to data in L2 */
+    local_data = (float *) L2Context.allocate(data_size_bytes);
+  } else {  /* performing update to data in L3/MSMC */
+    extern uint32_t g_l3_mem_size;
+    extern void *   g_l3_mem_addr;
+    while (data_size_bytes / num_blocks > g_l3_mem_size)
+      num_blocks += 1;
+    local_data = (float *) g_l3_mem_addr;
+  }
+
   Tiler1D tiler(outer_data_dimension, num_blocks);
-  float *local_data = (float *) L2Context.allocate(tiler.regular_block_size() * fused_data_dimension * sizeof(float));
   for(; !tiler.done(); tiler.next_block()) {
     int begin = tiler.curr_block_begin();
     int end   = begin + tiler.curr_block_size();

@@ -97,8 +97,8 @@ def gen_reference(mod, artifacts_dir:str, input_shapes : List, weight_shapes : L
         num_elements = np.prod(shape)
         rng = np.random.default_rng()
         data = rng.choice(np.arange(num_elements * 2), size=shape, replace=False).astype('int32')
-      elif var.endswith("_i2240"):
-        num_elements = 2240
+      elif var.endswith("_i2240") or var.endswith("_i4096"):
+        num_elements = 2240 if var.endswith("_i2240") else 4096
         rng = np.random.default_rng()
         data = rng.choice(np.arange(num_elements), size=shape, replace=True).astype('int32')
       elif var.endswith("_ind"):

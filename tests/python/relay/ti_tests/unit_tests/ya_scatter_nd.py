@@ -17,9 +17,9 @@ from unit_utils import build_and_set_ext_lib
 model_name = "ya_scatter_nd"
 artifacts_dir, artifacts_data_dir = artifacts_folders(model_name)
 
-input_shapes = [("data", (2240, 64)),
-                ("indices_i2240", (1, 58080, 1)),
-                ("updates", (1, 58080, 64))]
+input_shapes = [("data", (4096, 64)),
+                ("indices_i4096", (1, 235008, 1)),
+                ("updates", (1, 235008, 64))]
 weight_shapes = []
 
 
@@ -307,7 +307,7 @@ def compile_model():
 
     # define graph/model in relay
     input_vars = [relay.var(name, relay.TensorType(shape,
-                                                   "int32" if name.endswith("i2240") else "float32"))
+                  "int32" if (name.endswith("_i2240") or name.endswith("_i4096")) else "float32"))
                   for name, shape in input_shapes]
 
     src_name = "scatter_nd_extern"
