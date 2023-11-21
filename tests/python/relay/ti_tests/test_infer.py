@@ -57,6 +57,9 @@ skipped_configs = [
   ['deeplabv3_tfl', '*', '--target', '--tidl', '--c7x', '--dlr', 0],
   ['deeplabv3_tfl', '*', '--target', '--tidl', '--noc7x', '--dlr', 0],
   ['swin_tiny_timm', '*', '--target', '--tidl', '--c7x', '--dlr', 0],
+  # Disable, known failure with PSDK 9.1 RC4
+  ['swin_tiny_timm', '*', '--host',   '--tidl', '--noc7x', '--tvm', 0 ],
+  ['swin_tiny_timm', '*', '--target', '--tidl', '--noc7x', '--dlr', 0],
   #['swin_tiny_timm', '*', '--target', '--notidl', '--c7x', '--dlr', 0],
   # import calib segfault
   ['mv3_large_timm', 'AM62A', '--host', '--tidl', '--noc7x', '--tvm', 0],

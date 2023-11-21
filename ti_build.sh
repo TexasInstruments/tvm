@@ -109,6 +109,7 @@ function test_tvm {
     ssh ${SSH_OPTIONS} root@${EVM_IP} 'uname -a'
 
     # Compile model on host, generate artifacts directory and copy to EVM
+    export LD_LIBRARY_PATH=${TIDL_TOOLS_PATH}
     ./relay_mul.py --compile --copy_to_evm ${EVM_IP}
 
     # Run model on EVM

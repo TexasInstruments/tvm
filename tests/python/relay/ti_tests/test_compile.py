@@ -30,6 +30,8 @@ skipped_configs = [
   # large feature map size in batch processing, unable to import to TIDL
   [ 'mv2_onnx', 'AM62A', '*', '--tidl', '*', 2 ],
   [ 'mv2_pth', 'AM62A', '*', '--tidl', '*', 2 ],
+  # PSDK 9.1 RC4 TIDL calib failure: tidlMultiInstanceTest Invalid Error Type!
+  [ 'swin_tiny_timm', '*', '*', '--tidl', '*', 0 ],
 ]
 
 
