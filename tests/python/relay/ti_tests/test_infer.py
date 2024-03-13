@@ -80,6 +80,9 @@ skipped_configs = [
   ['mv3_large_timm', 'J784S4', '--target', '--tidl', '--noc7x', '--dlr', 0],
   ['yolov5_od_onnx', 'J784S4', '--target', '--tidl', '--c7x', '--dlr', 0],
   ['lidar_od_onnx', 'J784S4', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  # Disable, known failure with PSDK 9.2 RC2
+  # This core (16) is different than CLEC RTMAP CPU (1) programming for channel 0
+  ['mv2_quant_tfl', 'J784S4', '--target', '--notidl', '--c7x', '--dlr', 0],
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):

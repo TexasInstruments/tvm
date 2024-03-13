@@ -256,6 +256,7 @@ function test_tvm_tidl {
     return $retval
 }
 
+PLATFORMS=`echo ${PLATFORMS} | sed -e "s|,| |g"`
 echo "PLATFORMS=${PLATFORMS}"
 echo "ARM64_GCC_PATH=${ARM64_GCC_PATH}"
 echo "CGT7X_ROOT=${CGT7X_ROOT}"

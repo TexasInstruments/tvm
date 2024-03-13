@@ -43,9 +43,9 @@ if __name__ == "__main__":
     # [C7x_1 ] WorkloadUnitExec_Init: initParams->linkInitParams[linkIdx].initFuncPtr Failed, Link Id 1207959600
     if platform in ["J721S2", "J784S4"] and test in ["conv2d_1x2_stride.py"]:
       continue
-    # Disable, known failure with PSDK 9.1
+    # Disable, known failure with PSDK 9.1, 9.2
     # [C7x_1 ] This core (16) is different than CLEC RTMAP CPU (1) programming for channel 0
-    if platform == "J784S4" and test in ["multiply_large_last_dim.py", "multiply_2_dim_broadcast.py"]:
+    if platform == "J784S4" and test in ["multiply_large_last_dim.py", "multiply_2_dim_broadcast.py"] + ["broadcast_mul_odd_blocks_odd_iters.py"]:
       continue
 
     print(f"\n\n##### Running test: {test} #####\n")
