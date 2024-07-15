@@ -62,7 +62,7 @@ def _parallel_sch(sch, oshape, do_vectorize=False):
 
     GetCurrentTIDLContext = get_global_func("tidl.GetCurrentTIDLContext")
     ctx = GetCurrentTIDLContext()
-    vectorize_limit = 8 if ctx.platform == "AM62A" else 16
+    vectorize_limit = 8 if ctx.platform in ["AM62A", "J722S"] else 16
     if len(sch.op.axis) >= 5:
         fused = sch.fuse(sch.op.axis[0], sch.op.axis[1], sch.op.axis[2])
         if do_vectorize:

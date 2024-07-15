@@ -600,7 +600,7 @@ template <> struct SE_veclen_flag<16>
    { static const __SE_VECLEN val = __SE_VECLEN_16ELEMS; };
 template <> struct SE_veclen_flag<32>
    { static const __SE_VECLEN val = __SE_VECLEN_32ELEMS; };
-#ifndef __C7504__
+#if ! defined(__C7504__) && ! defined(__C7524__)
 template <> struct SE_veclen_flag<64>
    { static const __SE_VECLEN val = __SE_VECLEN_64ELEMS; };
 #endif
@@ -620,7 +620,7 @@ template <> struct SA_veclen_flag<16>
    { static const __SA_VECLEN val = __SA_VECLEN_16ELEMS; };
 template <> struct SA_veclen_flag<32>
    { static const __SA_VECLEN val = __SA_VECLEN_32ELEMS; };
-#ifndef __C7504__
+#if ! defined(__C7504__) && ! defined(__C7524__)
 template <> struct SA_veclen_flag<64>
    { static const __SA_VECLEN val = __SA_VECLEN_64ELEMS; };
 #endif

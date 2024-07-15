@@ -42,7 +42,7 @@
  *         - Define max allocation entries to be 2048 (adjustable)
  */
 
-#if defined(__C7100__) || defined(__C7504__)
+#if defined(__C7100__) || defined(__C7504__) || defined(__C7524__)
 #define C7X_TARGET
 #endif
 

@@ -44,7 +44,7 @@ def compile_relay(mod: tvm.IRModule,
   params :
       The parameter dict used by Relay.
   platform :
-      in ["J7", "J721S2", "J784S4", "AM62A"]
+      in ["J7", "J721S2", "J784S4", "J722S", "AM62A"]
   calibration_input_list :
       A dictionary where the key is input name and the value is input tensor.
   compile_for_device:

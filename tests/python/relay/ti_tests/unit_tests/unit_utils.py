@@ -32,7 +32,7 @@ from platform import processor
 from typing import List
 
 def supported_platform(platform): 
-    return platform in ["J7", "J721S2", "J784S4", "AM62A"]
+    return platform in ["J7", "J721S2", "J784S4", "J722S", "AM62A"]
 
 def parse_args():
   import argparse
@@ -40,7 +40,7 @@ def parse_args():
   parser.add_argument('--platform', action='store',
                       dest='platform',
                       default='J7',
-                      help='Compile models for which platforms (J7, J721S2, AM62A)')
+                      help='Compile models for which platforms (J7, J721S2, J784S4, J722S, AM62A)')
   args = parser.parse_args()
   assert supported_platform(args.platform), f"Platform {args.platform} is not supported"
   return args
@@ -177,7 +177,7 @@ def check_occurrence(pattern:str, text_file:str) -> int:
 def build_and_set_ext_lib(src_name, src_dir, build_dir):
   import subprocess
   build_dir = os.path.abspath(build_dir)
-  silicon_version = "7504" if platform == "AM62A" else "7100"
+  silicon_version = "7504" if platform == "AM62A" else ("7524" if platform == "J722S" else "7100")
   try:
     subprocess.run(["make", "-f", "Makefile.ext_lib", f"NAME={src_name}",
                     f"SRC_DIR={src_dir}", f"BUILD_DIR={build_dir}", f"SILICON_VERSION={silicon_version}"], check=True)

@@ -33,6 +33,8 @@ OBJS    +=$(patsubst %.asm,%.obj,$(ASM_SOURCES))
 
 ifeq (7100_j784s4, $(SILICON_VERSION))
   RTS_LIB = rts7100_le.lib
+else ifeq (7524_j722s, $(SILICON_VERSION))
+  RTS_LIB = rts7524_le.lib
 else
   RTS_LIB = rts$(SILICON_VERSION)_le.lib
 endif

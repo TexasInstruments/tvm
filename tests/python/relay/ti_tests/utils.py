@@ -20,7 +20,7 @@
 import os
 
 def supported_platform(platform): 
-    return platform in ["J7", "J721S2", "J784S4", "AM62A"]
+    return platform in ["J7", "J721S2", "J784S4", "J722S", "AM62A"]
 
 def disable_outputs():
   """ Redirect stdout/stderr to /dev/null """

@@ -198,7 +198,7 @@ def schedule_injective_from_existing(s: te.Schedule,
         #print_schedule(s)
         GetCurrentTIDLContext = tvm.get_global_func("tidl.GetCurrentTIDLContext")
         ctx = GetCurrentTIDLContext()
-        vector_length = 32 if ctx.platform == "AM62A" else 64
+        vector_length = 32 if ctx.platform in ["AM62A", "J722S"] else 64
         split_factor = int(vector_length/largest_elem_bytes)
         inner_length = 1
         for axis_len in cc.shape[baxis:]:
