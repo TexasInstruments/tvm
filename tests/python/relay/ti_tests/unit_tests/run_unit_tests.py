@@ -17,8 +17,7 @@ unit_tests = [
 "argsort.py",
 # tanh support has been deprecated in TIDL
 #"tanh_tidl.py",
-# Disable, known failure with PSDK 9.0
-#"conv2d_transpose_IOHW.py",
+"conv2d_transpose_IOHW.py",
 "multiply_large_last_dim.py",
 "multiply_2_dim_broadcast.py",
 # Disable, known failure with PSDK 9.0

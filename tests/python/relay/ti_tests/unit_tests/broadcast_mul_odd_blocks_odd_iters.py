@@ -47,7 +47,8 @@ def compile_model():
 
   c_file = os.path.join(artifacts_dir, "tempDir/model_1.c")
   num_DMAs = check_occurrence("create_DMA", c_file)
-  num_SEs  = check_occurrence("SE0ADV\\(float8\\)" if platform == "AM62A" else "SE0ADV\\(float16\\)", c_file)
+  num_SEs  = check_occurrence("SE0ADV\\(float8\\)" if platform in ["AM62A", "J722S"] else
+                              "SE0ADV\\(float16\\)", c_file)
   if num_DMAs < 2 or num_SEs < 1:
     print(f"FAIL: num_DMAs {num_DMAs} < 2 (expected), {num_SEs} < 1 (expected)")
     return False

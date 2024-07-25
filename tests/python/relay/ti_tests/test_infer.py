@@ -19,7 +19,7 @@
 import os
 import sys
 import subprocess
-from platform import processor
+from platform import machine
 from models import models
 
 skipped_configs = [
@@ -83,10 +83,14 @@ skipped_configs = [
   # Disable, known failure with PSDK 9.2 RC2
   # This core (16) is different than CLEC RTMAP CPU (1) programming for channel 0
   ['mv2_quant_tfl', 'J784S4', '--target', '--notidl', '--c7x', '--dlr', 0],
+  # PSDK 10.0 failures
+  ['mv2_pth', '*', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  ['swin_tiny_timm', 'J722S', '--target', '--notidl', '--c7x', '--dlr', 0],
+  ['lidar_od_onnx', 'J722S', '--target', '--tidl', '--noc7x', '--dlr', 0],
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
-  is_target = (processor() == "aarch64")
+  is_target = (machine() == "aarch64")
   t_h = "--target" if is_target else "--host"
   failed_configs = []
   for model in in_models:

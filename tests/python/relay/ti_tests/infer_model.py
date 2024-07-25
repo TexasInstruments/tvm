@@ -19,7 +19,7 @@
 
 import os
 import sys
-from platform import processor
+from platform import machine
 from utils import supported_platform
 
 
@@ -151,7 +151,7 @@ def parse_args():
 
 if __name__ == "__main__":
   args = parse_args()
-  is_target = (processor() == "aarch64")
+  is_target = (machine() == "aarch64")
 
   ret = False
   try:

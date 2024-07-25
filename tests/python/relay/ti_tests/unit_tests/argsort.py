@@ -72,7 +72,7 @@ def run_model():
   if not check_reference(tvm_outputs, artifacts_data_dir):
     return False
 
-  max_time = 1000000000 if platform != "AM62A" else 1500000000
+  max_time = 1000000000 if platform not in ["AM62A", "J722S"] else 1500000000
   for i in range(3):
     argsort_time = trace['nodes'][i]['time']
     print(f"argsort node {i} time: {argsort_time} C7x cycles")

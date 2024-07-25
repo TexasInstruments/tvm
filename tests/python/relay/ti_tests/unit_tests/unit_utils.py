@@ -28,7 +28,7 @@ Infer: 1) EVM infer, use reference inputs, compare with reference outputs
 
 import os
 import numpy as np
-from platform import processor
+from platform import machine
 from typing import List
 
 def supported_platform(platform): 
@@ -57,7 +57,7 @@ def artifacts_folders(model_name):
   return artifacts_dir, artifacts_data_dir
 
 def is_on_target():
-  return processor() == "aarch64"
+  return machine() == "aarch64"
 
 
 def get_data_file(artifacts_dir, var):

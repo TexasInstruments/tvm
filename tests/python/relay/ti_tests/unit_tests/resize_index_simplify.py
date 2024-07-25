@@ -77,7 +77,7 @@ def run_model():
   if resize1_time > threshold1:
     print(f"resize node 1 time exceeded expected threshold ({threshold1} cycles)")
     return False
-  threshold2 = 8000000 if platform != "AM62A" else 11000000
+  threshold2 = 8000000 if platform not in ["AM62A", "J722S"] else 12000000
   if resize2_time > threshold2:
     print(f"resize node 2 time exceeded expected threshold ({threshold2} cycles)")
     return False

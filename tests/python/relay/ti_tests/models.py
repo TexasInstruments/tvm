@@ -109,7 +109,7 @@ models = {
     'input_info': {**inputs_224, 'name':"data", 'mean':[123.675,116.28,103.53], 'scale':[0.017125,0.017507,0.017429]},
     'calib_data': ['airshow', 'cat2', 'cat'],
     'test': test_top5,
-    'tidl_bits' : 16,
+    'tidl_bits' : 16, #8,  # both crashes C7x
     'batch_size': [0, 2],
   },
 
@@ -131,7 +131,7 @@ models = {
   'mv3_large_timm' : {
     'file': ["timm", "mobilenetv3_large_100"],
     'input_info': {**inputs_224, 'name':"input.1"},
-    'tidl_bits' : 16,
+    'tidl_bits' : 16, #8,
     'calib_data': ['cat', 'cat2', 'airshow'],
     'test': test_top5,
   },
