@@ -24,6 +24,11 @@
 #include <stdio.h>
 #include "tvm_tidl_dmautils.h"
 #include "tidl_api_mem.h"
+
+/* UDMA does not use SOC_J722S macro, it is treated the same as SOC_J721E */
+#if defined(SOC_J722S)
+#define SOC_J721E
+#endif
 #include <ti/drv/udma/dmautils/dmautils.h>
 #include <ti/drv/udma/udma.h>
 
