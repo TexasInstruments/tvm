@@ -143,8 +143,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
        *
        * Very ugly hack, but need to maintain this as of now.
        */
-      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
-      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
+      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_LAZY | RTLD_GLOBAL );
+      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_LAZY | RTLD_GLOBAL );
       const char *dlsym_error1 = dlerror();
       if (dlsym_error1) {
         LOG(FATAL) << "Cannot open libvx_tidl_rt.so! " << dlsym_error1 << '\n';
@@ -231,7 +231,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
     //     it is okay to dlopen() same library multiple times
     LoadTIDLRT();
 
-    std::string trace_base_name = "./tidl_trace_subgraph_" + std::to_string(subgraph_id) + "_";
+    std::string trace_base_name = "./tidl_trace";
+    std::string trace_subgraph_name = "subgraph_" + std::to_string(subgraph_id);
     // Call TIDLRT_create() to initialize the subgraph
     sTIDLRT_Params_t params;
     TIDLRT_setParamsDefault_(&params);
@@ -240,7 +241,10 @@ class TIDLJ7Module : public runtime::ModuleNode {
     params.ioBufDescPtr = (void *) info.params_data.data();
     params.net_capacity = info.net_data.size();
     params.io_capacity  = info.params_data.size();
-    strncpy((char *)params.traceBaseName, const_cast<char *>(trace_base_name.c_str()), TIDLRT_STRING_SIZE);
+    strncpy((char *)params.traceBaseName, const_cast<char *>(trace_base_name.c_str()),
+            TIDLRT_STRING_SIZE);
+    strncpy((char *)params.traceSubgraphName, const_cast<char *>(trace_subgraph_name.c_str()),
+            TIDLRT_STRING_SIZE);
     params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
     params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
     params.TIDLVprintf = TIDLVprintf;

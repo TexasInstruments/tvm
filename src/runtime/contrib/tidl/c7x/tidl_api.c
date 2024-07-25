@@ -317,7 +317,7 @@ EXTERN_C int32_t process_tidl_subgraph(void *instance_,
   // Dump layer perf info
   if (instance->inArgs->enableLayerPerfTraces > 0)
   {
-    TIDLRT_LogMetaData(instance->outArgs, "");
+    TIDLRT_LogMetaData(instance->outArgs, NULL);
   }
 
   return status;
