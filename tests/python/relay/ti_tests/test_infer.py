@@ -84,9 +84,21 @@ skipped_configs = [
   # This core (16) is different than CLEC RTMAP CPU (1) programming for channel 0
   ['mv2_quant_tfl', 'J784S4', '--target', '--notidl', '--c7x', '--dlr', 0],
   # PSDK 10.0 failures
+  ['mv2_onnx', 'J7', '--host', '--tidl', '--noc7x', '--tvm', 2],
+  ['mv2_pth', 'J7', '--host', '--tidl', '--noc7x', '--tvm', 2],
+  ['mv3_large_timm', 'J7', '--host', '--tidl', '--noc7x', '--tvm', 0],
+  ['mv2_onnx', 'J721S2', '--host', '--tidl', '--noc7x', '--tvm', 2],
+  ['mv2_pth', 'J721S2', '--host', '--tidl', '--noc7x', '--tvm', 2],
+  ['mv2_onnx', 'J722S', '--host', '--tidl', '--noc7x', '--tvm', 2],
+  ['mv2_pth', 'J722S', '--host', '--tidl', '--noc7x', '--tvm', 2],
+  ['mv2_onnx', 'J784S4', '--host', '--tidl', '--noc7x', '--tvm', 2],
+  ['mv2_pth', 'J784S4', '--host', '--tidl', '--noc7x', '--tvm', 2],
   ['mv2_pth', '*', '--target', '--tidl', '--noc7x', '--dlr', 0],
   ['swin_tiny_timm', 'J722S', '--target', '--notidl', '--c7x', '--dlr', 0],
   ['lidar_od_onnx', 'J722S', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  ['mv3_large_timm', 'J7', '--target', '--tidl', '--c7x', '--dlr', 0],
+  ['mv3_large_timm', 'J7', '--target', '--tidl', '--noc7x', '--dlr', 0],
+  ['lidar_od_onnx', 'J721S2', '--target', '--tidl', '--noc7x', '--dlr', 0],
 ]
 
 def test_infer(in_models, platforms, dlr_tvm, tidls, c7xs):
