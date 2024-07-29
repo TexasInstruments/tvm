@@ -7,10 +7,10 @@
 
 # On x86 host:
 ${ARM64_GCC_PATH}/bin/aarch64-none-linux-gnu-g++ -O3 \
-  -I ${TARGET_FS_PATH}/usr/lib/python3.10/site-packages/dlr/include \
+  -I ${TARGET_FS_PATH}/usr/lib/python3.12/site-packages/dlr/include \
   test_infer.cpp \
   -L ${TARGET_FS_PATH}/usr/lib \
-  -L ${TARGET_FS_PATH}/usr/lib/python3.10/site-packages/dlr -ldlr \
+  -L ${TARGET_FS_PATH}/usr/lib/python3.12/site-packages/dlr -ldlr \
   -o cross.out
 
 # On EVM:

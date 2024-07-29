@@ -163,6 +163,8 @@ function set_soc {
     platform=$1
     if [ $platform = "AM62A" ]; then
         export SOC="am62a"
+    elif [ $platform = "J722S" ]; then
+        export SOC="am67a"
     elif [ $platform = "J7" ]; then
         export SOC="am68pa"
     elif [ $platform = "J721S2" ]; then
