@@ -32,19 +32,9 @@ failed_tests = []
 
 if __name__ == "__main__":
   for test in unit_tests:
-    # Disable, known failure with PSDK 9.0
-    if platform == "AM62A" and test in ["conv2d_1x2_stride.py", "sigmoid_tidl.py"]:
-      continue
-    # Disable, hang with PSDK 9.1, need to debug, odd DMA iCnts w/ double-buf?
-    if platform == "AM62A" and test in ["broadcast_mul_odd_blocks_odd_iters.py", "multiply_large_last_dim.py", "multiply_2_dim_broadcast.py"]:
-      continue
-    # Disable, known failure with PSDK 9.1
-    # [C7x_1 ] WorkloadUnitExec_Init: initParams->linkInitParams[linkIdx].initFuncPtr Failed, Link Id 1207959600
-    if platform in ["J721S2", "J784S4"] and test in ["conv2d_1x2_stride.py"]:
-      continue
-    # Disable, known failure with PSDK 9.1, 9.2
+    # Disable, known failure with PSDK 9.1, 9.2, 10.0
     # [C7x_1 ] This core (16) is different than CLEC RTMAP CPU (1) programming for channel 0
-    if platform == "J784S4" and test in ["multiply_large_last_dim.py", "multiply_2_dim_broadcast.py"] + ["broadcast_mul_odd_blocks_odd_iters.py"]:
+    if platform == "J784S4" and test in ["multiply_large_last_dim.py", "broadcast_mul_odd_blocks_odd_iters.py"]:
       continue
 
     print(f"\n\n##### Running test: {test} #####\n")
