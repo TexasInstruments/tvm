@@ -24,16 +24,11 @@ CRT_CONFIG  ?= .
 DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
 BUILD_DIR   ?= $(SILICON_VERSION)/build
 
-TI_MEM_MANAGER_SRC = $(USE_TIDL_RT_PATH)/../../common/ti_mem_manager.c
-# new path after moving ti_dl/rt to arm-tidl/rt
-ifeq ("$(wildcard $(TI_MEM_MANAGER_SRC))", "")
-  TI_MEM_MANAGER_SRC = $(USE_TIDL_RT_PATH)/test/src/ti_mem_manager.c
-endif
+TI_MEM_MANAGER_C = $(USE_TIDL_RT_PATH)/test/src/ti_mem_manager.c
+TIDL_RT_OVX_DEBUG_UTILS_C = $(USE_TIDL_RT_PATH)/src/tidl_rt_ovx_debug_utils.c
 
 CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
-CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG) -I $(USE_TIDL_RT_PATH)/inc
-CFLAGS += -I $(USE_TIDL_RT_PATH)/../inc -I $(USE_TIDL_RT_PATH)/../../common
-# new path after moving ti_dl/rt to arm-tidl/rt
+CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG)
 CFLAGS += -I $(USE_TIDL_RT_PATH)/inc -I $(USE_TIDL_RT_PATH)/test/src
 CFLAGS += -I $(IVISION_PATH)
 CFLAGS += -I $(PDK_PATH)/packages
@@ -64,19 +59,11 @@ $(BUILD_DIR)/%.obj: %.c $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
 
-$(BUILD_DIR)/%.obj: $(TI_MEM_MANAGER_SRC) $(HEADERS)
+$(BUILD_DIR)/%.obj: $(TI_MEM_MANAGER_C) $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
 
-# tidl_rt_ovx_debug_utils.c uses "%llu" to print 32-bit integer, which does not work on C7x.
-# Patch the released code in PSDK 8.4 to use "%u".
-# Once the TIDL RT src code is fixed, remove this rule and use TIDL RT src directly.
-$(BUILD_DIR)/tidl_rt_ovx_debug_utils.c: $(USE_TIDL_RT_PATH)/src/tidl_rt_ovx_debug_utils.c
-	$(QUIET)$(MKDIR_P) $(dir $@)
-	cp $< $@
-	sed -i 's/llu,/u,/' $@
-
-$(BUILD_DIR)/tidl_rt_ovx_debug_utils.obj: $(BUILD_DIR)/tidl_rt_ovx_debug_utils.c $(HEADERS)
+$(BUILD_DIR)/tidl_rt_ovx_debug_utils.obj: $(TIDL_RT_OVX_DEBUG_UTILS_C)
 	$(QUIET)$(MKDIR_P) $(dir $@)
 	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
 
