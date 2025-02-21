@@ -334,24 +334,37 @@ inline Array<PrimExpr> BufferOffset(const BufferNode* n, Array<PrimExpr> index, 
   return offsets;
 }
 
+static void ValidateAxisSeparators(const Array<IntImm>& axis_separators, size_t buffer_dim) {
+  // These checks ensure that all output axes contain at least one
+  // input axis.
+  for (size_t i = 0; (i + 1) < axis_separators.size(); i++) {
+    auto sep = axis_separators[i]->value;
+    auto next_sep = axis_separators[i + 1]->value;
+    CHECK_LE(sep, next_sep) << "ValueError: "
+                            << "Axis separators must be in increasing order, "
+                            << "but axis_separators[" << i << "] = " << sep
+                            << " is greater than or equal to axis_separators[" << (i + 1)
+                            << "] = " << next_sep << ".";
+  }
+  if (axis_separators.size()) {
+    auto first_sep = axis_separators[0]->value;
+    CHECK_GE(first_sep, 0) << "ValueError: "
+                           << "All axis separators must be non-negative.  "
+                           << "However, the axis_separators[0] = " << first_sep;
+    auto last_sep = axis_separators[axis_separators.size() - 1]->value;
+    CHECK_LE(last_sep, buffer_dim)
+        << "ValueError: "
+        << "All axis separators must be within the range "
+        << "0 <= sep <= buffer_dim.  "
+        << "However, the last axis_separators[" << (axis_separators.size() - 1)
+        << "] = " << last_sep << " is greater than the buffer's dimensionality of " << buffer_dim;
+  }
+}
+
 Buffer Buffer::GetFlattenedBuffer() const {
   auto self = operator->();
 
-  // These checks ensure that all output axes contain at least one
-  // input axis.
-  for (size_t i = 0; (i + 1) < self->axis_separators.size(); i++) {
-    auto sep = self->axis_separators[i]->value;
-    auto next_sep = self->axis_separators[i + 1]->value;
-    ICHECK_LT(sep, next_sep) << "Axis separators must be in strictly increasing order.";
-  }
-  if (self->axis_separators.size()) {
-    auto first_sep = self->axis_separators[0]->value;
-    ICHECK_GT(first_sep, 0) << "First axis separator must be strictly greater than 0, "
-                            << "so that first output axis contains at least one input axis";
-    auto last_sep = self->axis_separators[self->axis_separators.size() - 1]->value;
-    ICHECK_LT(last_sep, self->shape.size())
-        << "Last output axis must contain at least one input axis.";
-  }
+  ValidateAxisSeparators(self->axis_separators, self->shape.size());
 
   Array<PrimExpr> output_shape;
   if (self->strides.size()) {
@@ -387,46 +400,56 @@ Buffer Buffer::GetFlattenedBuffer() const {
     output_axis_separators.push_back(IntImm(dtype, i + 1));
   }
 
-  Buffer output = *this;
-  auto writer = output.CopyOnWrite();
-  writer->shape = output_shape;
-  writer->axis_separators = output_axis_separators;
-  writer->strides = {};
-
-  return output;
+  if (output_shape.size() == self->shape.size() && self->strides.empty()) {
+    return *this;
+  } else {
+    Buffer output = *this;
+    auto writer = output.CopyOnWrite();
+    writer->shape = output_shape;
+    writer->axis_separators = output_axis_separators;
+    writer->strides = {};
+    return output;
+  }
 }
 
-PrimExpr Buffer::vload(Array<PrimExpr> begin, DataType value_dtype) const {
+PrimExpr Buffer::vload(Array<PrimExpr> begin, DataType value_dtype,
+                       Optional<PrimExpr> predicate) const {
   // specially handle bool, stored as DataType::Int(8)
   const BufferNode* n = operator->();
   ICHECK(n != nullptr);
   ICHECK(value_dtype.element_of() == n->dtype.element_of() &&
-         value_dtype.lanes() % n->dtype.lanes() == 0)
+         value_dtype.get_lanes_or_vscale_factor() % n->dtype.lanes() == 0)
       << "Cannot load " << value_dtype << " from buffer of " << n->dtype;
 
   Array<PrimExpr> indices = begin;
-  int factor = value_dtype.lanes() / n->dtype.lanes();
-  if (factor > 1) {
-    indices.Set(indices.size() - 1, Ramp(indices[indices.size() - 1], 1, factor));
+  PrimExpr base = indices[indices.size() - 1];
+  if (value_dtype.is_fixed_length_vector()) {
+    int factor = value_dtype.lanes() / n->dtype.lanes();
+    if (factor > 1 && base.dtype().is_scalar()) {
+      indices.Set(indices.size() - 1, Ramp(base, 1, factor));
+    }
   }
-  return BufferLoad(*this, indices);
+  return BufferLoad(*this, indices, predicate);
 }
 
-Stmt Buffer::vstore(Array<PrimExpr> begin, PrimExpr value) const {
+Stmt Buffer::vstore(Array<PrimExpr> begin, PrimExpr value, Optional<PrimExpr> predicate) const {
   // specially handle bool, stored as DataType::Int(8)
   const BufferNode* n = operator->();
   ICHECK(n != nullptr);
   DataType value_dtype = value.dtype();
   ICHECK(value_dtype.element_of() == n->dtype.element_of() &&
-         value_dtype.lanes() % n->dtype.lanes() == 0)
+         value_dtype.get_lanes_or_vscale_factor() % n->dtype.lanes() == 0)
       << "Cannot store " << value_dtype << " to buffer of " << n->dtype;
 
   Array<PrimExpr> indices = begin;
-  int factor = value_dtype.lanes() / n->dtype.lanes();
-  if (factor > 1) {
-    indices.Set(indices.size() - 1, Ramp(indices[indices.size() - 1], 1, factor));
+  PrimExpr base = indices[indices.size() - 1];
+  if (value_dtype.is_fixed_length_vector()) {
+    int factor = value_dtype.lanes() / n->dtype.lanes();
+    if (factor > 1 && base.dtype().is_scalar()) {
+      indices.Set(indices.size() - 1, Ramp(base, 1, factor));
+    }
   }
-  return BufferStore(*this, value, indices);
+  return BufferStore(*this, value, indices, predicate);
 }
 
 String Buffer::scope() const {
@@ -554,6 +577,8 @@ Buffer::Buffer(Var data, DataType dtype, Array<PrimExpr> shape, Array<PrimExpr> 
       << "Variable " << data->name_hint << " is not a pointer.";
   ICHECK(data->type_annotation.as<PointerTypeNode>()->element_type.as<PrimTypeNode>())
       << "Variable " << data->name_hint << " does not point to a primitive.";
+
+  ValidateAxisSeparators(axis_separators, shape.size());
 
   auto n = make_object<BufferNode>();
   n->data = std::move(data);

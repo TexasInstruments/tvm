@@ -15,6 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import pytest
+import platform
+
 import tvm
 from tvm import te
 import numpy as np
@@ -104,7 +107,7 @@ def get_qnn_func(
     if isinstance(kernel_zero_point, (int, float)):
         kernel_zero_point = relay.const(kernel_zero_point, "int32")
 
-    func = relay.qnn.op.conv2d(
+    func = relay.qnn.conv2d(
         data,
         kernel,
         input_zero_point=input_zero_point,
@@ -763,6 +766,10 @@ def test_kernel_size_1x1_strides_2():
         verify(ref_func, qnn_func, data_shape, data_dtype, kernel_shape, kernel_dtype)
 
 
+@pytest.mark.skipif(
+    platform.machine() == "aarch64",
+    reason="Fails due to encountering none type in autotvm. See https://github.com/apache/tvm/issues/16538",
+)
 def test_tflite_large_irregular():
     with TempOpAttr("qnn.conv2d", "FTVMQnnLegalize", legalize_qnn_conv2d):
 
@@ -948,7 +955,9 @@ def test_broadcast_layout():
         func = relay.Function(relay.analysis.free_vars(func), func)
         mod = tvm.IRModule.from_expr(func)
         with tvm.transform.PassContext(opt_level=3):
-            graph, lib, params = relay.build(mod, "llvm -mcpu=skylake-avx512")
+            graph, lib, params = relay.build(
+                mod, "llvm -mtriple=x86_64-linux-gnu -mcpu=skylake-avx512"
+            )
 
 
 def test_depthwise_depth_multiplier():
@@ -1075,7 +1084,7 @@ def test_per_channel_kernel_scale():
         kernel = relay.var("kernel", shape=kernel_shape, dtype=kernel_dtype)
         kernel_scales = [2, 2, 2]
         kernel_scales = relay.const(np.array(kernel_scales).astype("float32"))
-        func = relay.qnn.op.conv2d(
+        func = relay.qnn.conv2d(
             data,
             kernel,
             input_zero_point=relay.const(0, "int32"),

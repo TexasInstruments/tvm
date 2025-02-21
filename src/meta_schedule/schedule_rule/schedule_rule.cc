@@ -79,7 +79,7 @@ Array<ScheduleRule> ScheduleRule::DefaultLLVM() {
       ScheduleRule::ParallelizeVectorizeUnroll(
           /*max_jobs_per_core=*/16,
           /*max_vectorize_extent=*/64,
-          /*unroll_max_steps=*/Array<Integer>{0, 16, 64, 512},
+          /*unroll_max_steps=*/Array<runtime::Int>{0, 16, 64, 512},
           /*unroll_explicit=*/true),
       ScheduleRule::RandomComputeLocation(),
   };
@@ -126,7 +126,7 @@ Array<ScheduleRule> ScheduleRule::DefaultX86(const String& type) {
       ScheduleRule::ParallelizeVectorizeUnroll(
           /*max_jobs_per_core=*/16,
           /*max_vectorize_extent=*/64,
-          /*unroll_max_steps=*/Array<Integer>{0, 16, 64, 512},
+          /*unroll_max_steps=*/Array<runtime::Int>{0, 16, 64, 512},
           /*unroll_explicit=*/true),
       ScheduleRule::RandomComputeLocation(),
   };
@@ -158,11 +158,11 @@ Array<ScheduleRule> ScheduleRule::DefaultCUDA() {
           /*require_ordered=*/false,
           /*disallow_op=*/Array<String>{}),
       ScheduleRule::CrossThreadReduction(
-          /*thread_extents=*/Array<Integer>{4, 8, 16, 32, 64, 128, 256, 512}),
+          /*thread_extents=*/Array<runtime::Int>{4, 8, 16, 32, 64, 128, 256, 512}),
       ScheduleRule::ParallelizeVectorizeUnroll(
           /*max_jobs_per_core=*/-1,
           /*max_vectorize_extent=*/-1,
-          /*unroll_max_steps=*/Array<Integer>{0, 16, 64, 512, 1024},
+          /*unroll_max_steps=*/Array<runtime::Int>{0, 16, 64, 512, 1024},
           /*unroll_explicit=*/true),
       ScheduleRule::AutoBind(
           /*max_threadblocks=*/256,
@@ -171,7 +171,7 @@ Array<ScheduleRule> ScheduleRule::DefaultCUDA() {
 }
 
 Array<ScheduleRule> ScheduleRule::DefaultCUDATensorCore() {
-  Array<Map<String, String>> intrin_groups = {
+  Array<Map<String, String>> wmma_intrin_groups = {
       // Tensor Cores f32 += f16 * f16
       {
           {"init", "wmma_fill_16x16x16_f32"},
@@ -218,10 +218,27 @@ Array<ScheduleRule> ScheduleRule::DefaultCUDATensorCore() {
           {"store", "wmma_store_16x16x16_s32_shared_dyn"},
       },
   };
+  Array<Map<String, String>> mma_intrin_groups = {
+      // Tensor Core MMA
+      {
+          {"init", "mma_init_m16n8k8_f16"},
+          {"load_a", "mma_load_m16n8k8_f16_A_shared_dyn"},
+          {"load_b", "mma_load_m16n8k8_f16_B_shared_dyn"},
+          {"compute", "mma_sync_m16n8k8_f16f16f16"},
+          {"store", "mma_store_m16n8k8_f16_global"},
+      },
+      {
+          {"init", "mma_init_m16n8k8_f32"},
+          {"load_a", "mma_load_m16n8k8_f16_A_shared_dyn"},
+          {"load_b", "mma_load_m16n8k8_f16_B_shared_dyn"},
+          {"compute", "mma_sync_m16n8k8_f16f16f32"},
+          {"store", "mma_store_m16n8k8_f32_global"},
+      },
+  };
   Array<ScheduleRule> results{
       ScheduleRule::ApplyCustomRule(),
       ScheduleRule::MultiLevelTilingTensorCore(
-          /*intrin_groups=*/intrin_groups,
+          /*intrin_groups=*/wmma_intrin_groups,
           /*structure=*/"SSSRRSRS",
           /*tile_binds=*/Array<String>{"blockIdx.y", "blockIdx.x", "threadIdx.y"},
           /*max_innermost_factor=*/Integer(4),
@@ -234,7 +251,22 @@ Array<ScheduleRule> ScheduleRule::DefaultCUDATensorCore() {
           Map<String, ObjectRef>{{"req", String("must")},
                                  {"levels", Array<Integer>{2}},  //
                                  {"scope", String("shared.dyn")}},
-          /*use_software_pipeline=*/false)  //
+          /*use_software_pipeline=*/false),  //
+      ScheduleRule::MultiLevelTilingTensorCore(
+          /*intrin_groups=*/mma_intrin_groups,
+          /*structure=*/"SSSRRSRS",
+          /*tile_binds=*/Array<String>{"blockIdx.y", "blockIdx.x", "threadIdx.y"},
+          /*max_innermost_factor=*/Integer(4),
+          /*vector_load_lens=*/Array<Integer>{1, 2, 3, 4, 8, 16},
+          /*reuse_read=*/
+          Map<String, ObjectRef>{{"req", String("must")},
+                                 {"levels", Array<Integer>{4}},  //
+                                 {"scope", String("shared.dyn")}},
+          /*reuse_write=*/
+          Map<String, ObjectRef>{{"req", String("no")},
+                                 {"levels", Array<Integer>{2}},  //
+                                 {"scope", String("shared.dyn")}},
+          /*use_software_pipeline=*/true)  //
   };
   Array<ScheduleRule> append = ScheduleRule::DefaultCUDA();
   results.insert(results.end(), append.begin() + 1, append.end());
@@ -265,7 +297,7 @@ Array<ScheduleRule> ScheduleRule::DefaultHexagon() {
       ScheduleRule::ParallelizeVectorizeUnroll(
           /*max_jobs_per_core=*/16,
           /*max_vectorize_extent=*/128,
-          /*unroll_max_steps=*/Array<Integer>{0, 16, 64, 512},
+          /*unroll_max_steps=*/Array<runtime::Int>{0, 16, 64, 512},
           /*unroll_explicit=*/true),
   };
 }
@@ -295,7 +327,7 @@ Array<ScheduleRule> ScheduleRule::DefaultMicro() {
   };
 }
 
-Array<ScheduleRule> GetNeonSpecificRules() {
+Array<ScheduleRule> GetARMNeonSpecificRules() {
   return {
       ScheduleRule::MultiLevelTilingWithIntrin(
           /*intrin_name=*/String("dot_4x4_i8i8s32_neon"),
@@ -311,7 +343,7 @@ Array<ScheduleRule> GetNeonSpecificRules() {
   };
 }
 
-Array<ScheduleRule> GetDotprodSpecificRules() {
+Array<ScheduleRule> GetARMDotprodSpecificRules() {
   return {
       ScheduleRule::MultiLevelTilingWithIntrin(
           /*intrin_name=*/String("dot_4x4_i8i8s32_sdot"),
@@ -363,8 +395,8 @@ Array<ScheduleRule> ScheduleRule::DefaultARM(const String& type) {
       ScheduleRule::AddRFactor(
           /*max_jobs_per_core=*/8,
           /*max_innermost_factor=*/Integer(32)),
-      "neon" == type ? GetNeonSpecificRules() : Array<ScheduleRule>{},
-      "dotprod" == type ? GetDotprodSpecificRules() : Array<ScheduleRule>{},
+      "neon" == type ? GetARMNeonSpecificRules() : Array<ScheduleRule>{},
+      "dotprod" == type ? GetARMDotprodSpecificRules() : Array<ScheduleRule>{},
       ScheduleRule::MultiLevelTiling(
           /*structure=*/"SSRSRS",
           /*tile_binds=*/NullOpt,
@@ -378,7 +410,7 @@ Array<ScheduleRule> ScheduleRule::DefaultARM(const String& type) {
       ScheduleRule::ParallelizeVectorizeUnroll(
           /*max_jobs_per_core=*/8,
           /*max_vectorize_extent=*/32,
-          /*unroll_max_steps=*/Array<Integer>{0, 8, 32, 256},
+          /*unroll_max_steps=*/Array<runtime::Int>{0, 8, 32, 256},
           /*unroll_explicit=*/true),
       ScheduleRule::RandomComputeLocation());
 }

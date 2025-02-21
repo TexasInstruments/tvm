@@ -17,8 +17,8 @@
 # pylint: disable=invalid-name,unused-variable,unused-argument,no-else-return
 """util functions to be reused in different compute/schedule on Qualcomm Adreno GPU"""
 
-import tvm
 import numpy
+import tvm
 from tvm import te
 from tvm._ffi.registry import register_func
 from tvm.topi.utils import simplify
@@ -281,6 +281,22 @@ def pack_filter(
             Filter[indices[0], indices[1], indices[2], indices[3] * out_block + indices[4]],
         )
 
+    def _reorder_weights_iohw(*indices):
+        conditionA = []
+        conditionA.append(indices[1] == out_chunks - 1)
+        conditionA.append(indices[4] >= out_original_tail)
+        conditionAT = tvm.tir.all(*conditionA)
+
+        conditionO = []
+        conditionO.append(conditionAT)
+        conditionO.append(indices[0] >= in_chunks * in_block + in_original_tail)
+        conditionOT = tvm.tir.any(*conditionO)
+        return tvm.tir.if_then_else(
+            conditionOT,
+            pad_value,
+            Filter[indices[0], indices[1] * out_block + indices[4], indices[2], indices[3]],
+        )
+
     if in_filter_channels == 1:
         if layout == "OIHW":
             reordered_filter = te.compute(
@@ -310,6 +326,13 @@ def pack_filter(
             reordered_filter = te.compute(
                 [out_chunks, in_filter_channels, kernel_h, kernel_w, out_block],
                 _reorder_weights_oihw,
+                name="filter_pack",
+                tag="filter_pack",
+            )
+        elif layout == "IOHW":
+            reordered_filter = te.compute(
+                [in_filter_channels, out_chunks, kernel_h, kernel_w, out_block],
+                _reorder_weights_iohw,
                 name="filter_pack",
                 tag="filter_pack",
             )
@@ -537,14 +560,14 @@ def bind_data_copy(stage, axis_to_vectorize=None):
             stage.vectorize(iax3)
             fused = stage.fuse(ax0, ax1, ax2, oax3)
 
-        ftc = numpy.prod(shape) / 4
+        ftc = numpy.prod(shape) // 4
         div = get_div(ftc, 128)
         block, thread = stage.split(fused, factor=div)
 
         stage.bind(block, te.thread_axis("blockIdx.z"))
         stage.bind(thread, te.thread_axis("threadIdx.z"))
     else:
-        if shape[-1] == 4:
+        if len(shape) > 0 and shape[-1] == 4:
             axes = stage.op.axis
             fused = stage.fuse(*axes[:-1])
             ftc = numpy.prod(shape[:-1])
@@ -557,7 +580,7 @@ def bind_data_copy(stage, axis_to_vectorize=None):
             ftc = numpy.prod(shape)
             vthread = get_div(ftc, 8)
             fused = stage.fuse(*stage.op.axis)
-            ftc = ftc / vthread
+            ftc = ftc // vthread
             # 1024 is a maximum work group size on the most Adreno GPU
             num_thread = get_div(ftc, 1024 // vthread)
             a, b = stage.split(fused, factor=num_thread)

@@ -48,7 +48,10 @@ enum DeviceAttrKind : int {
   kMaxRegistersPerBlock = 9,
   kGcnArch = 10,
   kApiVersion = 11,
-  kDriverVersion = 12
+  kDriverVersion = 12,
+  kL2CacheSizeBytes = 13,
+  kTotalGlobalMemory = 14,
+  kAvailableGlobalMemory = 15,
 };
 
 #ifdef TVM_KALLOC_ALIGNMENT
@@ -95,6 +98,14 @@ class TVM_DLL DeviceAPI {
   virtual void GetAttr(Device dev, DeviceAttrKind kind, TVMRetValue* rv) = 0;
 
   /*!
+   * \brief Get the physical memory size required.
+   * \param arr the tensor object.
+   * \param mem_scope the memory scope if any
+   * \return the memory size.
+   */
+  virtual size_t GetDataSize(const DLTensor& arr, Optional<String> mem_scope = NullOpt);
+
+  /*!
    * \brief Query the device for specified properties.
    *
    * This is used to expand "-from_device=N" in the target string to
@@ -137,6 +148,8 @@ class TVM_DLL DeviceAPI {
    * \param from The source array.
    * \param to The target array.
    * \param stream Optional stream object.
+   * \note The copy may happen asynchronously if it involves a GPU context.
+   *       Call StreamSync to ensure the copy completes from host's pov.
    */
   virtual void CopyDataFromTo(DLTensor* from, DLTensor* to, TVMStreamHandle stream);
   /*!
@@ -166,6 +179,12 @@ class TVM_DLL DeviceAPI {
    * \param stream The stream to be set.
    */
   virtual void SetStream(Device dev, TVMStreamHandle stream) {}
+  /*!
+   * \brief Get the current stream
+   * \param dev The device to get stream.
+   * \return The current stream of the device.
+   */
+  virtual TVMStreamHandle GetCurrentStream(Device dev);
   /*!
    * \brief Synchronize 2 streams of execution.
    *
@@ -221,6 +240,11 @@ class TVM_DLL DeviceAPI {
     return device_type != kDLCPU && device_type != kDLMicroDev;
   }
 
+  /*!
+   * \brief Whether pointer arithmetics on a device owned pointer may be performed on the host.
+   */
+  virtual bool SupportsDevicePointerArithmeticsOnHost() { return false; }
+
  protected:
   /*!
    * \brief copy data from one place to another
@@ -243,54 +267,6 @@ class TVM_DLL DeviceAPI {
 /*! \brief The device type bigger than this is RPC device */
 constexpr int kRPCSessMask = 128;
 static_assert(kRPCSessMask >= TVMDeviceExtType_End);
-
-/*!
- * \brief The name of Device API factory.
- * \param type The device type.
- * \return the device name.
- */
-inline const char* DeviceName(int type) {
-  switch (type) {
-    case kDLCPU:
-      return "cpu";
-    case kDLCUDA:
-      return "cuda";
-    case kDLCUDAHost:
-      return "cuda_host";
-    case kDLCUDAManaged:
-      return "cuda_managed";
-    case kDLOpenCL:
-      return "opencl";
-    case kDLSDAccel:
-      return "sdaccel";
-    case kDLAOCL:
-      return "aocl";
-    case kDLVulkan:
-      return "vulkan";
-    case kDLMetal:
-      return "metal";
-    case kDLVPI:
-      return "vpi";
-    case kDLROCM:
-      return "rocm";
-    case kDLROCMHost:
-      return "rocm_host";
-    case kDLExtDev:
-      return "ext_dev";
-    case kDLOneAPI:
-      return "oneapi";
-    case kDLWebGPU:
-      return "webgpu";
-    case kDLHexagon:
-      return "hexagon";
-    case kOpenGL:
-      return "opengl";
-    case kDLMicroDev:
-      return "microdev";
-    default:
-      LOG(FATAL) << "unknown type =" << type;
-  }
-}
 
 /*!
  * \brief Return true if a Device is owned by an RPC session.
@@ -323,7 +299,7 @@ inline std::ostream& operator<<(std::ostream& os, DLDevice dev) {  // NOLINT(*)
     os << "remote[" << tvm::runtime::GetRPCSessionIndex(dev) << "]-";
     dev = tvm::runtime::RemoveRPCSessionMask(dev);
   }
-  os << tvm::runtime::DeviceName(static_cast<int>(dev.device_type)) << "(" << dev.device_id << ")";
+  os << tvm::runtime::DLDeviceType2Str(static_cast<int>(dev.device_type)) << ":" << dev.device_id;
   return os;
 }
 

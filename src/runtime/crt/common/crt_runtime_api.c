@@ -143,6 +143,8 @@ int TVMStreamCreate(int device_type, int device_id, TVMStreamHandle* out) {
   return 0;
 }
 
+int TVMObjectFree(TVMObjectHandle obj) { return 0; }
+
 int TVMStreamFree(int device_type, int device_id, TVMStreamHandle stream) { return 0; }
 
 int TVMSetStream(int device_type, int device_id, TVMStreamHandle stream) { return 0; }
@@ -232,9 +234,9 @@ static int SystemLibraryCreate(TVMValue* args, int* type_codes, int num_args, TV
 
 static TVMFunctionHandle EncodeFunctionHandle(tvm_module_index_t module_index,
                                               tvm_function_index_t function_index) {
-  return (TVMFunctionHandle)(
-      (((uintptr_t)(module_index | 0x8000) << (sizeof(tvm_function_index_t) * 8)) |
-       (function_index | 0x8000)));
+  return (TVMFunctionHandle)((
+      ((uintptr_t)(module_index | 0x8000) << (sizeof(tvm_function_index_t) * 8)) |
+      (function_index | 0x8000)));
 }
 
 static int DecodeFunctionHandle(TVMFunctionHandle handle, tvm_module_index_t* module_index,
@@ -351,14 +353,28 @@ int ModuleGetFunction(TVMValue* args, int* type_codes, int num_args, TVMValue* r
 
   ret_value[0].v_handle = NULL;
   ret_type_codes[0] = kTVMNullptr;
-  if (num_args != 3 || type_codes[0] != kTVMModuleHandle || type_codes[1] != kTVMStr ||
-      type_codes[2] != kDLInt) {
-    return 0;
+  if (num_args != 3) {
+    TVMAPISetLastError("ModuleGetFunction expects exactly 3 arguments");
+    return kTvmErrorFunctionCallNumArguments;
+  }
+  if (type_codes[0] != kTVMModuleHandle) {
+    TVMAPISetLastError("ModuleGetFunction expects first argument to be a Module");
+    return kTvmErrorFunctionCallWrongArgType;
+  }
+  if (type_codes[1] != kTVMStr) {
+    TVMAPISetLastError("ModuleGetFunction expects second argument to be a string");
+    return kTvmErrorFunctionCallWrongArgType;
+  }
+
+  if (type_codes[2] == kDLInt || type_codes[2] == kTVMArgBool) {
+    query_imports = args[2].v_int64 != 0;
+  } else {
+    TVMAPISetLastError("ModuleGetFunction expects third argument to be an integer");
+    return kTvmErrorFunctionCallWrongArgType;
   }
 
   mod = (TVMModuleHandle)args[0].v_handle;
   name = args[1].v_str;
-  query_imports = args[2].v_int64 != 0;
   to_return = TVMModGetFunction(mod, name, query_imports, &ret_value->v_handle);
 
   if (to_return == 0) {
@@ -493,14 +509,15 @@ int RPCTimeEvaluator(TVMValue* args, int* type_codes, int num_args, TVMValue* re
                      int* ret_type_code) {
   ret_val[0].v_handle = NULL;
   ret_type_code[0] = kTVMNullptr;
-  if (num_args < 11) {
+  if (num_args < 12) {
     TVMAPIErrorf("not enough args");
     return kTvmErrorFunctionCallNumArguments;
   }
   if (type_codes[0] != kTVMModuleHandle || type_codes[1] != kTVMStr ||
       type_codes[2] != kTVMArgInt || type_codes[3] != kTVMArgInt || type_codes[4] != kTVMArgInt ||
       type_codes[5] != kTVMArgInt || type_codes[6] != kTVMArgInt || type_codes[7] != kTVMArgInt ||
-      type_codes[8] != kTVMArgInt || type_codes[9] != kTVMArgInt || type_codes[10] != kTVMStr) {
+      type_codes[8] != kTVMArgInt || type_codes[9] != kTVMArgInt || type_codes[10] != kTVMArgInt ||
+      type_codes[11] != kTVMStr) {
     TVMAPIErrorf("one or more invalid arg types");
     return kTvmErrorFunctionCallWrongArgType;
   }

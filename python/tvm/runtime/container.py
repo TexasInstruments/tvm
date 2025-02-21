@@ -54,7 +54,7 @@ def getitem_helper(obj, elem_getter, length, idx):
         return [elem_getter(obj, i) for i in range(start, stop, step)]
 
     if idx < -length or idx >= length:
-        raise IndexError("Index out of range. size: {}, got index {}".format(length, idx))
+        raise IndexError(f"Index out of range. size: {length}, got index {idx}")
     if idx < 0:
         idx += length
     return elem_getter(obj, idx)
@@ -77,7 +77,7 @@ class ADT(Object):
         for f in fields:
             assert isinstance(
                 f, ObjectTypes
-            ), "Expect object or " "tvm NDArray type, but received : {0}".format(type(f))
+            ), f"Expect object or tvm NDArray type, but received : {type(f)}"
         self.__init_handle_by_constructor__(_ffi_api.ADT, tag, *fields)
 
     @property
@@ -108,7 +108,7 @@ def tuple_object(fields=None):
     for f in fields:
         assert isinstance(
             f, ObjectTypes
-        ), "Expect object or tvm " "NDArray type, but received : {0}".format(type(f))
+        ), f"Expect object or tvm NDArray type, but received : {type(f)}"
     return _ffi_api.Tuple(*fields)
 
 
@@ -149,11 +149,11 @@ class ShapeTuple(Object):
     """
 
     def __init__(self, shape):
-        assert isinstance(shape, (list, tuple)), "Expect list of tuple, but received : {0}".format(
-            type(shape)
-        )
+        assert isinstance(
+            shape, (list, tuple)
+        ), f"Expect list of tuple, but received : {type(shape)}"
         for x in shape:
-            assert isinstance(x, int), "Expect int type, but received : {0}".format(type(x))
+            assert isinstance(x, int), f"Expect int type, but received : {type(x)}"
         self.__init_handle_by_constructor__(_ffi_api.ShapeTuple, *shape)
 
     def __len__(self):
@@ -172,3 +172,41 @@ class ShapeTuple(Object):
                 return False
 
         return True
+
+
+# @tvm._ffi.register_object("runtime.BoxBool")
+# class BoxBool(Object):
+#     """A boolean wrapped as a tvm Object
+
+#     Parameters
+#     ----------
+#     value: bool
+
+#         The value to hold
+#     """
+
+#     def __init__(self, value: bool):
+#         # Convert to int to avoid an infinite recursion, because
+#         # BoxBool may be constructed in _make_tvm_args, and calling
+#         # the packed func `_ffi_api.BoxBool` internally calls
+#         # `_make_tvm_args`.
+#         self.__init_handle_by_constructor__(_ffi_api.BoxBool, int(value))
+
+#     def __into_pynative_object__(self) -> bool:
+#         return self.value
+
+#     @property
+#     def value(self) -> bool:
+#         """Unwrap the boxed value.
+
+#         This is implemented explicitly rather than using the usual
+#         PackedFunc handling or AttrVisitor mechanics for two reasons.
+#         First, because the PackedFunc handling would require ambiguous
+#         representations between `True`/`1` and `False`/`0`.  Second,
+#         because the boxing/unboxing must be available in
+#         `libtvm_runtime.so`, and AttrVisitor is only available in
+#         `libtvm.so`.
+#         """
+#         unboxed_bool = _ffi_api.UnBoxBool(self)
+#         assert unboxed_bool is not None
+#         return bool(unboxed_bool)

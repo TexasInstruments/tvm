@@ -104,7 +104,7 @@ Definition of a scope that is a stage pipeline:
   }
   // Step 2. Handle `require_stage_pipeline`
   if (require_stage_pipeline && self->enable_check) {
-    bool stage_pipeline = self->GetBlockInfo(scope_root_sref).scope->stage_pipeline;
+    bool stage_pipeline = self->GetBlockInfo(scope_root_sref).stage_pipeline;
     if (stage_pipeline == false) {
       const BlockNode* block = TVM_SREF_TO_BLOCK(scope_root_sref);
       throw NotStagePipelineError(self->mod, GetRef<Block>(block));
@@ -327,6 +327,11 @@ bool IsReductionBlock(const ScheduleState& self, const StmtSRef& block_sref,
                       const StmtSRef& scope_root_sref) {
   return CheckReductionBlockErrorCode(self, block_sref, scope_root_sref) == 0;
 }
+
+TVM_REGISTER_GLOBAL("tir.schedule.IsReductionBlock")
+    .set_body_typed([](Schedule sch, BlockRV block_rv, BlockRV scope_block_rv) {
+      return IsReductionBlock(sch->state(), sch->GetSRef(block_rv), sch->GetSRef(scope_block_rv));
+    });
 
 void CheckReductionBlock(const ScheduleState& self, const StmtSRef& block_sref,
                          const StmtSRef& scope_root_sref) {
@@ -859,6 +864,11 @@ BlockRealize GetBlockRealize(const ScheduleState& self, const StmtSRef& block_sr
   }
 }
 
+TVM_REGISTER_GLOBAL("tir.schedule.GetBlockRealize")
+    .set_body_typed([](Schedule sch, BlockRV block_rv) {
+      return GetBlockRealize(sch->state(), sch->GetSRef(block_rv));
+    });
+
 IterVarType GetLoopIterType(const StmtSRef& loop_sref) {
   const ForNode* loop = TVM_SREF_TO_FOR(loop_sref);
   const Var& loop_var = loop->loop_var;
@@ -1269,6 +1279,20 @@ StmtSRef GetSRefTreeRoot(const StmtSRef& sref) {
   return GetRef<StmtSRef>(p);
 }
 
+void AddShapeVarBounds(const ScheduleState& state, const StmtSRefNode* sref,
+                       arith::Analyzer* analyzer) {
+  while (sref->parent != nullptr) {
+    sref = sref->parent;
+  }
+  const PrimFuncNode* f = GetRootPrimFunc(state->mod, sref->stmt, nullptr);
+  for (const auto& kv : f->buffer_map) {
+    const Buffer& buffer = kv.second;
+    for (const PrimExpr& e : buffer->shape) {
+      analyzer->MarkGlobalNonNegValue(e);
+    }
+  }
+}
+
 /******** Misc ********/
 
 bool HasOp(const Stmt& stmt, const Array<Op>& ops) {
@@ -1458,6 +1482,11 @@ bool IsTrivialBinding(const ScheduleState& self, const StmtSRef& block_sref) {
   }
   return true;
 }
+
+TVM_REGISTER_GLOBAL("tir.schedule.IsTrivialBinding")
+    .set_body_typed([](Schedule sch, BlockRV block_rv) {
+      return IsTrivialBinding(sch->state(), sch->GetSRef(block_rv));
+    });
 
 bool NeedsMultiLevelTiling(const ScheduleState& self, const StmtSRef& block_sref) {
   if (HasBeenMultiLevelTiled(block_sref)) {
@@ -1829,7 +1858,7 @@ Optional<TensorizeInfo> GetTensorizeLoopMapping(const tir::ScheduleState& self,
         if (allow_padding) {
           // If the block loop is not divisible by the desc loop, we pad the block loop to make it
           // divisible if padding is allowed.
-          block_index_to_padding[current_block_ind] = int_desc_extent->value - remainder;
+          block_index_to_padding[current_block_ind] = int_desc_extent->value;
         } else {
           return NullOpt;
         }
@@ -1853,7 +1882,7 @@ Optional<TensorizeInfo> GetTensorizeLoopMapping(const tir::ScheduleState& self,
       if (auto it = block_index_to_padding.find(i); it != block_index_to_padding.end()) {
         paddings.push_back(IntImm(iter_var->var.dtype(), it->second));
       } else {
-        paddings.push_back(IntImm(iter_var->var.dtype(), 0));
+        paddings.push_back(IntImm(iter_var->var.dtype(), 1));
       }
     }
     ret->block_iter_paddings = std::move(paddings);
@@ -1885,7 +1914,7 @@ class AutoTensorizeMappingProposer {
                                         arith::Analyzer* analyzer)
       : extractor_(extractor), analyzer_(analyzer) {}
 
-  using VarSet = std::unordered_set<Var, ObjectPtrHash, ObjectPtrEqual>;
+  using VarSet = std::unordered_set<Var>;
 
   void CollectFeasibleSet() {
     // Collect the set of potential iter var mapping between the workload and the tensor intrin.
@@ -2047,7 +2076,7 @@ class AutoTensorizeMappingProposer {
   // The arithmetic analyzer.
   arith::Analyzer* analyzer_;
   /*! \brief Potential mappings on RHS for each variable on LHS */
-  std::unordered_map<Var, VarSet, ObjectPtrHash, ObjectPtrEqual> lhs_feasible_vars_;
+  std::unordered_map<Var, VarSet> lhs_feasible_vars_;
 };
 
 bool CheckAutoTensorizeApplicable(const ScheduleState& state, const tir::StmtSRef& block_sref,
@@ -2103,6 +2132,18 @@ TVM_REGISTER_GLOBAL("tir.schedule.IsOutputBlock").set_body_typed([](Schedule sch
   auto block_sref = sch->GetSRef(block);
   return IsOutputBlock(state, block_sref, GetScopeRoot(state, block_sref, false));
 });
+
+TVM_REGISTER_GLOBAL("tir.schedule.GetLoopIterType")
+    .set_body_typed([](Schedule sch, LoopRV loop) -> String {
+      IterVarType kind = GetLoopIterType(sch->GetSRef(loop));
+      if (kind == kDataPar) {
+        return "S";
+      } else if (kind == kCommReduce) {
+        return "R";
+      } else {
+        return "O";
+      }
+    });
 
 }  // namespace tir
 }  // namespace tvm

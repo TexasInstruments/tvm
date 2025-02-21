@@ -22,8 +22,14 @@ import numpy as np
 
 import tvm
 from tvm import te, topi
-from ..utils import saturate, get_fixed_point_value
-from ...utils import get_const_tuple, get_const_int, get_const_float
+from ..utils import (
+    saturate,
+    is_scalar,
+    get_const_int_value,
+    get_const_float_value,
+    get_fixed_point_value,
+)
+from ...utils import get_const_tuple
 from ...nn.utils import get_pad_tuple
 from ...nn.pad import pad
 from ... import tag, nn
@@ -38,41 +44,25 @@ def clip_cast(val, dtype):
     return te.max(tvm.te.min(val, const_max), const_min).astype(dtype)
 
 
-# Return True if given expression is scalar constant value.
-def is_scalar(expr):
-    if isinstance(expr, te.Tensor):
-        return expr.ndim == 0 and (isinstance(expr.op.body[0], (tvm.tir.FloatImm, tvm.tir.IntImm)))
-    return isinstance(expr, (tvm.tir.FloatImm, tvm.tir.IntImm))
+def is_relax_constant(expr):
+    return hasattr(expr.op, "value") and isinstance(expr.op.value, tvm.relax.expr.Constant)
 
 
-def get_const_int_value(expr):
-    if isinstance(expr, te.Tensor):
-        assert isinstance(expr.op.body[0], tvm.tir.IntImm)
-        return expr.op.body[0].value
-    return get_const_int(expr)
-
-
-def get_const_float_value(expr):
-    if isinstance(expr, te.Tensor):
-        assert isinstance(expr.op.body[0], tvm.tir.FloatImm)
-        return expr.op.body[0].value
-    return get_const_float(expr)
+def get_relax_scalar_const_value(expr):
+    assert len(expr.op.value.data.shape) == 0
+    return expr.op.value.data.numpy()[()]
 
 
 def get_qnn_param(param, indices, axis):
     # Account scalar and 1D quantization parameters:
-    if len(param.shape) == 0:
+    if is_scalar(param):
         return param
 
     param_idx = tvm.tir.indexmod(indices[axis], topi.shape(param)[0])
     return param[param_idx]
 
 
-def subtract_zero_point(
-    tensor: te.Tensor,
-    zero_point: Union[te.Tensor, tvm.tir.IntImm],
-    name: str,
-):
+def subtract_zero_point(tensor: te.Tensor, zero_point: Union[te.Tensor, tvm.tir.IntImm], name: str):
     """
     Subtract zero point from given tensor. If zero point is scalar constant and is equal to 0, then
     it can be optimized and return tensor as it is.
@@ -188,13 +178,7 @@ def schedule_qnn_dequantize(outs):
 
 
 def qnn_requantize(
-    data: te.Tensor,
-    input_scale: te.Tensor,
-    input_zp: te.Tensor,
-    output_scale: te.Tensor,
-    output_zp: te.Tensor,
-    axis=-1,
-    out_dtype="int8",
+    data: te.Tensor, input_scale, input_zp, output_scale, output_zp, axis=-1, out_dtype="int8"
 ):
     """Compute for qnn.requantize
 
@@ -208,7 +192,6 @@ def qnn_requantize(
 
     TODO: support 'rounding' and 'compute_dtype' arguments.
     """
-
     if is_scalar(input_scale) and is_scalar(output_scale):
         iscale = get_const_float_value(input_scale)
         oscale = get_const_float_value(output_scale)
@@ -224,7 +207,7 @@ def qnn_requantize(
             # Add output zero point + clip + cast:
             return saturate(te.add(mul, output_zp), out_dtype).astype(out_dtype)
 
-        return te.compute(data.shape, _compute, name="requantize")
+        return te.compute(data.shape, _compute, name="requantize_scalar")
 
     else:
 
@@ -285,8 +268,8 @@ def compute_qnn_binary_op(
 
     def _compute_tensor(x: te.Tensor, input_scale, input_zp):
         if is_scalar(input_scale) and is_scalar(output_scale):
-            iscale = input_scale.op.body[0].value
-            oscale = output_scale.op.body[0].value
+            iscale = get_const_float_value(input_scale)
+            oscale = get_const_float_value(output_scale)
             scale = iscale / oscale
             scale_fixed_point, rsh = get_fixed_point_value(scale, "int16")
             return te.compute(
@@ -406,7 +389,10 @@ def qnn_mul(
     if is_scalar(lhs_scale) and is_scalar(rhs_scale):
         assert isinstance(lhs_scale, te.Tensor)
         assert isinstance(rhs_scale, te.Tensor)
-        iscale = lhs_scale.op.body[0] * rhs_scale.op.body[0]
+        iscale_val = get_const_float_value(lhs_scale.op.body[0]) * get_const_float_value(
+            rhs_scale.op.body[0]
+        )
+        iscale = tvm.tir.const(iscale_val)
     else:
         iscale = lhs_scale * rhs_scale
 
@@ -590,10 +576,7 @@ def qnn_conv2d(  # Conv2d inputs
         oshape,
         lambda n, oc, oh, ow: te.sum(
             data_pad[
-                n,
-                ic,
-                oh * height_stride + kh * dilation_h,
-                ow * width_stride + kw * dilation_w,
+                n, ic, oh * height_stride + kh * dilation_h, ow * width_stride + kw * dilation_w
             ].astype("int32")
             * weight[oc, ic, kh, kw].astype("int32"),
             axis=[ic, kh, kw],
@@ -777,10 +760,7 @@ def qnn_depthwise_conv2d(  # Conv2d inputs
         oshape,
         lambda n, oc, oh, ow: te.sum(
             data_pad[
-                n,
-                oc,
-                oh * height_stride + kh * dilation_h,
-                ow * width_stride + kw * dilation_w,
+                n, oc, oh * height_stride + kh * dilation_h, ow * width_stride + kw * dilation_w
             ].astype("int32")
             * te.subtract(weight[oc, 0, kh, kw], kernel_zero_point).astype("int32"),
             axis=[kh, kw],

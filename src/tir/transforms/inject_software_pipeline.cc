@@ -176,6 +176,13 @@ class PipelineOpaqueAccessRewriter {
         } else {
           offset = new_buffer->strides[0];
         }
+        if (buffer.scope() == "m16n8k8.matrixA" || buffer.scope() == "m16n8k8.matrixB") {
+          // mma scope size will shrink by warp size
+          // @see transform_mma_buffer_layout
+          ICHECK_EQ(Downcast<IntImm>(floormod(offset, 32))->value, 0)
+              << "mma scope size should be multiple of warp size";
+          offset = floordiv(offset, 32);
+        }
         PrimExpr new_index =
             old_index + floormod(pipeline_loop_->loop_var, new_buffer->shape[0]) * offset;
         new_args.Set(i + 1, new_index);
@@ -794,7 +801,7 @@ class PipelineRewriter : public StmtExprMutator {
 
     auto make_nop = []() { return BlockRealize({}, Bool(true), MakeBlock(Evaluate(0), {})); };
 
-    if (!analyzer_.CanProve(extent > 0)) {
+    if (analyzer_.CanProve(extent <= 0)) {
       return make_nop();
     }
     bool is_unit_loop = analyzer_.CanProveEqual(extent, 1);
@@ -964,7 +971,7 @@ void BuildDependencyGraph(
     const Array<Block>& blocks,
     std::unordered_map<Block, Array<Block>, ObjectPtrHash, ObjectPtrEqual>* dep_src2dst,
     std::unordered_map<Block, Array<Block>, ObjectPtrHash, ObjectPtrEqual>* dep_dst2src) {
-  std::unordered_map<Var, Array<Block>, ObjectPtrHash, ObjectPtrEqual> buffer_writers;
+  std::unordered_map<Var, Array<Block>> buffer_writers;
 
   for (const Block& block : blocks) {
     for (const BufferRegion& read : block->reads) {

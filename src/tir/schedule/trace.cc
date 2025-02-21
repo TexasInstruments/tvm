@@ -78,13 +78,13 @@ Array<ObjectRef> TranslateInputRVs(const Array<ObjectRef>& inputs,
       auto it = rv_map.find(input.get());
       ICHECK(it != rv_map.end()) << "IndexError: Random variable doesn't exist: " << input;
       result.push_back(GetRef<ObjectRef>(it->second));
-    } else if (const auto* expr = input.as<PrimExprNode>()) {  // RV: Expr
-      result.push_back(Substitute(GetRef<PrimExpr>(expr), f_subst_with_rv_map));
-    } else if (const auto* index_map = input.as<IndexMapNode>()) {
-      result.push_back(Substitute(GetRef<IndexMap>(index_map), f_subst_with_rv_map));
-    } else if (input->IsInstance<ArrayNode>()) {
+    } else if (auto expr = input.as<PrimExpr>()) {  // RV: Expr
+      result.push_back(Substitute(expr.value(), f_subst_with_rv_map));
+    } else if (auto index_map = input.as<IndexMap>()) {
+      result.push_back(Substitute(index_map.value(), f_subst_with_rv_map));
+    } else if (auto arr = input.as<Array<ObjectRef>>()) {
       // Recursively convert elements of the array into a new list of ObjectRefs.
-      result.push_back(TranslateInputRVs(Downcast<Array<ObjectRef>>(input), rv_map));
+      result.push_back(TranslateInputRVs(arr.value(), rv_map));
     } else {
       ICHECK(false) << "TypeError: Cannot recognize the type of an input random variable: "
                     << input->GetTypeKey();
@@ -112,7 +112,9 @@ Array<ObjectRef> TranslateInputRVs(
     } else if (const auto* str_obj = input.as<StringObj>()) {
       // Case 2. string => "content"
       results.push_back(String('"' + std::string(str_obj->data) + '"'));
-    } else if (input->IsInstance<IntImmNode>() || input->IsInstance<FloatImmNode>()) {
+    } else if (input->IsInstance<IntImmNode>() || input->IsInstance<FloatImmNode>() ||
+               input->IsInstance<runtime::Int::ContainerType>() ||
+               input->IsInstance<runtime::Float::ContainerType>()) {
       // Case 3. integer or floating-point number
       results.push_back(input);
     } else if (input->IsInstance<ArrayNode>()) {
@@ -149,7 +151,9 @@ Array<ObjectRef> TranslateInputRVs(const Array<ObjectRef>& inputs,
   results.reserve(inputs.size());
   for (const ObjectRef& input : inputs) {
     // Case 3. integer or floating-point number
-    if (input->IsInstance<IntImmNode>() || input->IsInstance<FloatImmNode>()) {
+    if (input->IsInstance<IntImmNode>() || input->IsInstance<FloatImmNode>() ||
+        input->IsInstance<runtime::Int::ContainerType>() ||
+        input->IsInstance<runtime::Float::ContainerType>()) {
       results.push_back(input);
       continue;
     }
@@ -388,9 +392,9 @@ void Trace::ApplyJSONToSchedule(ObjectRef json, Schedule sch) {
     try {
       const ArrayNode* arr = decision_entry.as<ArrayNode>();
       ICHECK(arr && arr->size() == 2);
-      const IntImmNode* arr0 = arr->at(0).as<IntImmNode>();
+      auto arr0 = arr->at(0).as<runtime::Int>();
       ICHECK(arr0);
-      index = arr0->value;
+      index = arr0.value();
       decision = arr->at(1);
     } catch (const tvm::Error& e) {
       LOG(FATAL) << "ValueError: Each entry of a json decision should be a tuple [index, "

@@ -77,7 +77,7 @@ def register_workload(func_name, f=None, override=False):
           A = te.placeholder((N, K), name='A')
           B = te.placeholder((K, M), name='B')
           k = te.reduce_axis((0, K), name='k')
-          C = te.compute((N, M), lambda i, j: tvm.sum(A[i][k] * B[k][j], axis=[k]), name='C')
+          C = te.compute((N, M), lambda i, j: te.sum(A[i][k] * B[k][j], axis=[k]), name='C')
           return [A, B, C]
     """
     global WORKLOAD_FUNC_REGISTRY
@@ -91,7 +91,7 @@ def register_workload(func_name, f=None, override=False):
     def register(myf):
         """internal register function"""
         if func_name in WORKLOAD_FUNC_REGISTRY and not override:
-            raise RuntimeError("%s has been registered already" % func_name)
+            raise RuntimeError(f"{func_name} has been registered already")
         WORKLOAD_FUNC_REGISTRY[func_name] = myf
         return myf
 
@@ -153,8 +153,8 @@ def make_workload_key(func, args):
 
     if not func_name in WORKLOAD_FUNC_REGISTRY:
         raise ValueError(
-            "%s is not registered. " % func,
-            "Please register it with @auto_scheduler.register_workload",
+            f"{func} is not registered. "
+            f"Please register it with @auto_scheduler.register_workload"
         )
 
     args = serialize_args(args)

@@ -143,7 +143,7 @@ std::vector<double> GraphExecutorDebug::RunOpRPC(int index, int number, int repe
           ->
           operator()(module_, name, static_cast<int>(dev.device_type), dev.device_id, number,
                      repeat, min_repeat_ms, limit_zero_time_iterations, cooldown_interval_ms,
-                     repeats_to_cooldown, "");
+                     repeats_to_cooldown, /*cache_flush_bytes=*/0, "");
 
   int num_flat_args = num_inputs + num_outputs;
   auto values = std::make_unique<TVMValue[]>(num_flat_args);
@@ -192,15 +192,22 @@ Timer GraphExecutorDebug::RunOpHost(int index) {
  * \param name The function which needs to be invoked.
  * \param sptr_to_self Packed function pointer.
  */
-PackedFunc GraphExecutorDebug::GetFunction(const std::string& name,
+PackedFunc GraphExecutorDebug::GetFunction(const String& name,
                                            const ObjectPtr<Object>& sptr_to_self) {
   // return member functions during query.
   if (name == "debug_get_output") {
     return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
+      int args0 = -1;
       if (String::CanConvertFrom(args[0])) {
-        this->DebugGetNodeOutput(this->GetNodeIndex(args[0]), args[1]);
+        args0 = this->GetNodeIndex(args[0]);
       } else {
-        this->DebugGetNodeOutput(args[0], args[1]);
+        args0 = args[0];
+      }
+
+      if (args.num_args == 2) {
+        this->DebugGetNodeOutput(args0, args[1]);
+      } else {
+        *rv = this->DebugGetNodeOutput(args0);
       }
     });
   } else if (name == "execute_node") {
@@ -323,6 +330,18 @@ void GraphExecutorDebug::DebugGetNodeOutput(int index, DLTensor* data_out) {
   }
 
   data_entry_[eid].CopyTo(data_out);
+}
+
+NDArray GraphExecutorDebug::DebugGetNodeOutput(int index) {
+  ICHECK_LT(static_cast<size_t>(index), op_execs_.size());
+  uint32_t eid = index;
+
+  for (size_t i = 0; i < op_execs_.size(); ++i) {
+    if (op_execs_[i]) op_execs_[i]();
+    if (static_cast<int>(i) == index) break;
+  }
+
+  return data_entry_[eid];
 }
 
 NDArray GraphExecutorDebug::GetNodeOutput(int node, int out_ind) {

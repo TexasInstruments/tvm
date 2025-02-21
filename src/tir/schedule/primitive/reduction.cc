@@ -210,7 +210,7 @@ StmtSRef DecomposeReduction(ScheduleState self, const StmtSRef& block_sref,
   init_realize->block = Block(init_block);
   // Step 1. Create new block vars and their bindings
   // Maps an old block var to the new corresponding block var
-  std::unordered_map<Var, Var, ObjectPtrHash, ObjectPtrEqual> block_var_map;
+  std::unordered_map<Var, Var> block_var_map;
   block_var_map.reserve(block->iter_vars.size());
   for (int i = 0, n = block->iter_vars.size(); i < n; ++i) {
     const IterVar& iter_var = block->iter_vars[i];
@@ -263,7 +263,7 @@ StmtSRef DecomposeReduction(ScheduleState self, const StmtSRef& block_sref,
   //         We discard predicate that is related to discarded loops
   init_realize->predicate = RemakePredicate(realize->predicate, discarded_loops);
   // Step 5. Create new loops above init block
-  std::unordered_map<Var, Var, ObjectPtrHash, ObjectPtrEqual> loop_var_map;
+  std::unordered_map<Var, Var> loop_var_map;
   Stmt body = BlockRealize(init_realize);
   for (int i : chosen_loops) {
     const ForNode* old_loop = TVM_SREF_TO_FOR(loops[i]);
@@ -271,11 +271,19 @@ StmtSRef DecomposeReduction(ScheduleState self, const StmtSRef& block_sref,
     Var old_loop_var = old_loop->loop_var;
     Var new_loop_var = old_loop_var.copy_with_suffix("_init");
     loop_var_map[old_loop_var] = new_loop_var;
+    Optional<IterVar> opt_thread_binding = old_loop->thread_binding;
+    if (opt_thread_binding) {
+      auto thread_binding = opt_thread_binding.value();
+      auto new_var = thread_binding->var.copy_with_suffix("");
+      thread_binding.CopyOnWrite()->var = new_var;
+      opt_thread_binding = thread_binding;
+    }
     body = For(/*loop_var=*/new_loop_var,
                /*min=*/old_loop->min,
                /*extent=*/old_loop->extent,
                /*kind=*/old_loop->kind,
-               /*body=*/body);
+               /*body=*/body,
+               /*thread_binding=*/opt_thread_binding);
   }
   body = Substitute(body, loop_var_map);
   // Step 6. Mutate IR
@@ -912,7 +920,9 @@ class RFactorBlockCreator : public BaseBlockCreator {
     write_regions_.reserve(old_block->writes.size());
     for (const BufferRegion& write_region : old_block->writes) {
       Array<Range> region = write_region->region;
-      region.insert(region.begin() + factor_axis_, Range::FromMinExtent(additional_iter_->var, 1));
+      region.insert(region.begin() + factor_axis_,
+                    Range::FromMinExtent(additional_iter_->var,
+                                         make_const(additional_iter_->var.dtype(), 1)));
       Optional<Buffer> rf_buffer = buffer_map.Get(write_region->buffer);
       ICHECK(rf_buffer.defined());
       write_regions_.push_back(BufferRegion(rf_buffer.value(), Substitute(region, var_map_)));
@@ -1005,7 +1015,7 @@ class WriteBackBlockCreator : public BaseBlockCreator {
       Array<Range> region;
       region.reserve(buf_load->indices.size());
       for (const PrimExpr& index : buf_load->indices) {
-        region.push_back(Range::FromMinExtent(index, 1));
+        region.push_back(Range::FromMinExtent(index, make_const(index.dtype(), 1)));
       }
       buf_regions.push_back(BufferRegion(buf_load->buffer, std::move(region)));
     }
@@ -1272,7 +1282,7 @@ StmtSRef RFactor(ScheduleState self, const StmtSRef& rf_loop_sref, int factor_ax
     BlockInfo& info = self->block_info[new_block_sref];
     info.affine_binding = true;
     info.region_cover = true;
-    info.scope->stage_pipeline = true;
+    info.stage_pipeline = true;
   }
   return new_block_srefs[0];
 }

@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# pylint: disable=consider-using-with,broad-exception-raised,consider-using-from-import
 """
 This file contains the definition of a set of classes that wrap the outputs
 of TVMC functions to create a simpler and more intuitive API.
@@ -262,11 +263,12 @@ class TVMCModel(object):
         else:
             if not cross_options:
                 executor_factory.get_lib().export_library(
-                    path_lib, tvm.contrib.cc.cross_compiler(cross)
+                    path_lib, fcompile=tvm.contrib.cc.cross_compiler(cross)
                 )
             else:
                 executor_factory.get_lib().export_library(
-                    path_lib, tvm.contrib.cc.cross_compiler(cross, options=cross_options.split(" "))
+                    path_lib,
+                    fcompile=tvm.contrib.cc.cross_compiler(cross, options=cross_options.split(" ")),
                 )
         self.lib_path = path_lib
 

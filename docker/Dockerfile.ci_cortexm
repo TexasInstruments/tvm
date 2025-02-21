@@ -17,7 +17,7 @@
 
 # CI docker CPU env
 # tag: v0.62
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
 COPY utils/apt-install-and-clear.sh /usr/local/bin/apt-install-and-clear
 
@@ -30,23 +30,23 @@ COPY install/ubuntu_install_core.sh /install/ubuntu_install_core.sh
 RUN bash /install/ubuntu_install_core.sh
 
 COPY install/ubuntu_install_cmake_source.sh /install/ubuntu_install_cmake_source.sh
-RUN bash /install/ubuntu_install_cmake_source.sh 3.20.0
+RUN bash /install/ubuntu_install_cmake_source.sh 3.20.0 9c06b2ddf7c337e31d8201f6ebcd3bba86a9a033976a9aee207fe0c6971f4755
 
 COPY install/ubuntu_install_googletest.sh /install/ubuntu_install_googletest.sh
 RUN bash /install/ubuntu_install_googletest.sh
 
-ENV TVM_VENV /venv/apache-tvm-py3.7
+ENV TVM_VENV /venv/apache-tvm-py3.9
 COPY python/bootstrap/lockfiles /install/python/bootstrap/lockfiles
 COPY install/ubuntu_install_python.sh /install/ubuntu_install_python.sh
-RUN bash /install/ubuntu_install_python.sh 3.7
+RUN bash /install/ubuntu_install_python.sh 3.9
 ENV PATH ${TVM_VENV}/bin:$PATH
 ENV PYTHONNOUSERSITE 1  # Disable .local directory from affecting CI.
 
 COPY install/ubuntu_install_python_package.sh /install/ubuntu_install_python_package.sh
 RUN bash /install/ubuntu_install_python_package.sh
 
-COPY install/ubuntu2004_install_llvm.sh /install/ubuntu2004_install_llvm.sh
-RUN bash /install/ubuntu2004_install_llvm.sh
+COPY install/ubuntu2204_install_llvm.sh /install/ubuntu2204_install_llvm.sh
+RUN bash /install/ubuntu2204_install_llvm.sh
 
 # Rust env (build early; takes a while)
 COPY install/ubuntu_install_rust.sh /install/ubuntu_install_rust.sh
@@ -107,6 +107,10 @@ RUN bash /install/ubuntu_install_arduino.sh
 # Install ONNX
 COPY install/ubuntu_install_onnx.sh /install/ubuntu_install_onnx.sh
 RUN bash /install/ubuntu_install_onnx.sh
+
+# NNEF
+COPY install/ubuntu_install_nnef.sh /install/ubuntu_install_nnef.sh
+RUN bash /install/ubuntu_install_nnef.sh
 
 # Install CMSIS_NN
 COPY install/ubuntu_install_cmsis.sh /install/ubuntu_install_cmsis.sh

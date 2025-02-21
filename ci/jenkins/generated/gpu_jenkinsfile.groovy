@@ -60,7 +60,7 @@
 // 'python3 jenkins/generate.py'
 // Note: This timestamp is here to ensure that updates to the Jenkinsfile are
 // always rebased on main before merging:
-// Generated at 2023-04-25T11:40:51.523364
+// Generated at 2024-01-10T13:15:25.186261
 
 import org.jenkinsci.plugins.pipeline.modeldefinition.Utils
 // These are set at runtime from data in ci/jenkins/docker-images.yml, update
@@ -112,7 +112,7 @@ properties([
 upstream_revision = null
 
 // command to start a docker container
-docker_run = 'docker/bash.sh --env CI --env TVM_SHARD_INDEX --env TVM_NUM_SHARDS --env RUN_DISPLAY_URL --env PLATFORM --env SKIP_SLOW_TESTS --env TEST_STEP_NAME'
+docker_run = 'docker/bash.sh --env CI --env PLATFORM --env TVM_SHARD_INDEX --env TVM_NUM_SHARDS --env RUN_DISPLAY_URL --env PLATFORM --env SKIP_SLOW_TESTS --env TEST_STEP_NAME'
 docker_build = 'docker/build.sh'
 // timeout in minutes
 max_time = 180
@@ -158,7 +158,7 @@ def init_git() {
     script: """
       set -eux
       . ${jenkins_scripts_root}/retry.sh
-      retry 3 timeout 5m git submodule update --init -f --jobs 0
+      retry 3 timeout 5m git submodule update --init --recursive -f --jobs 0
     """,
     label: 'Update git submodules',
   )
@@ -355,9 +355,9 @@ def check_pr(pr_number) {
 
 }
 
-def prepare() {
+def prepare(node_type) {
   stage('Prepare') {
-    node('CPU-SMALL') {
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/prepare") {
         init_git()
 
@@ -494,10 +494,12 @@ def make_standalone_crt(image, build_dir) {
       set -eux
       ${docker_run} ${image} python3 ./tests/scripts/task_build.py \
         --sccache-bucket tvm-sccache-prod \
+        --sccache-region us-west-2 \
         --cmake-target standalone_crt \
         --build-dir build
       ${docker_run} ${image} python3 ./tests/scripts/task_build.py \
         --sccache-bucket tvm-sccache-prod \
+        --sccache-region us-west-2 \
         --cmake-target crttest \
         --build-dir build
       """,
@@ -511,6 +513,7 @@ def make_cpp_tests(image, build_dir) {
       set -eux
       ${docker_run} ${image} python3 ./tests/scripts/task_build.py \
         --sccache-bucket tvm-sccache-prod \
+        --sccache-region us-west-2 \
         --cmake-target cpptest \
         --build-dir ${build_dir}
       """,
@@ -520,7 +523,7 @@ def make_cpp_tests(image, build_dir) {
 
 def cmake_build(image, path, make_flag) {
   sh (
-    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --build-dir ${path}",
+    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --sccache-region us-west-2 --build-dir ${path}",
     label: 'Run cmake build',
   )
 }
@@ -540,20 +543,28 @@ def micro_cpp_unittest(image) {
 
 cancel_previous_build()
 
-prepare()
-def build() {
+try {
+    prepare('CPU-SMALL-SPOT')
+} catch(Exception ex) {
+  prepare('CPU-SMALL')
+}
+def build(node_type) {
   stage('Build') {
     if (!skip_ci) {
-      node('CPU-SMALL') {
+      node(node_type) {
         ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/build-gpu") {
           init_git()
           docker_init(ci_gpu)
           timeout(time: max_time, unit: 'MINUTES') {
-            sh "${docker_run} --no-gpu ${ci_gpu} ./tests/scripts/task_config_build_gpu.sh build"
+
+            withEnv([
+              'PLATFORM=gpu',
+              ], {
+              sh "${docker_run} --no-gpu ${ci_gpu} ./tests/scripts/task_config_build_gpu.sh build"
         cmake_build("${ci_gpu} --no-gpu", 'build', '-j2')
         make_standalone_crt("${ci_gpu} --no-gpu", 'build')
         sh(
-            script: "./${jenkins_scripts_root}/s3.py --action upload --bucket ${s3_bucket} --prefix ${s3_prefix}/gpu --items build/libtvm.so build/libvta_fsim.so build/libtvm_runtime.so build/config.cmake build/libtvm_allvisible.so build/microtvm_template_projects build/crttest build/standalone_crt build/build.ninja",
+            script: "./${jenkins_scripts_root}/s3.py --action upload --bucket ${s3_bucket} --prefix ${s3_prefix}/gpu --items build/libtvm.so build/libvta_fsim.so build/libtvm_runtime.so build/config.cmake build/libtvm_allvisible.so build/microtvm_template_projects build/crttest build/standalone_crt build/build.ninja build/3rdparty/libflash_attn/src/libflash_attn.so build/3rdparty/cutlass_fpA_intB_gemm/cutlass_kernels/libfpA_intB_gemm.so",
             label: 'Upload artifacts to S3',
           )
 
@@ -564,9 +575,10 @@ def build() {
         cmake_build("${ci_gpu} --no-gpu", 'build', '-j2')
         make_standalone_crt("${ci_gpu} --no-gpu", 'build')
         sh(
-            script: "./${jenkins_scripts_root}/s3.py --action upload --bucket ${s3_bucket} --prefix ${s3_prefix}/gpu2 --items build/libtvm.so build/libtvm_runtime.so build/config.cmake build/crttest build/standalone_crt build/build.ninja",
+            script: "./${jenkins_scripts_root}/s3.py --action upload --bucket ${s3_bucket} --prefix ${s3_prefix}/gpu2 --items build/libtvm.so build/libtvm_runtime.so build/config.cmake build/crttest build/standalone_crt build/build.ninja build/3rdparty/libflash_attn/src/libflash_attn.so build/3rdparty/cutlass_fpA_intB_gemm/cutlass_kernels/libfpA_intB_gemm.so",
             label: 'Upload artifacts to S3',
           )
+            })
           }
         }
       }
@@ -575,13 +587,20 @@ def build() {
     }
   }
 }
-build()
+try {
+    build('CPU')
+} catch (Exception ex) {
+    build('CPU-SMALL')
+}
 
 
 
-def shard_run_unittest_GPU_1_of_3() {
+def shard_run_unittest_GPU_1_of_3(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/ut-python-gpu") {
         try {
           init_git()
@@ -616,7 +635,7 @@ def shard_run_unittest_GPU_1_of_3() {
               make_cpp_tests(ci_gpu, 'build')
               cpp_unittest(ci_gpu)
               sh (
-                script: "${docker_run} ${ci_gpu} python3 ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --cmake-target opencl-cpptest --build-dir build",
+                script: "${docker_run} ${ci_gpu} python3 ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --sccache-region us-west-2 --cmake-target opencl-cpptest --build-dir build",
                 label: 'Make OpenCL cpp unit tests',
               )
               sh (
@@ -653,9 +672,12 @@ def shard_run_unittest_GPU_1_of_3() {
   }
 }
 
-def shard_run_unittest_GPU_2_of_3() {
+def shard_run_unittest_GPU_2_of_3(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/ut-python-gpu") {
         try {
           init_git()
@@ -706,9 +728,12 @@ def shard_run_unittest_GPU_2_of_3() {
   }
 }
 
-def shard_run_unittest_GPU_3_of_3() {
+def shard_run_unittest_GPU_3_of_3(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/ut-python-gpu") {
         try {
           init_git()
@@ -757,9 +782,12 @@ def shard_run_unittest_GPU_3_of_3() {
 
 
 
-def shard_run_topi_GPU_1_of_3() {
+def shard_run_topi_GPU_1_of_3(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/topi-python-gpu") {
         try {
           init_git()
@@ -802,9 +830,12 @@ def shard_run_topi_GPU_1_of_3() {
   }
 }
 
-def shard_run_topi_GPU_2_of_3() {
+def shard_run_topi_GPU_2_of_3(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/topi-python-gpu") {
         try {
           init_git()
@@ -847,9 +878,12 @@ def shard_run_topi_GPU_2_of_3() {
   }
 }
 
-def shard_run_topi_GPU_3_of_3() {
+def shard_run_topi_GPU_3_of_3(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/topi-python-gpu") {
         try {
           init_git()
@@ -894,9 +928,12 @@ def shard_run_topi_GPU_3_of_3() {
 
 
 
-def shard_run_frontend_GPU_1_of_6() {
+def shard_run_frontend_GPU_1_of_6(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/frontend-python-gpu") {
         try {
           init_git()
@@ -939,9 +976,12 @@ def shard_run_frontend_GPU_1_of_6() {
   }
 }
 
-def shard_run_frontend_GPU_2_of_6() {
+def shard_run_frontend_GPU_2_of_6(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/frontend-python-gpu") {
         try {
           init_git()
@@ -984,9 +1024,12 @@ def shard_run_frontend_GPU_2_of_6() {
   }
 }
 
-def shard_run_frontend_GPU_3_of_6() {
+def shard_run_frontend_GPU_3_of_6(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/frontend-python-gpu") {
         try {
           init_git()
@@ -1029,9 +1072,12 @@ def shard_run_frontend_GPU_3_of_6() {
   }
 }
 
-def shard_run_frontend_GPU_4_of_6() {
+def shard_run_frontend_GPU_4_of_6(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/frontend-python-gpu") {
         try {
           init_git()
@@ -1074,9 +1120,12 @@ def shard_run_frontend_GPU_4_of_6() {
   }
 }
 
-def shard_run_frontend_GPU_5_of_6() {
+def shard_run_frontend_GPU_5_of_6(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/frontend-python-gpu") {
         try {
           init_git()
@@ -1119,9 +1168,12 @@ def shard_run_frontend_GPU_5_of_6() {
   }
 }
 
-def shard_run_frontend_GPU_6_of_6() {
+def shard_run_frontend_GPU_6_of_6(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci && is_docs_only_build != 1) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/frontend-python-gpu") {
         try {
           init_git()
@@ -1166,9 +1218,12 @@ def shard_run_frontend_GPU_6_of_6() {
 
 
 
-def shard_run_docs_GPU_1_of_1() {
+def shard_run_docs_GPU_1_of_1(node_type='GPU-SPOT', on_demand=false) {
   if (!skip_ci) {
-    node('GPU') {
+    if (on_demand==true || node_type.contains('ARM')) {
+        node_type = 'GPU'
+    }
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/docs-python-gpu") {
         try {
           init_git()
@@ -1229,43 +1284,95 @@ def test() {
     }
     parallel(
     'unittest: GPU 1 of 3': {
+      try {
       shard_run_unittest_GPU_1_of_3()
+      } catch (Exception ex) {
+        shard_run_unittest_GPU_1_of_3(on_demand = true)
+      }
     },
     'unittest: GPU 2 of 3': {
+      try {
       shard_run_unittest_GPU_2_of_3()
+      } catch (Exception ex) {
+        shard_run_unittest_GPU_2_of_3(on_demand = true)
+      }
     },
     'unittest: GPU 3 of 3': {
+      try {
       shard_run_unittest_GPU_3_of_3()
+      } catch (Exception ex) {
+        shard_run_unittest_GPU_3_of_3(on_demand = true)
+      }
     },
     'topi: GPU 1 of 3': {
+      try {
       shard_run_topi_GPU_1_of_3()
+      } catch (Exception ex) {
+        shard_run_topi_GPU_1_of_3(on_demand = true)
+      }
     },
     'topi: GPU 2 of 3': {
+      try {
       shard_run_topi_GPU_2_of_3()
+      } catch (Exception ex) {
+        shard_run_topi_GPU_2_of_3(on_demand = true)
+      }
     },
     'topi: GPU 3 of 3': {
+      try {
       shard_run_topi_GPU_3_of_3()
+      } catch (Exception ex) {
+        shard_run_topi_GPU_3_of_3(on_demand = true)
+      }
     },
     'frontend: GPU 1 of 6': {
+      try {
       shard_run_frontend_GPU_1_of_6()
+      } catch (Exception ex) {
+        shard_run_frontend_GPU_1_of_6(on_demand = true)
+      }
     },
     'frontend: GPU 2 of 6': {
+      try {
       shard_run_frontend_GPU_2_of_6()
+      } catch (Exception ex) {
+        shard_run_frontend_GPU_2_of_6(on_demand = true)
+      }
     },
     'frontend: GPU 3 of 6': {
+      try {
       shard_run_frontend_GPU_3_of_6()
+      } catch (Exception ex) {
+        shard_run_frontend_GPU_3_of_6(on_demand = true)
+      }
     },
     'frontend: GPU 4 of 6': {
+      try {
       shard_run_frontend_GPU_4_of_6()
+      } catch (Exception ex) {
+        shard_run_frontend_GPU_4_of_6(on_demand = true)
+      }
     },
     'frontend: GPU 5 of 6': {
+      try {
       shard_run_frontend_GPU_5_of_6()
+      } catch (Exception ex) {
+        shard_run_frontend_GPU_5_of_6(on_demand = true)
+      }
     },
     'frontend: GPU 6 of 6': {
+      try {
       shard_run_frontend_GPU_6_of_6()
+      } catch (Exception ex) {
+        shard_run_frontend_GPU_6_of_6(on_demand = true)
+      }
     },
     'docs: GPU 1 of 1': {
+      try {
       shard_run_docs_GPU_1_of_1()
+      } catch (Exception ex) {
+        shard_run_docs_GPU_1_of_1(on_demand = true)
+      }
     },
     )
   }

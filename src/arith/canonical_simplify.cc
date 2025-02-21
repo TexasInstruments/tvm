@@ -27,6 +27,7 @@
 
 #include "const_fold.h"
 #include "pattern_match.h"
+#include "product_normal_form.h"
 #include "rewrite_simplify.h"
 
 namespace tvm {
@@ -491,7 +492,7 @@ class SumExprNode : public CanonicalExprNode {
       if (lhs->div_mode < rhs->div_mode) return false;
       // tie.
       // TODO(tvm-team) We might consider index as the last comparison point,
-      // after we make deep comparator more derministic.
+      // after we make deep comparator more deterministic.
       // Specifically, we can consider comparing names of vars and break ties with address.
       return false;
     };
@@ -606,6 +607,7 @@ class CanonicalSimplifier::Impl : public RewriteSimplifier::Impl {
   PrimExpr VisitExpr_(const FloorModNode* op) final;
   PrimExpr VisitExpr_(const ReduceNode* op) final;
   PrimExpr VisitExpr_(const CastNode* op) final;
+  PrimExpr VisitExpr_(const LTNode* op) final;
 
  private:
   /*!
@@ -635,7 +637,7 @@ class CanonicalSimplifier::Impl : public RewriteSimplifier::Impl {
                               SumExpr* out_non_divisible);
   /*!
    * \brief Pattern match and check whether lhs is fully divisible by
-   *        rhs using prod pattern simiplification expressions.
+   *        rhs using prod pattern simplification expressions.
    *
    * The following two relations holds for floordiv/mod and truncdiv/mod
    * Note that the relation do not hold for euclidean divide and mod.
@@ -672,8 +674,8 @@ class CanonicalSimplifier::Impl : public RewriteSimplifier::Impl {
    * \return The transformed SplitExpr.
    */
   SplitExpr ToSplitExpr(PrimExpr expr) {
-    if (const auto* op = expr.as<SplitExprNode>()) {
-      return GetRef<SplitExpr>(op);
+    if (auto op = expr.as<SplitExpr>()) {
+      return op.value();
     }
     if (const auto* op = expr.as<SumExprNode>()) {
       if (op->base == 0 && op->args.size() == 1) return op->args[0];
@@ -715,8 +717,8 @@ class CanonicalSimplifier::Impl : public RewriteSimplifier::Impl {
    * \return The transformed SumExpr.
    */
   SumExpr ToSumExpr(PrimExpr expr) {
-    if (const auto* op = expr.as<SumExprNode>()) {
-      return GetRef<SumExpr>(op);
+    if (auto op = expr.as<SumExpr>()) {
+      return op.value();
     }
     ObjectPtr<SumExprNode> n = make_object<SumExprNode>();
     n->dtype = expr.dtype();
@@ -748,8 +750,8 @@ PrimExpr CanonicalSimplifier::Impl::VisitExpr_(const AddNode* op) {
 
   if (const auto* op = b.as<IntImmNode>()) {
     ret.CopyOnWrite()->AddToSelf(op->value);
-  } else if (const auto* op = b.as<SumExprNode>()) {
-    ret.CopyOnWrite()->AddToSelf(GetRef<SumExpr>(op), 1);
+  } else if (auto op = b.as<SumExpr>()) {
+    ret.CopyOnWrite()->AddToSelf(op.value(), 1);
   } else {
     ret.CopyOnWrite()->AddToSelf(ToSplitExpr(b), 1);
   }
@@ -772,8 +774,8 @@ PrimExpr CanonicalSimplifier::Impl::VisitExpr_(const SubNode* op) {
 
   if (const auto* op = b.as<IntImmNode>()) {
     ret.CopyOnWrite()->AddToSelf(-op->value);
-  } else if (const auto* op = b.as<SumExprNode>()) {
-    ret.CopyOnWrite()->AddToSelf(GetRef<SumExpr>(op), -1);
+  } else if (auto op = b.as<SumExpr>()) {
+    ret.CopyOnWrite()->AddToSelf(op.value(), -1);
   } else {
     ret.CopyOnWrite()->AddToSelf(ToSplitExpr(b), -1);
   }
@@ -808,12 +810,17 @@ PrimExpr CanonicalSimplifier::Impl::VisitExpr_(const MulNode* op) {
   }
 
   // normal path.
+  // this only happens when b is symbolic
   a = Normalize(a);
   b = Normalize(b);
-  if (op->a.same_as(a) && op->b.same_as(b)) {
+
+  PrimExpr ret = MulAndNormalize(a, b);
+  const MulNode* mul = ret.as<MulNode>();
+
+  if (mul && mul->a.same_as(op->a) && mul->b.same_as(op->b)) {
     return GetRef<PrimExpr>(op);
   } else {
-    return Mul(a, b);
+    return ret;
   }
 }
 
@@ -1152,7 +1159,7 @@ PrimExpr CanonicalSimplifier::Impl::VisitExpr_(const ModNode* op) {
           if (TryCompare(temp, cval) == CompareResult::kLT) {
             return temp;
           } else {
-            // contonue to use logic below.
+            // continue to use logic below.
             a = extra;
             psum = a.as<SumExprNode>();
             ICHECK(psum != nullptr);
@@ -1221,7 +1228,7 @@ PrimExpr CanonicalSimplifier::Impl::VisitExpr_(const FloorModNode* op) {
             analyzer_->CanProveGreaterEqual(temp, 0)) {
           return temp;
         } else {
-          // contonue to use logic below.
+          // continue to use logic below.
           a = extra;
           psum = a.as<SumExprNode>();
           ICHECK(psum != nullptr);
@@ -1377,6 +1384,56 @@ PrimExpr CanonicalSimplifier::Impl::VisitExpr_(const CastNode* op) {
       return std::move(se);
     }
   }
+  return Rewriter::VisitExpr_(op);
+}
+
+PrimExpr CanonicalSimplifier::Impl::VisitExpr_(const LTNode* op) {
+  // First convert a < b into a - b < 0
+  PrimExpr expr = this->CanonicalMutate(op->a - op->b);
+  // Case: x0 * s0 + x1 * s1 + ... + xn + c < 0, let d = gcd(s0, s1, ..., s{n-1}, c)
+  // 1. if can prove -d < xn < d, then we can simplify
+  //    the expression to x0 * (s0/d) + x1 * (s1/d) + ... + x{n-1} * (s{n-1}/d) < c/d,
+  //    e.g. `x * 8 + y < 16` where `y` \in [0, 8), we can simplify it to `x < 2`
+  // 2. if xn is in pattern of yn % m, where m % d == 0, convert it to yn // d % (m/d)
+  //    e.g. `x1 * 64 + (x2 * 8 + x3) % 64 < 120`, `x3` \in [0, 8), we can simplify it to
+  //    `x1 * 8 + (x2 * 8 + x3) // 8 % 8 < 15` ==> `x1 * 8 + x2 % 8 < 15`
+
+  if (const auto* lhs = expr.as<SumExprNode>()) {
+    int64_t gcd = lhs->base;
+    bool has_non_one_scale = false;
+    for (const SplitExpr& split_expr : lhs->args) {
+      if (split_expr->scale > 1 || split_expr->scale < -1) {
+        has_non_one_scale = true;
+        gcd = ZeroAwareGCD(gcd, std::abs(split_expr->scale));
+      }
+    }
+    // Skip if gcd == 1 or all s_n are 1
+    if (!has_non_one_scale || gcd <= 1) {
+      return Rewriter::VisitExpr_(op);
+    }
+    SumExpr divisible, extra;
+    SeparateDivisibleParts(lhs, gcd, &divisible, &extra);
+    DataType dtype = divisible->dtype;
+    ICHECK(extra->dtype == dtype);
+    PrimExpr normal_extra = extra->Normalize();
+    if (this->analyzer_->CanProve(normal_extra < make_const(dtype, gcd)) &&
+        this->analyzer_->CanProve(normal_extra > make_const(dtype, -gcd))) {
+      // Case 1. -d < xn < d
+      divisible.CopyOnWrite()->DivideBy(gcd);
+      return Rewriter::VisitExpr(divisible->Normalize() < make_zero(dtype));
+    } else if (extra->args.size() == 1 &&
+               extra->args[0]->upper_factor != ConstIntBoundNode::kPosInf &&
+               extra->args[0]->upper_factor % (gcd * extra->args[0]->lower_factor) == 0) {
+      // Case 2. xn == yn % m, where m % d == 0
+      divisible.CopyOnWrite()->DivideBy(gcd);
+      const auto split_expr = extra->args[0];
+      int64_t lower_factor = gcd * extra->args[0]->lower_factor;
+      PrimExpr extra_expr = floormod(floordiv(split_expr->index, lower_factor),
+                                     floordiv(split_expr->upper_factor, lower_factor));
+      return Rewriter::VisitExpr(divisible->Normalize() + extra_expr < make_zero(dtype));
+    }
+  }
+
   return Rewriter::VisitExpr_(op);
 }
 

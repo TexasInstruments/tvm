@@ -295,15 +295,11 @@ def batch_matmul_int8(
     # pad for _dp4a vectorize
     pad_x = te.compute(
         (XB, M, nK),
-        lambda b, i, j: tvm.te.if_then_else(
-            j >= XK, tvm.runtime.convert(0).astype(x.dtype), x[b, i, j]
-        ),
+        lambda b, i, j: tvm.te.if_then_else(j >= XK, tvm.tir.const(0, x.dtype), x[b, i, j]),
     )
     pad_y = te.compute(
         (YB, N, nK),
-        lambda b, i, j: tvm.te.if_then_else(
-            j >= YK, tvm.runtime.convert(0).astype(y.dtype), y[b, i, j]
-        ),
+        lambda b, i, j: tvm.te.if_then_else(j >= YK, tvm.tir.const(0, y.dtype), y[b, i, j]),
     )
 
     out = te.compute(
@@ -342,7 +338,7 @@ def _schedule_batch_matmul_int8(cfg, s, output):
     _, N, _ = get_const_tuple(input_y.shape)
 
     k_factor = 4
-    assert K % k_factor == 0, "Input dimension must divide {}".format(k_factor)
+    assert K % k_factor == 0, f"Input dimension must divide {k_factor}"
     if K % 16 == 0:
         k_factor = 16
 

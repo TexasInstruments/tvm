@@ -25,7 +25,6 @@
 #define TVM_TARGET_TARGET_H_
 
 #include <tvm/ir/expr.h>
-#include <tvm/ir/module.h>
 #include <tvm/node/node.h>
 #include <tvm/support/with.h>
 #include <tvm/target/target_kind.h>
@@ -72,6 +71,16 @@ class TargetNode : public Object {
   TVM_DLL int GetTargetDeviceType() const;
 
   /*!
+   * \brief Check if the target contains a key
+   *
+   * \param query_key The string name of the key to be checked
+   *
+   * \return True if the target's `TargetNode::keys` contains the
+   * specified key, False otherwise.
+   */
+  TVM_DLL bool HasKey(const std::string& query_key) const;
+
+  /*!
    * \brief Returns a human readable representation of \p Target which includes all fields,
    * especially the host. Useful for diagnostic messages and debugging.
    *
@@ -104,7 +113,15 @@ class TargetNode : public Object {
                   "Can only call GetAttr with ObjectRef types.");
     auto it = attrs.find(attr_key);
     if (it != attrs.end()) {
-      return Downcast<Optional<TObjectRef>>((*it).second);
+      // For backwards compatibility, return through TVMRetValue.
+      // This triggers any automatic conversions registered with
+      // PackedFuncValueConverter.  Importantly, this allows use of
+      // `GetAttr<Integer>` and `GetAttr<Bool>` for properties that
+      // are stored internally as `runtime::Box<int64_t>` and
+      // `runtime::Box<bool>`.
+      TVMRetValue ret;
+      ret = (*it).second;
+      return ret;
     } else {
       return default_value;
     }
@@ -207,7 +224,6 @@ class Target : public ObjectRef {
    * \brief Construct a Target given target and host
    * \param target The Target typed object with host field undefined for target
    * \param host The Target typed object for target host
-   * \return The Target with given target and host context information
    */
   TVM_DLL explicit Target(Target target, Target host);
   TVM_DEFINE_OBJECT_REF_METHODS(Target, ObjectRef, TargetNode);
@@ -218,6 +234,9 @@ class Target : public ObjectRef {
    * \return The new Target object with the given target and host field of given host.
    */
   static Target WithHost(const Target& target, const Target& host);
+
+  /*! \return The target with the host stripped out */
+  Target WithoutHost() const;
 
   /*!
    * \brief Returns true if \p this target represents an external codegen. If so,
@@ -271,15 +290,6 @@ class Target : public ObjectRef {
  * \param host The pointer to a Target typed object for target host to be updated
  */
 void CheckAndUpdateHostConsistency(Target* target, Target* host);
-
-/*!
- * \brief Check and update host field of the given legacy heterogeneous targets and
- *  target host.Note that this function is for legacy target api compatibility issue only,
- *  not recommended for other use.
- * \param ir_modules The pointer to a Map objects with keys being Target objects
- * \param host The Target typed object for target host to be updated
- */
-void CheckAndUpdateHostConsistency(Map<Target, IRModule>* ir_modules, Target* host);
 
 }  // namespace tvm
 #endif  // TVM_TARGET_TARGET_H_

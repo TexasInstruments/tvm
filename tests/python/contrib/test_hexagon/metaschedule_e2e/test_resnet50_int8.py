@@ -54,7 +54,7 @@ TARGET_HEXAGON = get_hexagon_target("v68")
 def load_model():
     """Load renset50 model."""
     if not os.path.exists(MODEL_JSON):
-        pytest.skip(msg="Run python export_models.py first.")
+        pytest.skip("Run python export_models.py first.")
 
     with open(MODEL_JSON, "r") as file:
         mod = tvm.ir.load_json(file.read())
@@ -172,7 +172,7 @@ def test_resnet50(hexagon_launcher):
         pytest.skip("Skipping test since it takes too long in CI.")
 
     if not os.path.exists(MODEL_JSON):
-        pytest.skip(msg="Run python export_models.py first.")
+        pytest.skip("Run python export_models.py first.")
 
     mod, params = load_model()
 
@@ -493,7 +493,7 @@ def _schedule_async_dma_conv2d():
         sch.parallel(new_loops[4])
         sch.unroll(new_loops[5])
         # TODO(nverke): Add compute optimizations here.
-        sch.blockize(loop=oc_i)
+        sch.blockize(target=oc_i)
 
         sch.tensorize(oc_i, VRMPY_u8i8i32_VTCM_INTRIN)
 

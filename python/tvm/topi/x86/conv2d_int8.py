@@ -20,7 +20,7 @@
 
 import tvm
 from tvm import autotvm, te
-from tvm.target.x86 import target_has_sse42
+from tvm.target.x86 import target_has_features
 
 from .. import nn, tag
 from ..generic import conv2d as conv2d_generic
@@ -49,7 +49,10 @@ def _get_default_config_int8(
     """
     if is_depthwise:
         # Fallback to FP32 default config until a VNNI schedule is defined.
-        wkl = _get_depthwise_conv2d_workload(data, kernel, strides, padding, out_dtype)
+        wkl = _get_depthwise_conv2d_workload(
+            data, kernel, strides, padding, dilation, out_dtype, layout
+        )
+
         from .depthwise_conv2d import _fallback_schedule
 
         _fallback_schedule(cfg, wkl)
@@ -81,8 +84,7 @@ def is_int8_hw_support(data_dtype, kernel_dtype):
     is_llvm_support = llvm_version >= 8
 
     # 3) Check target
-    mcpu = tvm.target.Target.current().mcpu
-    is_target_support = target_has_sse42(mcpu)
+    is_target_support = target_has_features("sse4.2")
 
     return is_dtype_support and is_llvm_support and is_target_support
 
@@ -250,11 +252,11 @@ def schedule_conv2d_nhwc_pack_int8(cfg, outs):
                 if kh == 1 and kw == 1:
                     conv2d_avx_1x1._schedule_conv_nhwc_pack_int8(*args)
                 else:
-                    raise ValueError("Only support 1x1 kernel with " "schedule_conv2d_nhwc_pack.")
+                    raise ValueError("Only support 1x1 kernel with schedule_conv2d_nhwc_pack.")
             else:
                 raise ValueError(
-                    "Not support this data type {} with "
-                    "schedule_conv2d_nhwc_pack. Only support int8".format(data.dtype)
+                    f"Not support this data type {data.dtype} with "
+                    f"schedule_conv2d_nhwc_pack. Only support int8"
                 )
 
         scheduled_ops.append(op)

@@ -22,13 +22,12 @@ from typing import Callable, List
 
 import tvm._ffi
 from tvm._ffi.base import string_types
-
-from tvm.runtime import Object, convert
 from tvm.ir import container as _container
-from tvm.tir import IterVar, Buffer, Var, IndexMap
+from tvm.runtime import Object, convert
+from tvm.tir import Buffer, IndexMap, IterVar, Var
 
-from . import tensor as _tensor
 from . import _ffi_api
+from . import tensor as _tensor
 
 
 @tvm._ffi.register_object
@@ -74,7 +73,7 @@ class Schedule(Object):
         if not isinstance(k, _tensor.Operation):
             raise ValueError("Expect schedule key to be Tensor or Operation")
         if k not in self.stage_map:
-            raise ValueError("Cannot find the operation %s in schedule" % (str(k)))
+            raise ValueError(f"Cannot find the operation {k} in schedule")
         return self.stage_map[k]
 
     def normalize(self):
@@ -202,7 +201,7 @@ class Schedule(Object):
 class Stage(Object):
     """A Stage represents schedule for one operation."""
 
-    def split(self, parent, factor=None, nparts=None):
+    def split(self, parent, factor=None, nparts=None, disable_predication=False):
         """Split the stage either by factor providing outer scope, or both
 
         Parameters
@@ -216,6 +215,14 @@ class Stage(Object):
         nparts : Expr, optional
              The number of outer parts.
 
+        disable_predication : bool, optional
+            If enabled, don't create a predicate for guarding the loop. This can
+            be useful when splitting with scalable factors that the schedule writer
+            knows are divisible by the loop bound.
+
+            Warning: enabling this feature may result in incorrect code generation
+            if not used carefully.
+
         Returns
         -------
         outer : IterVar
@@ -227,11 +234,11 @@ class Stage(Object):
         if nparts is not None:
             if factor is not None:
                 raise ValueError("Do not need to provide both outer and nparts")
-            outer, inner = _ffi_api.StageSplitByNParts(self, parent, nparts)
+            outer, inner = _ffi_api.StageSplitByNParts(self, parent, nparts, disable_predication)
         else:
             if factor is None:
                 raise ValueError("Either nparts or factor need to be provided")
-            outer, inner = _ffi_api.StageSplitByFactor(self, parent, factor)
+            outer, inner = _ffi_api.StageSplitByFactor(self, parent, factor, disable_predication)
         return outer, inner
 
     def fuse(self, *args):
@@ -600,7 +607,9 @@ class Stage(Object):
         """
 
         ndim = len(self.op.output(0).shape)
-        index_map, axis_separators = IndexMap.from_func_with_separators(mapping_function, ndim=ndim)
+        index_map, axis_separators = IndexMap.from_func_with_separators(
+            mapping_function, ndim=ndim, index_dtype="int32"
+        )
 
         new_iter_vars = _ffi_api.StageTransformLayout(
             self, index_map.initial_indices, index_map.final_indices
@@ -647,7 +656,7 @@ class SpecializedCondition(Object):
 
 
 # Sentinel value used to indicate which groups of pre-flattening axes
-# should be used to post-flattening axes axes.  Moved from
+# should be used to post-flattening axes.  Moved from
 # te.AXIS_SEPARATOR to tir.IndexMap.AXIS_SEPARATOR for general use,
 # maintained here for backwards compatibility.
 AXIS_SEPARATOR = IndexMap.AXIS_SEPARATOR

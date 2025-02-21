@@ -157,6 +157,14 @@ class LLVMTargetInfo {
   // NOLINTNEXTLINE(runtime/references)
   LLVMTargetInfo(LLVMInstance& scope, const std::string& target_str);
   /*!
+   * \brief Constructs LLVMTargetInfo from `Target`
+   * \param scope LLVMInstance object
+   * \param target TVM JSON Target object for target "llvm"
+   */
+  // NOLINTNEXTLINE(runtime/references)
+  LLVMTargetInfo(LLVMInstance& instance, const TargetJSON& target);
+
+  /*!
    * \brief Destroys LLVMTargetInfo object
    */
   ~LLVMTargetInfo();
@@ -208,15 +216,34 @@ class LLVMTargetInfo {
    */
   const llvm::TargetOptions& GetTargetOptions() const { return target_options_; }
   /*!
+   * \brief Get the LLVM target reloc model
+   * \return `llvm::Reloc::Model` object for this target
+   */
+  const llvm::Reloc::Model& GetTargetRelocModel() const { return reloc_model_; }
+  /*!
+   * \brief Get the LLVM target code model
+   * \return `llvm::CodeModel::Model` object for this target
+   */
+  const llvm::CodeModel::Model& GetTargetCodeModel() const { return code_model_; }
+  /*!
    * \brief Get fast math flags
    * \return `llvm::FastMathFlags` for this target
    */
   llvm::FastMathFlags GetFastMathFlags() const { return fast_math_flags_; }
   /*!
+   * \brief Get the LLVM JIT engine type
+   * \return the type name of the JIT engine (default "mcjit" or "orcjit")
+   */
+  const std::string GetJITEngine() const { return jit_engine_; }
+  /*!
    * \brief Get the LLVM optimization level
    * \return optimization level for this target
    */
+#if TVM_LLVM_VERSION <= 170
   llvm::CodeGenOpt::Level GetOptLevel() const { return opt_level_; }
+#else
+  llvm::CodeGenOptLevel GetOptLevel() const { return opt_level_; }
+#endif
 
   /*!
    * \class Option
@@ -266,6 +293,37 @@ class LLVMTargetInfo {
    */
   bool MatchesGlobalState() const;
 
+  /*!
+   * \brief Get all supported targets from the LLVM backend
+   * \return list with all valid targets
+   */
+  const Array<String> GetAllLLVMTargets() const;
+
+  /*!
+   * \brief Get all CPU arches from target
+   * \return list with all valid cpu architectures
+   * \note The arches are fetched from the LLVM backend using the target `-mtriple`.
+   */
+  const Array<String> GetAllLLVMTargetArches() const;
+
+  /*!
+   * \brief Get all CPU features from target
+   * \return Map with all valid cpu features as keys and empty string as value. The Map
+   *         is intended to be used as a Set, which TVM does not currently support.
+   * \note The features are fetched from the LLVM backend using the target `-mtriple`
+   *       and the `-mcpu` architecture, but also consider the `-mattr` attributes.
+   */
+  const Map<String, String> GetAllLLVMCpuFeatures() const;
+
+  /*!
+   * \brief Check the target if has a specific cpu feature
+   * \param feature string with the feature to check
+   * \return true or false
+   * \note The feature is checked in the LLVM backend for the target `-mtriple`
+   *       and `-mcpu` architecture, but also consider the `-mattr` attributes.
+   */
+  const bool TargetHasCPUFeature(const std::string& feature) const;
+
  protected:
   /*!
    * \brief Get the current value of given LLVM option
@@ -282,10 +340,15 @@ class LLVMTargetInfo {
   std::vector<Option> llvm_options_;
   llvm::TargetOptions target_options_;
   llvm::FastMathFlags fast_math_flags_;
+#if TVM_LLVM_VERSION <= 170
   llvm::CodeGenOpt::Level opt_level_;
+#else
+  llvm::CodeGenOptLevel opt_level_;
+#endif
   llvm::Reloc::Model reloc_model_ = llvm::Reloc::PIC_;
   llvm::CodeModel::Model code_model_ = llvm::CodeModel::Small;
   std::shared_ptr<llvm::TargetMachine> target_machine_;
+  std::string jit_engine_ = "mcjit";
 };
 
 /*!

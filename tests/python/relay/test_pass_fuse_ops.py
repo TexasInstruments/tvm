@@ -49,7 +49,7 @@ def test_fuse_simple():
     z = before()
     zz = run_opt_pass(z, transform.FuseOps())
     after = run_opt_pass(expected(), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def test_conv2d_fuse():
@@ -114,7 +114,7 @@ def test_conv2d_fuse():
     z = before(dshape)
     zz = run_opt_pass(z, transform.FuseOps(fuse_opt_level=2))
     after = run_opt_pass(expected(dshape), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def test_concatenate():
@@ -154,7 +154,7 @@ def test_concatenate():
     zz = run_opt_pass(z, transform.FuseOps(fuse_opt_level=2))
     assert not relay.analysis.free_vars(zz)
     after = run_opt_pass(expected(dshape), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def test_tuple_root():
@@ -191,7 +191,7 @@ def test_tuple_root():
     zz = run_opt_pass(z, transform.FuseOps(fuse_opt_level=2))
     assert not relay.analysis.free_vars(zz)
     after = run_opt_pass(expected(dshape), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def test_stop_fusion():
@@ -222,7 +222,7 @@ def test_stop_fusion():
     z = before(dshape)
     zz = run_opt_pass(z, transform.FuseOps())
     after = run_opt_pass(expected(dshape), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def test_fuse_myia_regression():
@@ -255,7 +255,7 @@ def test_fuse_myia_regression():
     f = before(dshape, dtype)
     zz = run_opt_pass(f, transform.FuseOps())
     after = run_opt_pass(expected(dshape, dtype), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def test_fuse_tuple_get_elemwise():
@@ -293,7 +293,7 @@ def test_fuse_tuple_get_elemwise():
     zz = run_opt_pass(z, transform.FuseOps(fuse_opt_level=2))
     assert not relay.analysis.free_vars(zz)
     after = run_opt_pass(expected(dim), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def test_tuple_get_root():
@@ -330,7 +330,7 @@ def test_tuple_get_root():
     zz = run_opt_pass(z, transform.FuseOps(fuse_opt_level=2))
     assert not relay.analysis.free_vars(zz)
     after = run_opt_pass(expected(dim), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def fuse0(mod):
@@ -370,7 +370,7 @@ def test_tuple_intermediate():
     m = fuse2(tvm.IRModule.from_expr(orig))
     relay.build(m, "llvm")
     after = run_opt_pass(expected(x), transform.InferType())
-    assert tvm.ir.structural_equal(m["main"], after)
+    tvm.ir.assert_structural_equal(m["main"], after)
 
 
 def test_tuple_consecutive():
@@ -428,7 +428,7 @@ def test_tuple_consecutive():
     m = fuse2(tvm.IRModule.from_expr(orig))
     relay.build(m, "llvm")
     after = run_opt_pass(expected(dshape), transform.InferType())
-    assert tvm.ir.structural_equal(m["main"], after)
+    tvm.ir.assert_structural_equal(m["main"], after)
 
 
 def test_inception_like():
@@ -498,7 +498,7 @@ def test_inception_like():
     m = fuse2(tvm.IRModule.from_expr(orig))
     relay.build(m, "llvm")
     after = run_opt_pass(expected(dshape), transform.InferType())
-    assert tvm.ir.structural_equal(m["main"], after)
+    tvm.ir.assert_structural_equal(m["main"], after)
 
 
 def test_fuse_parallel_injective():
@@ -530,7 +530,7 @@ def test_fuse_parallel_injective():
     zz = run_opt_pass(z, transform.FuseOps(fuse_opt_level=2))
     assert not relay.analysis.free_vars(zz)
     after = run_opt_pass(expected(), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
 
 def test_immutable():
@@ -560,8 +560,8 @@ def test_immutable():
 
     mod = transform.InferType()(before())
     new_mod = transform.FuseOps(fuse_opt_level=2)(mod)
-    assert tvm.ir.structural_equal(mod, transform.InferType()(before()))
-    assert tvm.ir.structural_equal(new_mod, transform.InferType()(expected()))
+    tvm.ir.assert_structural_equal(mod, transform.InferType()(before()))
+    tvm.ir.assert_structural_equal(new_mod, transform.InferType()(expected()))
 
 
 def test_split():
@@ -612,7 +612,7 @@ def test_fuse_max():
     zz = run_opt_pass(z, transform.FuseOps(fuse_opt_level=2))
     zz = run_opt_pass(z, transform.FuseOps())
     after = run_opt_pass(expected(n, max_fused_ops), transform.InferType())
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
 
     max_fused_ops = 10
     n = 20
@@ -622,7 +622,13 @@ def test_fuse_max():
     with tvm.transform.PassContext(config={"relay.FuseOps.max_depth": max_fused_ops}):
         zz = run_opt_pass(z, transform.FuseOps())
 
-    assert tvm.ir.structural_equal(zz, after)
+    tvm.ir.assert_structural_equal(zz, after)
+
+    with tvm.target.Target("opencl"):
+        with tvm.transform.PassContext(config={"relay.FuseOps.max_depth": max_fused_ops}):
+            cl_zz = run_opt_pass(z, transform.FuseOps())
+
+    tvm.ir.assert_structural_equal(cl_zz, after)
 
 
 link_params = tvm.testing.parameter(False, True)
@@ -658,7 +664,7 @@ def test_fuse_take(link_params):
     with tvm.transform.PassContext(opt_level=2, config={"relay.FuseOps.link_params": link_params}):
         m = run_opt_pass(before(), transform.InferType())
         m = run_opt_pass(m, transform.FuseOps())
-    assert tvm.ir.structural_equal(m, after)
+    tvm.ir.assert_structural_equal(m, after)
     relay.build(m, "llvm")
 
 
@@ -692,7 +698,7 @@ def test_fuse_gather_nd(link_params):
     with tvm.transform.PassContext(opt_level=2, config={"relay.FuseOps.link_params": link_params}):
         m = run_opt_pass(before(), transform.InferType())
         m = run_opt_pass(m, transform.FuseOps())
-    assert tvm.ir.structural_equal(m, after)
+    tvm.ir.assert_structural_equal(m, after)
     relay.build(m, "llvm")
 
 
@@ -722,7 +728,7 @@ def test_fuse_bcast_reduce_scalar():
     for tgt, dev in tvm.testing.enabled_targets():
         relay.build(m, tgt)
     after = run_opt_pass(expected(), transform.InferType())
-    assert tvm.ir.structural_equal(m["main"], after)
+    tvm.ir.assert_structural_equal(m["main"], after)
 
 
 def test_fuse_max_diamond():
@@ -763,7 +769,7 @@ def test_fuse_max_diamond():
         fused = run_opt_pass(before(branch_len, num_diamond), transform.FuseOps())
 
     expected = run_opt_pass(after(branch_len, num_diamond), transform.InferType())
-    assert tvm.ir.structural_equal(fused, expected)
+    tvm.ir.assert_structural_equal(fused, expected)
 
 
 def test_fuse_dynamic_squeeze_slice_take():
@@ -817,7 +823,7 @@ def test_fuse_softmax():
     orig = before()
     m = fuse2(tvm.IRModule.from_expr(orig))
     after = run_opt_pass(expected(), transform.InferType())
-    assert tvm.ir.structural_equal(m["main"], after)
+    tvm.ir.assert_structural_equal(m["main"], after)
 
     inp = np.random.randn(16, channel_size).astype("float32")
     ref = tvm.topi.testing.softmax_python(inp).astype("float16")
@@ -826,6 +832,116 @@ def test_fuse_softmax():
         ex = relay.create_executor("graph", mod=m, device=dev, target=tgt)
         result = ex.evaluate()(inp).numpy()
         tvm.testing.assert_allclose(result, ref, rtol=1e-4, atol=1e-4)
+
+
+target_name = tvm.testing.parameter("opencl", "metal", "cuda")
+shape_type = tvm.testing.parameter("dynamic", "static")
+
+
+def test_fuse_max_num_args(target_name, shape_type):
+    if shape_type == "dynamic":
+        shape = (tvm.tir.Any(), 20)
+        number_of_any_dims = 1
+    else:
+        shape = (10, 20)
+        number_of_any_dims = 0
+    ndims = len(shape)
+    ops_num = 300
+
+    def _base_func(name):
+        x = relay.var(name, shape=shape)
+        y = relay.add(x, relay.const(1, "float32"))
+        w = relay.exp(y)
+        return x, w
+
+    def before(n):
+        inp = []
+        out = []
+        for i in range(n):
+            x, w = _base_func(f"x{i}")
+            inp.append(x)
+            out.append(w)
+        w = out[0]
+        for i in range(len(out) - 1):
+            w = relay.add(w, out[i + 1])
+        return relay.Function(inp, w)
+
+    def after(n):
+        def create_fused_func(limit):
+            added_args = 0
+            inputs = []
+            input_vars = []
+            res = None
+            i = 0
+            while added_args < limit:
+                inp, out = _base_func(f"p{i}")
+
+                curr_args = 1 + number_of_any_dims
+                if number_of_any_dims > 0:
+                    curr_args += ndims
+
+                if added_args + curr_args > limit:
+                    f = relay.Function(inputs, res)
+                    f = f.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+                    return i, input_vars, f
+
+                input_vars.append(relay.var(f"x{i}", shape=shape))
+                inputs.append(inp)
+                if res is None:
+                    res = out
+                else:
+                    res = relay.add(res, out)
+                added_args += curr_args
+                i += 1
+            f = relay.Function(inputs, res)
+            f = f.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+            return i, input_vars, f
+
+        def create_accum_func(args_limit):
+            out = None
+            inputs = []
+            if args_limit == 0:
+                for i in range(n):
+                    inputs.append(relay.var(f"x{i}", shape=shape))
+                f = before(n)
+                f = f.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+                out = relay.Call(f, inputs)
+                return relay.Function(inputs, out)
+
+            i, inputs, func = create_fused_func(args_limit)
+            out = relay.Call(func, inputs)
+            while i < n:
+                inp, func = _base_func(f"p{i}")
+                inputs.append(relay.var(f"xa{i}", shape=shape))
+                curr_args = 1 + number_of_any_dims
+                if number_of_any_dims > 0:
+                    curr_args += ndims
+                f = relay.Function([inp], func)
+                f = f.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+                w = relay.Call(f, [inputs[-1]])
+                a = relay.var(f"a", shape=shape)
+                b = relay.var(f"b", shape=shape)
+                out_add = relay.add(a, b)
+                f = relay.Function([a, b], out_add)
+                f = f.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
+                out = relay.Call(f, [out, w])
+                i += 1
+            return relay.Function(inputs, out)
+
+        args_limit = tvm.target.Target.current().max_function_args - (
+            1 + number_of_any_dims
+        )  # one buffer with output
+        args_limit = max(args_limit, 0)
+        return create_accum_func(args_limit)
+
+    max_fused_ops = ops_num * 5
+    with tvm.target.Target(target_name):
+        with tvm.transform.PassContext(config={"relay.FuseOps.max_depth": max_fused_ops}):
+            fused = run_opt_pass(before(ops_num), transform.FuseOps())
+
+        expected = run_opt_pass(after(ops_num), transform.InferType())
+
+    tvm.ir.assert_structural_equal(fused, expected)
 
 
 if __name__ == "__main__":

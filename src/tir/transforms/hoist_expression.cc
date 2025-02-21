@@ -254,8 +254,8 @@ class HoistInfoCollector : public StmtExprVisitor {
     Var var;
     if (const auto* node_iter_var = op->node.as<IterVarNode>()) {
       var = node_iter_var->var;
-    } else if (const auto* node_var = op->node.as<VarNode>()) {
-      var = GetRef<Var>(node_var);
+    } else if (auto opt = op->node.as<Var>()) {
+      var = opt.value();
     } else {
       return Parent::VisitStmt_(op);
     }
@@ -558,7 +558,14 @@ Pass HoistIfThenElse() {
   auto pass_func = [=](PrimFunc f, IRModule m, PassContext ctx) {
     auto* n = f.CopyOnWrite();
     auto cfg = ctx->GetConfig<HoistIfThenElseConfig>("tir.HoistIfThenElse");
-
+    auto flag = f->GetAttr<Integer>("tir.HoistIfThenElseExprWithBlock");
+    if (flag && flag.value().IntValue() == 1) {
+      HoistExpressionConfig config(static_cast<int>(HoistedConditionals::kUsingBlockVar) |
+                                       static_cast<int>(HoistedConditionals::kIfElseExpr),
+                                   static_cast<int>(HoistedLetBindings::kNone));
+      n->body = ExpressionHoister::Hoist(std::move(n->body), config);
+      return f;
+    }
     if (!cfg.defined()) {
       cfg = AttrsWithDefaultValues<HoistIfThenElseConfig>();
     }

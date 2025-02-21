@@ -358,6 +358,11 @@ class TaskScheduler:
         self.best_ct = self.ct
         self.best_score = self.cur_score
 
+        # put task without schedule on warm up to dead state
+        for task_idx, cost in enumerate(self.best_costs):
+            if cost == 1e10:
+                self.dead_tasks.add(task_idx)
+
         # use the specific strategy to choose workload to tune
         task_idx = -1
         while self.ct < tune_option.num_measure_trials and len(self.dead_tasks) < len(self.tasks):
@@ -367,6 +372,7 @@ class TaskScheduler:
                     task_idx = (task_idx + 1) % len(self.tasks)
             elif self.strategy == "gradient":
                 gradients = []
+
                 for i in range(len(self.tasks)):
                     if i in self.dead_tasks:
                         gradients.append(0)
@@ -589,7 +595,7 @@ class PrintTableInfo(TaskSchedulerCallback):
 
         # content
         for i in range(len(task_scheduler.tasks)):
-            id_str = "%d" % i
+            id_str = f"{i}"
             latency_str = (
                 "%.3f" % (1e3 * task_scheduler.best_costs[i])
                 if task_scheduler.best_costs[i] < 1e9
@@ -619,12 +625,7 @@ class PrintTableInfo(TaskSchedulerCallback):
             total_latency_str = "-"
         print(
             "Estimated total latency: %s ms\tTrials: %d\tUsed time : %.0f s\tNext ID: %d\t"
-            % (
-                total_latency_str,
-                task_scheduler.ct,
-                time.time() - task_scheduler.tic,
-                task_id,
-            )
+            % (total_latency_str, task_scheduler.ct, time.time() - task_scheduler.tic, task_id)
         )
 
 
@@ -652,10 +653,6 @@ class LogEstimatedLatency(TaskSchedulerCallback):
         with open(self.log_file, "a") as filep:
             filep.write(
                 "ElapsedTime(s)\t%.0f\tEstimatedLatency(ms)\t%s\tTrials\t%d\n"
-                % (
-                    time.time() - task_scheduler.tic,
-                    total_latency_str,
-                    task_scheduler.ct,
-                )
+                % (time.time() - task_scheduler.tic, total_latency_str, task_scheduler.ct)
             )
             filep.flush()

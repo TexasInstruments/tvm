@@ -39,7 +39,7 @@ try:
     from . import tornado_util
 except ImportError as error_msg:
     raise ImportError(
-        "RPCProxy module requires tornado package %s. Try 'pip install tornado'." % error_msg
+        f"RPCProxy module requires tornado package {error_msg}. Try 'pip install tornado'."
     )
 
 from tvm.contrib.popen_pool import PopenWorker
@@ -152,7 +152,7 @@ class TCPHandler(tornado_util.TCPHandler, ForwardHandler):
         self.addr = addr
 
     def name(self):
-        return "TCPSocketProxy:%s:%s" % (str(self.addr[0]), self.rpc_key)
+        return f"TCPSocketProxy:{str(self.addr[0])}:{self.rpc_key}"
 
     def send_data(self, message, binary=True):
         self.write_message(message, True)
@@ -178,7 +178,7 @@ class WebSocketHandler(websocket.WebSocketHandler, ForwardHandler):
         self._init_handler()
 
     def name(self):
-        return "WebSocketProxy:%s" % (self.rpc_key)
+        return f"WebSocketProxy:{self.rpc_key}"
 
     def on_message(self, message):
         self.on_data(message)
@@ -203,26 +203,39 @@ class WebSocketHandler(websocket.WebSocketHandler, ForwardHandler):
         self.close()
 
 
+MIME_MAP = {
+    "js": "text/javascript",
+    "css": "text/css",
+    "wasm": "application/wasm",
+    "json": "application/json",
+}
+
+
 class RequestHandler(tornado.web.RequestHandler):
     """Handles html request."""
 
     def __init__(self, *args, **kwargs):
         file_path = kwargs.pop("file_path")
+        self.format = file_path.split(".")[-1]
+
         if file_path.endswith("html"):
             self.page = open(file_path).read()
             web_port = kwargs.pop("rpc_web_port", None)
             if web_port:
                 self.page = self.page.replace(
-                    "ws://localhost:9190/ws", "ws://localhost:%d/ws" % web_port
+                    "ws://localhost:9190/ws", f"ws://localhost:{web_port}/ws"
                 )
         else:
             self.page = open(file_path, "rb").read()
+
         super(RequestHandler, self).__init__(*args, **kwargs)
 
     def data_received(self, _):
         pass
 
     def get(self, *args, **kwargs):
+        if self.format in MIME_MAP:
+            self.set_header("Content-Type", MIME_MAP[self.format])
         self.write(self.page)
 
 
@@ -245,18 +258,21 @@ class ProxyServerHandler(object):
         assert ProxyServerHandler.current is None
         ProxyServerHandler.current = self
         if web_port:
-            handlers = [
-                (r"/ws", WebSocketHandler),
-            ]
+            handlers = [(r"/ws", WebSocketHandler)]
             if index_page:
                 handlers.append(
                     (r"/", RequestHandler, {"file_path": index_page, "rpc_web_port": web_port})
                 )
                 logging.info("Serving RPC index html page at http://localhost:%d", web_port)
             resource_files = resource_files if resource_files else []
-            for fname in resource_files:
+            for item in resource_files:
+                prefix, fname = item
+                if not prefix.endswith("/"):
+                    prefix += "/"
+                if not prefix.startswith("/"):
+                    prefix = "/" + prefix
                 basename = os.path.basename(fname)
-                pair = (r"/%s" % basename, RequestHandler, {"file_path": fname})
+                pair = (rf"{prefix}{basename}", RequestHandler, {"file_path": fname})
                 handlers.append(pair)
                 logging.info(pair)
             self.app = tornado.web.Application(handlers)
@@ -340,7 +356,7 @@ class ProxyServerHandler(object):
                 magic = struct.unpack("<i", base.recvall(self._tracker_conn, 4))[0]
                 if magic != base.RPC_TRACKER_MAGIC:
                     self.loop.stop()
-                    raise RuntimeError("%s is not RPC Tracker" % str(self._tracker_addr))
+                    raise RuntimeError(f"{self._tracker_addr} is not RPC Tracker")
                 # just connect to tracker, need to update all keys
                 self._tracker_pending_puts = self._server_pool.keys()
 
@@ -516,7 +532,7 @@ class PopenProxyServerState(object):
                     continue
                 raise sock_err
         if not self.port:
-            raise ValueError("cannot bind to any port in [%d, %d)" % (port, port_end))
+            raise ValueError(f"cannot bind to any port in [{port}, {port_end})")
         logging.info("RPCProxy: client port bind to %s:%d", host, self.port)
         sock.listen(1)
         self.thread = threading.Thread(
@@ -684,11 +700,11 @@ def websocket_proxy_server(url, key=""):
         assert len(msg) >= 4
         magic = struct.unpack("<i", msg[:4])[0]
         if magic == base.RPC_CODE_DUPLICATE:
-            raise RuntimeError("key: %s has already been used in proxy" % key)
+            raise RuntimeError(f"key: {key} has already been used in proxy")
         if magic == base.RPC_CODE_MISMATCH:
             logging.info("RPCProxy do not have matching client key %s", key)
         elif magic != base.RPC_CODE_SUCCESS:
-            raise RuntimeError("%s is not RPC Proxy" % url)
+            raise RuntimeError(f"{url} is not RPC Proxy")
         msg = msg[4:]
 
         logging.info("Connection established with remote")

@@ -52,8 +52,7 @@ TEST(CCodegen, MainFunctionOrder) {
   auto args = Array<Tensor>({A, B, elemwise_add});
 
   std::unordered_map<Tensor, Buffer> binds;
-  auto lowered =
-      LowerSchedule(fcreate(), args, "elemwise_add", binds, GlobalVarSupply(NameSupply("")));
+  auto lowered = LowerSchedule(fcreate(), args, "elemwise_add", binds, GlobalVarSupply());
   Map<tvm::Target, IRModule> inputs = {{target_c, lowered}};
   runtime::Module module = build(inputs, Target());
   Array<String> functions = module->GetFunction("get_func_names", false)();
@@ -82,8 +81,7 @@ auto BuildLowered(std::string op_name, tvm::Target target) {
 
   auto args = Array<Tensor>({A, B, op});
   std::unordered_map<Tensor, Buffer> binds;
-  auto lowered_s =
-      LowerSchedule(fcreate_s(), args, op_name, binds, GlobalVarSupply(NameSupply("")));
+  auto lowered_s = LowerSchedule(fcreate_s(), args, op_name, binds, GlobalVarSupply());
   return lowered_s;
 }
 
@@ -121,5 +119,11 @@ TEST(CCodegen, FunctionOrder) {
   auto module = build(inputs, Target());
   Array<String> func_array = module->GetFunction("get_func_names", false)();
   std::vector<std::string> functions{func_array.begin(), func_array.end()};
-  EXPECT_THAT(functions, ElementsAre(StrEq("op_1"), _, StrEq("op_2"), _));
+  // The entry point is handled separately from the other functions.
+  functions.erase(std::remove_if(functions.begin(), functions.end(),
+                                 [](const std::string& name) {
+                                   return name == tvm::runtime::symbol::tvm_module_main;
+                                 }),
+                  functions.end());
+  EXPECT_TRUE(std::is_sorted(functions.begin(), functions.end()));
 }

@@ -139,10 +139,6 @@ class JSONDatabaseNode : public DatabaseNode {
         }
       }
     }
-    if (results.size() < static_cast<size_t>(top_k)) {
-      LOG(WARNING) << "Returned tuning records less than requested(" << results.size() << " of "
-                   << top_k << " asked).";
-    }
     return results;
   }
 
@@ -196,7 +192,9 @@ Database Database::JSONDatabase(String path_workload, String path_tuning_record,
           try {
             const ArrayNode* arr = json_obj.as<ArrayNode>();
             ICHECK_EQ(arr->size(), 2);
-            workload = workloads[Downcast<Integer>(arr->at(0)).IntValue()];
+            int64_t workload_index = Downcast<runtime::Int>(arr->at(0));
+            ICHECK(workload_index >= 0 && static_cast<size_t>(workload_index) < workloads.size());
+            workload = workloads[workload_index];
             records[task_id] = TuningRecord::FromJSON(arr->at(1), workload);
           } catch (std::runtime_error& e) {
             LOG(FATAL) << "ValueError: Unable to parse TuningRecord, on line " << (task_id + 1)

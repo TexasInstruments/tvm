@@ -26,6 +26,8 @@
 #include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
 
+#include <unordered_map>
+
 #include "../transforms/ir_utils.h"
 namespace tvm {
 namespace tir {
@@ -60,6 +62,8 @@ class BlockReadWriteDetector : public StmtExprVisitor {
   std::unordered_map<const VarNode*, arith::IntSet> dom_map_;
   /*! \brief Extra iteration range hint for free vars */
   std::unordered_map<const VarNode*, arith::IntSet> hint_map_;
+  /*! \brief Unresolved conditions within current scope. */
+  std::vector<PrimExpr> pending_conditions_;
   /*! \brief The buffers that the current block reads */
   std::vector<Buffer> read_buffers_;
   /*! \brief The buffers that the current block writes */
@@ -76,6 +80,8 @@ class BlockReadWriteDetector : public StmtExprVisitor {
   Map<Var, Buffer> buffer_var_map_;
   /*! \brief The target buffer var mapping to its matching */
   std::unordered_map<const VarNode*, MatchBufferRegion> match_buffers_;
+  /*! \brief let bindings inside the block */
+  std::unordered_map<const VarNode*, PrimExpr> let_bindings_;
   /*!\ brief Internal analyzer. */
   arith::Analyzer ana_;
 
@@ -109,6 +115,7 @@ class BlockReadWriteDetector : public StmtExprVisitor {
   void VisitStmt_(const IfThenElseNode* op) override;
   void VisitStmt_(const BlockRealizeNode* op) override;
   void VisitStmt_(const BufferStoreNode* op) override;
+  void VisitStmt_(const LetStmtNode* op) override;
   void VisitExpr_(const BufferLoadNode* op) override;
   void VisitExpr_(const VarNode* op) override;
   void VisitExpr_(const CallNode* op) override;
@@ -147,7 +154,8 @@ void BlockReadWriteDetector::VisitExpr_(const VarNode* op) { UpdateOpaque(GetRef
 void BlockReadWriteDetector::VisitExpr_(const BufferLoadNode* op) {
   std::vector<arith::IntSet> relaxed_region;
   for (const PrimExpr& index : op->indices) {
-    relaxed_region.push_back(arith::EvalSet(arith::IntSet::Vector(index), dom_map_));
+    PrimExpr remapped_index = Substitute(index, let_bindings_);
+    relaxed_region.push_back(arith::EvalSet(arith::IntSet::Vector(remapped_index), dom_map_));
   }
   Update(&read_buffers_, &read_regions_, op->buffer, relaxed_region);
   ExprVisitor::VisitExpr_(op);
@@ -164,14 +172,20 @@ void BlockReadWriteDetector::VisitStmt_(const IfThenElseNode* op) {
   VisitExpr(op->condition);
   {
     // Visit then branch
-    With<ConditionalBoundsContext> ctx(op->condition, &dom_map_, &hint_map_, true);
+    With<ConditionalBoundsContext> ctx(op->condition, &dom_map_, &hint_map_, &pending_conditions_);
     StmtExprVisitor::VisitStmt(op->then_case);
   }
   if (op->else_case) {
     // Visit else branch
-    With<ConditionalBoundsContext> ctx(op->condition, &dom_map_, &hint_map_, false);
+    With<ConditionalBoundsContext> ctx(!op->condition, &dom_map_, &hint_map_, &pending_conditions_);
     StmtExprVisitor::VisitStmt(op->else_case.value());
   }
+}
+
+void BlockReadWriteDetector::VisitStmt_(const LetStmtNode* op) {
+  let_bindings_[op->var.get()] = op->value;
+  StmtVisitor::VisitStmt_(op);
+  let_bindings_.erase(op->var.get());
 }
 
 void BlockReadWriteDetector::VisitExpr_(const CallNode* op) {
@@ -207,12 +221,12 @@ void BlockReadWriteDetector::VisitExpr_(const CallNode* op) {
     VisitExpr(op->args[0]);
     {
       // Visit then branch
-      With<ConditionalBoundsContext> ctx(op->args[0], &dom_map_, &hint_map_, true);
+      With<ConditionalBoundsContext> ctx(op->args[0], &dom_map_, &hint_map_, &pending_conditions_);
       StmtExprVisitor::VisitExpr(op->args[1]);
     }
     {
       // Visit else branch
-      With<ConditionalBoundsContext> ctx(op->args[0], &dom_map_, &hint_map_, false);
+      With<ConditionalBoundsContext> ctx(!op->args[0], &dom_map_, &hint_map_, &pending_conditions_);
       StmtExprVisitor::VisitExpr(op->args[2]);
     }
     return;
@@ -223,7 +237,8 @@ void BlockReadWriteDetector::VisitExpr_(const CallNode* op) {
 void BlockReadWriteDetector::VisitStmt_(const BufferStoreNode* op) {
   std::vector<arith::IntSet> relaxed_region;
   for (const PrimExpr& index : op->indices) {
-    relaxed_region.push_back(arith::EvalSet(arith::IntSet::Vector(index), dom_map_));
+    PrimExpr remapped_index = Substitute(index, let_bindings_);
+    relaxed_region.push_back(arith::EvalSet(arith::IntSet::Vector(remapped_index), dom_map_));
   }
   Update(&writes_buffers_, &write_regions_, op->buffer, relaxed_region);
   StmtVisitor::VisitStmt_(op);

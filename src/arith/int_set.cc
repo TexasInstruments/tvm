@@ -349,8 +349,8 @@ inline IntervalSet Combine<tir::Min>(Analyzer* analzyer, IntervalSet a, Interval
 
 // internal helper function to get an interval set
 IntervalSet ToIntervalSet(IntSet set) {
-  if (auto* node = set.as<IntervalSetNode>()) {
-    return GetRef<IntervalSet>(node);
+  if (auto node = set.as<IntervalSet>()) {
+    return node.value();
   }
   DLOG(INFO) << "cannot resolve int set " << set;
   return IntervalSet::Everything();
@@ -379,6 +379,7 @@ class IntervalSetEvaluator : public ExprFunctor<IntervalSet(const PrimExpr&)> {
     IntervalSet min_set = this->Eval(val->min_value);
     IntervalSet max_set = this->Eval(val->max_value);
     --recur_depth_;
+
     return IntervalSet(min_set->min_value, max_set->max_value);
   }
 
@@ -465,14 +466,23 @@ class IntervalSetEvaluator : public ExprFunctor<IntervalSet(const PrimExpr&)> {
     if (stride.Match(op->stride)) {
       DataType t = op->base.dtype();
       int64_t vstride = stride.Eval()->value;
-      if (vstride > 0) {
-        return Combine<Add>(analyzer_, base,
-                            IntervalSet(make_zero(t), make_const(t, vstride * (op->lanes - 1))),
-                            op->dtype);
-      } else {
-        return Combine<Add>(analyzer_, base,
-                            IntervalSet(make_const(t, vstride * (op->lanes - 1)), make_zero(t)),
-                            op->dtype);
+      if (op->lanes->IsInstance<IntImmNode>()) {
+        int lanes = static_cast<int>(Downcast<IntImm>(op->lanes)->value);
+        if (vstride > 0) {
+          return Combine<Add>(analyzer_, base,
+                              IntervalSet(make_zero(t), make_const(t, vstride * (lanes - 1))),
+                              op->dtype);
+        } else {
+          return Combine<Add>(analyzer_, base,
+                              IntervalSet(make_const(t, vstride * (lanes - 1)), make_zero(t)),
+                              op->dtype);
+        }
+      } else { /* Scalable vector */
+        if (vstride > 0) {
+          return Combine<Add>(analyzer_, base, IntervalSet(make_zero(t), pos_inf()), op->dtype);
+        } else {
+          return Combine<Add>(analyzer_, base, IntervalSet(neg_inf(), make_zero(t)), op->dtype);
+        }
       }
     }
     DLOG(WARNING) << "cannot evaluate set on expression " << GetRef<PrimExpr>(op);
@@ -520,6 +530,12 @@ class IntervalSetEvaluator : public ExprFunctor<IntervalSet(const PrimExpr&)> {
       }
     }
     return IntervalSet::SinglePoint(GetRef<PrimExpr>(op));
+  }
+
+  IntervalSet VisitExpr_(const CallNode* op) final {
+    if (op->op.same_as(tir::builtin::vscale()))
+      return IntervalSet(GetRef<PrimExpr>(op), GetRef<PrimExpr>(op));
+    return IntervalSet::Everything();
   }
 
   IntervalSet VisitExprDefault_(const Object* op) final {
@@ -956,7 +972,7 @@ IntSet EvalSet(PrimExpr e, const Map<Var, IntSet>& dom_map) {
 
 IntSet IntSet::Vector(PrimExpr x) {
   // short cut: simply get single point
-  if (x.dtype().lanes() == 1) {
+  if (!x.dtype().is_scalable_or_fixed_length_vector()) {
     return IntSet::SinglePoint(x);
   } else {
     // vector case.
@@ -1052,11 +1068,17 @@ Map<Var, arith::IntSet> AsIntSet(const Map<Var, Range>& var_dom) {
 /*! \brief Helper function to convert IterSumExpr to the actual touched range. */
 static Optional<IntSet> EvalIterSum(const IterSumExpr& iter_min, const PrimExpr& extent,
                                     Analyzer* analyzer) {
+  if (analyzer->CanProve(extent == 0)) {
+    return IntSet::Nothing();
+  }
   if (iter_min->args.empty()) {
     return IntSet::FromMinExtent(iter_min->base, extent);
   }
   ICHECK_EQ(iter_min->args.size(), 1) << "The `EvalIterSum` expects fused iter sum expr";
   const IterSplitExpr& split = iter_min->args[0];
+  if (analyzer->CanProve(split->extent == 0)) {
+    return IntSet::Nothing();
+  }
   if (!analyzer->CanProve(extent >= split->scale)) {
     return NullOpt;
   }

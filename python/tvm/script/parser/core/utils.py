@@ -22,6 +22,30 @@ from typing import Any, Callable, Dict, List
 from .diagnostics import findsource
 
 
+def get_func_nonlocals(func):
+    """A modified version of `inspect.getclosurevars`"""
+
+    if inspect.ismethod(func):
+        func = func.__func__
+
+    if not inspect.isfunction(func):
+        raise TypeError("{!r} is not a Python function".format(func))
+
+    code = func.__code__
+    # Nonlocal references are named in co_freevars and resolved
+    # by looking them up in __closure__ by positional index
+    nonlocal_vars = {}
+    if func.__closure__ is not None:
+        for var, cell in zip(code.co_freevars, func.__closure__):
+            try:
+                nonlocal_vars[var] = cell.cell_contents
+            except ValueError as err:
+                # cell_contents may raise ValueError if the cell is empty.
+                if "empty" not in str(err):
+                    raise
+    return nonlocal_vars
+
+
 def inspect_function_capture(func: Callable) -> Dict[str, Any]:
     """Capture function non-locals and global variables.
 
@@ -37,7 +61,7 @@ def inspect_function_capture(func: Callable) -> Dict[str, Any]:
     """
     captured = {
         **func.__globals__,  # type: ignore
-        **inspect.getclosurevars(func).nonlocals,
+        **get_func_nonlocals(func),
     }
     return captured
 
@@ -76,19 +100,29 @@ def is_defined_in_class(frames: List[FrameType], obj: Any) -> bool:
     res : bool
         The result if the object is defined in a class scope.
     """
+
+    def _is_tvmscript_class_annotator(line: str) -> bool:
+        """Checks if the line contains a TVMScript annotator for a class
+
+        These match either `@I.ir_module` or `@R.rewriter`, or their
+        imported names `@ir_module` or `@rewriter`.
+        """
+
+        return line.startswith("@") and ("ir_module" in line or "rewriter" in line)
+
     if len(frames) > 2:
         frame_info = frames[2]
         code_context = frame_info.code_context
         if code_context is None:
             return False
         line = code_context[0].strip()
-        if line.startswith("@") and "ir_module" in line:
+        if _is_tvmscript_class_annotator(line):
             return True
         if line.startswith("class"):
             lineno = frame_info.lineno
             if lineno >= 2:
                 source, _ = findsource(obj)
                 line = source[lineno - 2].strip()
-                if line.startswith("@") and "ir_module" in line:
+                if _is_tvmscript_class_annotator(line):
                     return True
     return False

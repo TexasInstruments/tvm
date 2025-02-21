@@ -32,8 +32,9 @@ from tvm.script import tir as T
 from .infra import make_ethosu_binary_elementwise, make_ethosu_conv2d
 
 
+# Uninitialized variables used
 # fmt: off
-@tvm.script.ir_module
+@tvm.script.ir_module(check_well_formed=False)
 class WeightStreamOnlyU55:
     @T.prim_func
     def main(input_placeholder: T.Buffer((1, 16, 16, 32), "int8"), input_ethosu_write: T.Buffer((1, 16, 16, 8), "int8")) -> None:
@@ -60,37 +61,35 @@ class WeightStreamOnlyU55:
         T.evaluate(T.call_extern("ethosu_copy", buffer7[0], 144, p2[0], dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[4], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, buffer9[0], 112, T.int8(-1), T.int8(-1), 12, buffer9[112], 32, T.int8(-1), T.int8(-1), 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[6], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2[0], 112, T.int8(-1), T.int8(-1), 12, p2[112], 32, T.int8(-1), T.int8(-1), 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-    __tvm_meta__ = None
 
 
-@tvm.script.ir_module
+# Uninitialized variables used
+@tvm.script.ir_module(check_well_formed=False)
 class WeightStreamOnlyU65:
     @T.prim_func
-    def main(input_placeholder: T.Buffer((1, 16, 16, 32), "int8"), input_ethosu_write: T.Buffer((1, 16, 16, 8), "int8")) -> None:
-        # function attr dict
-        T.func_attr({"from_legacy_te_schedule": True, "global_symbol": "main", "tir.noalias": True})
-        # buffer definition
-        placeholder = T.Buffer([8192], dtype="int8", data=input_placeholder.data)
-        ethosu_write = T.Buffer([2048], dtype="int8", data=input_ethosu_write.data)
-        buffer_encoded_1 = T.Buffer([192], dtype="uint8")
-        buffer_encoded_2_1 = T.Buffer([192], dtype="uint8")
-        buffer_encoded_4_1 = T.Buffer([208], dtype="uint8")
-        buffer_encoded_6_1 = T.Buffer([192], dtype="uint8")
-        # body
-        p1_data = T.allocate([208], "uint8", "global", annotations={"disable_lower_builtin":True})
-        p1 = T.Buffer([208], "uint8", data=p1_data)
-        p2_data = T.allocate([192], "uint8", "global", annotations={"disable_lower_builtin":True})
-        p2 = T.Buffer([192], "uint8", data=p2_data)
-        p3 = T.Buffer([192], dtype="uint8", data=p1.data)
-        T.evaluate(T.call_extern("ethosu_copy", buffer_encoded_1[0], 192, p3[0], dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_copy", buffer_encoded_2_1[0], 192, p2[0], dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p3[0], 80, p3[80], 80, 12, p3[160], 16, p3[176], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_copy", buffer_encoded_4_1[0], 208, p1[0], dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[2], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2[0], 80, p2[80], 80, 12, p2[160], 16, p2[176], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_copy", buffer_encoded_6_1[0], 192, p2[0], dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[4], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p1[0], 96, p1[96], 80, 12, p1[176], 16, p1[192], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[6], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2[0], 80, p2[80], 80, 12, p2[160], 16, p2[176], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-    __tvm_meta__ = None
+    def main(ifm: T.Buffer((1, 16, 16, 32), "int8"), ethosu_write: T.Buffer((1, 16, 16, 8), "int8")):
+        T.func_attr({"from_legacy_te_schedule": T.bool(True), "global_symbol": "main", "tir.noalias": T.bool(True)})
+        p2_global_6 = T.allocate([192], "uint8", "global", annotations={"disable_lower_builtin": T.bool(True)})
+        p2_global_4 = T.allocate([192], "uint8", "global", annotations={"disable_lower_builtin": T.bool(True)})
+        p2_global_5 = T.allocate([208], "uint8", "global", annotations={"disable_lower_builtin": T.bool(True)})
+        buffer_encoded = T.Buffer((192,), "uint8")
+        p2_global_3 = T.Buffer((192,), "uint8", data=p2_global_6)
+        T.call_extern("handle", "ethosu_copy", buffer_encoded[0], 192, p2_global_3[0])
+        buffer_encoded_1 = T.Buffer((192,), "uint8")
+        p2_global_4_1 = T.Buffer((192,), "uint8", data=p2_global_4)
+        T.call_extern("handle", "ethosu_copy", buffer_encoded_1[0], 192, p2_global_4_1[0])
+        buffer_encoded_2 = T.Buffer((208,), "uint8")
+        p2_global_5_1 = T.Buffer((208,), "uint8", data=p2_global_5)
+        T.call_extern("handle", "ethosu_copy", buffer_encoded_2[0], 208, p2_global_5_1[0])
+        ifm_1 = T.Buffer((8192,), "int8", data=ifm.data)
+        ethosu_write_1 = T.Buffer((2048,), "int8", data=ethosu_write.data)
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, ifm_1[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write_1[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2_global_3[0], 80, p2_global_3[80], 80, 12, p2_global_3[160], 16, p2_global_3[176], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
+        buffer_encoded_3 = T.Buffer((192,), "uint8")
+        p2_global_6_1 = T.Buffer((192,), "uint8", data=p2_global_6)
+        T.call_extern("handle", "ethosu_copy", buffer_encoded_3[0], 192, p2_global_6_1[0])
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, ifm_1[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write_1[2], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2_global_4_1[0], 80, p2_global_4_1[80], 80, 12, p2_global_4_1[160], 16, p2_global_4_1[176], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, ifm_1[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write_1[4], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2_global_5_1[0], 96, p2_global_5_1[96], 80, 12, p2_global_5_1[176], 16, p2_global_5_1[192], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, ifm_1[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write_1[6], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2_global_6_1[0], 80, p2_global_6_1[80], 80, 12, p2_global_6_1[160], 16, p2_global_6_1[176], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
 # fmt: on
 
 
@@ -143,15 +142,16 @@ def test_weight_stream_only(accelerator, reference_mod, reference_const_sizes):
         func = _get_func()
         mod, consts = _lower_to_tir(func, cascader=_planner)
         script = mod.script()
-        test_mod = tvm.script.from_source(script)
+        test_mod = tvm.script.from_source(script, check_well_formed=False)
         tvm.ir.assert_structural_equal(test_mod["main"], reference_mod["main"], True)
 
         test_const_size = [value.size for value in list(consts.values())]
         assert reference_const_sizes.sort() == test_const_size.sort()
 
 
+# Uninitialized variables used
 # fmt: off
-@tvm.script.ir_module
+@tvm.script.ir_module(check_well_formed=False)
 class RereadWeightsU55:
     @T.prim_func
     def main(input_placeholder: T.Buffer((1, 16, 16, 32), "int8"), input_ethosu_write: T.Buffer((1, 16, 16, 8), "int8")) -> None:
@@ -169,10 +169,10 @@ class RereadWeightsU55:
         T.evaluate(T.call_extern("ethosu_copy", buffer1[0], 384, p2[0], dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 8, 32, 16, 0, 8, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 8, 8, 16, 0, 8, ethosu_write[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p1[0], 304, T.int8(-1), T.int8(-1), 12, p1[304], 80, T.int8(-1), T.int8(-1), 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 8, 32, 16, 0, 8, placeholder[256], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 8, 8, 16, 0, 8, ethosu_write[64], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2[0], 304, T.int8(-1), T.int8(-1), 12, p2[304], 80, T.int8(-1), T.int8(-1), 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-    __tvm_meta__ = None
 
 
-@tvm.script.ir_module
+# Uninitialized variables used
+@tvm.script.ir_module(check_well_formed=False)
 class RereadWeightsU65:
     @T.prim_func
     def main(input_placeholder: T.Buffer((1, 16, 16, 32), "int8"), input_ethosu_write: T.Buffer((1, 16, 16, 8), "int8")) -> None:
@@ -191,8 +191,6 @@ class RereadWeightsU65:
         T.evaluate(T.call_extern("ethosu_copy", placeholder_encoded_1[0], 464, p2[0], dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 8, 32, 16, 0, 8, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 8, 8, 16, 0, 8, ethosu_write[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p1[0], 192, p1[192], 176, 12, p1[368], 48, p1[416], 48, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 8, 32, 16, 0, 8, placeholder[256], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 8, 8, 16, 0, 8, ethosu_write[64], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2[0], 192, p2[192], 176, 12, p2[368], 48, p2[416], 48, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-
-    __tvm_meta__ = None
 # fmt: on
 
 
@@ -245,15 +243,16 @@ def test_re_read_weights(accelerator, reference_mod, reference_const_sizes):
         func = _get_func()
         mod, consts = _lower_to_tir(func, cascader=_cascader)
         script = mod.script()
-        test_mod = tvm.script.from_source(script)
+        test_mod = tvm.script.from_source(script, check_well_formed=False)
         tvm.ir.assert_structural_equal(test_mod["main"], reference_mod["main"], True)
 
         test_const_size = [value.size for value in list(consts.values())]
         assert reference_const_sizes.sort() == test_const_size.sort()
 
 
+# Uninitialized variables used
 # fmt: off
-@tvm.script.ir_module
+@tvm.script.ir_module(check_well_formed=False)
 class DirectReadOnlyU55:
     @T.prim_func
     def main(input_placeholder: T.Buffer((1, 16, 16, 32), "int8"), input_ethosu_write: T.Buffer((1, 16, 16, 8), "int8")) -> None:
@@ -270,10 +269,10 @@ class DirectReadOnlyU55:
         ethosu_write_1 = T.Buffer([4096], "int8", data=ethosu_write_1_data)
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 16, 16, 0, 16, ethosu_write_1[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 256, 16, 1, 1, 1, 1, 1, 1, 1, buffer[0], 592, T.int8(-1), T.int8(-1), 12, buffer_1[0], 160, T.int8(-1), T.int8(-1), 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, ethosu_write_1[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 8, 16, 0, 16, ethosu_write[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, buffer_2[0], 160, T.int8(-1), T.int8(-1), 12, buffer_3[0], 80, T.int8(-1), T.int8(-1), 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-    __tvm_meta__ = None
 
 
-@tvm.script.ir_module
+# Uninitialized variables used
+@tvm.script.ir_module(check_well_formed=False)
 class DirectReadOnlyU65:
     @T.prim_func
     def main(input_placeholder: T.Buffer((1, 16, 16, 32), "int8"), input_ethosu_write: T.Buffer((1, 16, 16, 8), "int8")) -> None:
@@ -291,7 +290,6 @@ class DirectReadOnlyU65:
         ethosu_write_2 = T.Buffer([4096], "int8", data=ethosu_write_2_data)
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, placeholder[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 16, 16, 0, 16, ethosu_write_2[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 256, 16, 1, 1, 1, 1, 1, 1, 1, placeholder_encoded[0], 304, placeholder_encoded[304], 304, 12, placeholder_encoded_1[0], 80, placeholder_encoded_1[80], 80, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, ethosu_write_2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 8, 16, 0, 16, ethosu_write[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, placeholder_encoded_2[0], 112, placeholder_encoded_2[112], 96, 12, placeholder_encoded_3[0], 48, placeholder_encoded_3[48], 48, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-    __tvm_meta__ = None
 # fmt: on
 
 
@@ -343,15 +341,16 @@ def test_direct_read_only(accelerator, reference_mod, reference_const_sizes):
         mod, consts = _lower_to_tir(func)
 
         script = mod.script()
-        test_mod = tvm.script.from_source(script)
+        test_mod = tvm.script.from_source(script, check_well_formed=False)
         tvm.ir.assert_structural_equal(test_mod["main"], reference_mod["main"], True)
 
         test_const_size = [value.size for value in list(consts.values())]
         assert reference_const_sizes.sort() == test_const_size.sort()
 
 
+# Uninitialized variables used
 # fmt: off
-@tvm.script.ir_module
+@tvm.script.ir_module(check_well_formed=False)
 class MixedReadU55:
     @T.prim_func
     def main(input_ifm: T.Buffer((1,16,16,32), "int8"), input_ethosu_write: T.Buffer((1,16,16,8), "int8")) -> None:
@@ -381,40 +380,40 @@ class MixedReadU55:
         T.evaluate(T.call_extern("ethosu_copy", buffer7[0], 112, p2[0], dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, p3[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[4], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p1[0], 80, T.int8(-1), T.int8(-1), 12, p1[80], 32, T.int8(-1), T.int8(-1), 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
         T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, p3[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[6], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p2[0], 80, T.int8(-1), T.int8(-1), 12, p2[80], 32, T.int8(-1), T.int8(-1), 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-    __tvm_meta__ = None
 
 
-@tvm.script.ir_module
+# Uninitialized variables used
+@tvm.script.ir_module(check_well_formed=False)
 class MixedReadU65:
     @T.prim_func
-    def main(input_ifm: T.Buffer((1,16,16,32), "int8"), input_ethosu_write: T.Buffer((1,16,16,8), "int8")) -> None:
-        # function attr dict
-        T.func_attr({"from_legacy_te_schedule": True, "global_symbol": "main", "tir.noalias": True})
-        # buffer definition
-        ifm = T.Buffer([8192], dtype="int8", data=input_ifm.data)
-        ethosu_write = T.Buffer([2048], dtype="int8", data=input_ethosu_write.data)
-        buffer1 = T.Buffer([128], dtype="uint8")
-        buffer2 = T.Buffer([128], dtype="uint8")
-        buffer3 = T.Buffer([128], dtype="uint8")
-        buffer4 = T.Buffer([608], dtype="uint8")
-        buffer5 = T.Buffer([160], dtype="uint8")
-        buffer6 = T.Buffer([128], dtype="uint8")
-        p1_data = T.allocate([128], "uint8", "global", annotations={"disable_lower_builtin":True})
-        p1 = T.Buffer([128], "uint8", data=p1_data)
-        p2_data = T.allocate([4096], "int8", "global", annotations={"disable_lower_builtin":True})
-        p2 = T.Buffer([4096], "int8", data=p2_data)
-        p3_data = T.allocate([128], "uint8", "global", annotations={"disable_lower_builtin":True})
-        p3 = T.Buffer([128], "uint8", data=p3_data)
-        T.evaluate(T.call_extern("ethosu_copy", buffer1[0], 128, p1[0], dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, ifm[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 16, 16, 0, 16, p2[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 256, 16, 1, 1, 1, 1, 1, 1, 1, buffer4[0], 304, buffer4[304], 304, 12, buffer5[0], 80, buffer5[80], 80, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_copy", buffer2[0], 128, p3[0], dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, p2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p1[0], 48, p1[48], 48, 12, p1[96], 16, p1[112], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_copy", buffer3[0], 128, p1[0], dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, p2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[2], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p3[0], 48, p3[48], 48, 12, p3[96], 16, p3[112], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_copy", buffer6[0], 128, p3[0], dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, p2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[4], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p1[0], 48, p1[48], 48, 12, p1[96], 16, p1[112], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-        T.evaluate(T.call_extern("ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, p2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write[6], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p3[0], 48, p3[48], 48, 12, p3[96], 16, p3[112], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0, dtype="handle"))
-    __tvm_meta__ = None
+    def main(ifm: T.Buffer((1, 16, 16, 32), "int8"), ethosu_write: T.Buffer((1, 16, 16, 8), "int8")):
+        T.func_attr({"from_legacy_te_schedule": T.bool(True), "global_symbol": "main", "tir.noalias": T.bool(True)})
+        p5_global = T.allocate([128], "uint8", "global", annotations={"disable_lower_builtin": T.bool(True)})
+        p5_global_1 = T.allocate([128], "uint8", "global", annotations={"disable_lower_builtin": T.bool(True)})
+        ethosu_write_1 = T.allocate([4096], "int8", "global", annotations={"disable_lower_builtin": T.bool(True)})
+        p5_global_2 = T.allocate([128], "uint8", "global", annotations={"disable_lower_builtin": T.bool(True)})
+        buffer_encoded = T.Buffer((128,), "uint8")
+        p5_global_3 = T.Buffer((128,), "uint8", data=p5_global)
+        T.call_extern("handle", "ethosu_copy", buffer_encoded[0], 128, p5_global_3[0])
+        buffer_encoded_1 = T.Buffer((128,), "uint8")
+        p5_global_4 = T.Buffer((128,), "uint8", data=p5_global_1)
+        T.call_extern("handle", "ethosu_copy", buffer_encoded_1[0], 128, p5_global_4[0])
+        ifm_1 = T.Buffer((8192,), "int8", data=ifm.data)
+        ethosu_write_2 = T.Buffer((4096,), "int8", data=ethosu_write_1)
+        p1_encoded = T.Buffer((608,), "uint8")
+        p2_encoded = T.Buffer((160,), "uint8")
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 32, 16, 0, 16, ifm_1[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 512, 32, 1, "int8", 16, 16, 16, 16, 0, 16, ethosu_write_2[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 256, 16, 1, 1, 1, 1, 1, 1, 1, p1_encoded[0], 304, p1_encoded[304], 304, 12, p2_encoded[0], 80, p2_encoded[80], 80, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
+        buffer_encoded_2 = T.Buffer((128,), "uint8")
+        p5_global_5 = T.Buffer((128,), "uint8", data=p5_global_2)
+        T.call_extern("handle", "ethosu_copy", buffer_encoded_2[0], 128, p5_global_5[0])
+        ethosu_write_3 = T.Buffer((2048,), "int8", data=ethosu_write.data)
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, ethosu_write_2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write_3[0], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p5_global_3[0], 48, p5_global_3[48], 48, 12, p5_global_3[96], 16, p5_global_3[112], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
+        buffer_encoded_3 = T.Buffer((128,), "uint8")
+        p5_global_6 = T.Buffer((128,), "uint8", data=p5_global)
+        T.call_extern("handle", "ethosu_copy", buffer_encoded_3[0], 128, p5_global_6[0])
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, ethosu_write_2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write_3[2], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p5_global_4[0], 48, p5_global_4[48], 48, 12, p5_global_4[96], 16, p5_global_4[112], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, ethosu_write_2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write_3[4], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p5_global_5[0], 48, p5_global_5[48], 48, 12, p5_global_5[96], 16, p5_global_5[112], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
+        T.call_extern("handle", "ethosu_conv2d", "int8", 16, 16, 16, 16, 0, 16, ethosu_write_2[0], 0, 0, 0, T.float32(0.5), 10, "NHWC", 256, 16, 1, "int8", 16, 16, 2, 16, 0, 16, ethosu_write_3[6], 0, 0, 0, T.float32(0.25), 14, "NHWC", 128, 8, 1, 1, 1, 1, 1, 1, 1, p5_global_6[0], 48, p5_global_6[48], 48, 12, p5_global_6[96], 16, p5_global_6[112], 16, 0, 0, 0, 0, "NONE", 0, 0, "TFL", "NONE", 0, 0, 0)
 # fmt: on
 
 
@@ -477,7 +476,7 @@ def test_mixed_read(accelerator, reference_mod, reference_const_sizes):
         mod, consts = _lower_to_tir(func, cascader=_planner)
 
         script = mod.script()
-        test_mod = tvm.script.from_source(script)
+        test_mod = tvm.script.from_source(script, check_well_formed=False)
         tvm.ir.assert_structural_equal(test_mod["main"], reference_mod["main"], True)
 
         test_const_size = [value.size for value in list(consts.values())]
@@ -525,7 +524,9 @@ def test_constant_as_input():
     # nothing else was overrwritten.
     # With Target Hooks the TIR module needs a target attached
     # and lowered via make unpacked API.
-    tir_mod["main"] = tir_mod["main"].with_attr("target", tvm.target.Target("ethos-u"))
+    tir_mod["main"] = tir_mod["main"].with_attr(
+        "target", tvm.target.Target("ethos-u", host="ethos-u")
+    )
     tir_mod = tvm.tir.transform.MakeUnpackedAPI()(tir_mod)
     tir_to_cs_translator.translate(tir_mod, params)
 

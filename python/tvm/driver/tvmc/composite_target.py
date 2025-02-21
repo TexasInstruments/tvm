@@ -29,6 +29,7 @@ from tvm.relay.op.contrib.ethosu import partition_for_ethosu
 from tvm.relay.op.contrib.bnns import partition_for_bnns
 from tvm.relay.op.contrib.vitis_ai import partition_for_vitis_ai
 from tvm.relay.op.contrib.clml import partition_for_clml
+from tvm.relay.op.contrib.mrvl import partition_for_mrvl
 
 
 from tvm.driver.tvmc import TVMCException
@@ -50,31 +51,43 @@ logger = logging.getLogger("TVMC")
 REGISTERED_CODEGEN = {
     "compute-library": {
         "config_key": None,
+        "pass_default": False,
         "pass_pipeline": partition_for_arm_compute_lib,
     },
     "cmsis-nn": {
         "config_key": "relay.ext.cmsisnn.options",
+        "pass_default": False,
         "pass_pipeline": partition_for_cmsisnn,
     },
     "ethos-n": {
         "config_key": "relay.ext.ethos-n.options",
+        "pass_default": False,
         "pass_pipeline": partition_for_ethosn,
     },
     "ethos-u": {
         "config_key": "relay.ext.ethos-u.options",
+        "pass_default": False,
         "pass_pipeline": partition_for_ethosu,
     },
     "bnns": {
         "config_key": None,
+        "pass_default": False,
         "pass_pipeline": partition_for_bnns,
     },
     "vitis-ai": {
         "config_key": "relay.ext.vitis_ai.options",
+        "pass_default": False,
         "pass_pipeline": partition_for_vitis_ai,
     },
     "clml": {
         "config_key": None,
+        "pass_default": False,
         "pass_pipeline": partition_for_clml,
+    },
+    "mrvl": {
+        "config_key": "relay.ext.mrvl.options",
+        "pass_default": True,
+        "pass_pipeline": partition_for_mrvl,
     },
 }
 

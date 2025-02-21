@@ -23,7 +23,7 @@ set -x
 
 sudo apt-install-and-clear -y --no-install-recommends \
      libsdl2-dev ca-certificates gnupg software-properties-common wget \
-     git cmake ninja-build gperf \
+     git ninja-build gperf \
      ccache dfu-util device-tree-compiler wget \
      python3-dev python3-pip python3-setuptools python3-tk python3-wheel python3-venv \
      xz-utils file make gcc gcc-multilib g++-multilib apt-transport-https libudev-dev \
@@ -32,7 +32,7 @@ sudo apt-install-and-clear -y --no-install-recommends \
 wget --no-verbose https://apt.kitware.com/keys/kitware-archive-latest.asc
 sudo apt-key add kitware-archive-latest.asc
 
-echo deb https://apt.kitware.com/ubuntu/ bionic main\
+echo deb https://apt.kitware.com/ubuntu/ jammy main\
      >> /etc/apt/sources.list.d/kitware.list
 sudo apt-get update
 
@@ -47,7 +47,9 @@ release=$(lsb_release -sc)
 if [ "${release}" == "bionic" ]; then
      python_cmd="python3"
 elif [ "${release}" == "focal" ]; then
-     python_cmd="python3.8"
+     python_cmd="python3.9"
+elif [ "${release}" == "jammy" ]; then
+     python_cmd="python3.9"
 else
     echo "Don't know which version of python to use for Zephyr."
     exit 2
@@ -62,7 +64,7 @@ $python_cmd -m pip install west
 
 # Init ZephyrProject
 ZEPHYR_PROJECT_PATH=/opt/zephyrproject
-bash /install/ubuntu_init_zephyr_project.sh ${ZEPHYR_PROJECT_PATH}
+bash /install/ubuntu_init_zephyr_project.sh ${ZEPHYR_PROJECT_PATH} --branch v3.6-branch
 cd ${ZEPHYR_PROJECT_PATH}
 
 # As part of the build process, Zephyr needs to touch some symlinks in zephyr/misc/generated/syscalls_links (this path is relative to the

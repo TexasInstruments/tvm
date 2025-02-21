@@ -59,7 +59,7 @@ class RollingBufferInjector : public StmtExprMutator {
   std::map<Buffer, std::vector<AttrStmt>> buffer_to_attrs{};
   std::map<Buffer, RollingBufferInfo> rolling_buffer_to_info{};
   // The actual key type is Var, ObjectRef has been used because
-  // of the ambiguous overload for ‘operator<’
+  // of the ambiguous overload for 'operator<'
   std::map<ObjectRef, std::vector<BufferRealize>> hoist_buffer_to_for{};
 
  public:
@@ -102,8 +102,8 @@ class RollingBufferInjector : public StmtExprMutator {
   }
 
   Stmt VisitStmt_(const AttrStmtNode* op) final {
-    if (auto b = op->node.as<BufferNode>()) {
-      auto buffer = GetRef<Buffer>(b);
+    if (auto opt = op->node.as<Buffer>()) {
+      auto buffer = opt.value();
       // Keep a dictionary associating attribute statements with the buffers
       // they reference. We'll need this if the buffer gets hoisted and we
       // need to hoist all of its attributes at the same time.
@@ -213,7 +213,7 @@ class RollingBufferInjector : public StmtExprMutator {
     auto stmt{StmtExprMutator::VisitStmt_(op)};
     op = stmt.as<AttrStmtNode>();
 
-    if (rolling_buffers.count(GetRef<Buffer>(op->node.as<BufferNode>()))) {
+    if (auto opt = op->node.as<Buffer>(); opt && rolling_buffers.count(opt.value())) {
       // Remove the attribute statements attached to rolling buffers
       // because they will have been hoisted to the relevant rolling
       // scope
@@ -257,7 +257,9 @@ class RollingBufferInjector : public StmtExprMutator {
           indices.push_back(index);
         }
       }
-      Stmt buffer_store = BufferStore(op->buffer, op->value, indices, op->span);
+      ICHECK(!op->predicate.defined()) << "Predicated buffer store is not currently supported in "
+                                          "the inject rolling buffer pass.";
+      Stmt buffer_store = BufferStore(op->buffer, op->value, indices, op->predicate, op->span);
       // Then wrap the BufferStores in some Ifs to avoid recomputing elements
       for (size_t i{0}; i < rolling_buffer_info.axis_iter_vars.size(); ++i) {
         auto iter_var{rolling_buffer_info.axis_iter_vars[i]};
@@ -293,7 +295,9 @@ class RollingBufferInjector : public StmtExprMutator {
           indices.push_back(index);
         }
       }
-      return BufferLoad(op->buffer, indices, op->span);
+      ICHECK(!op->predicate.defined())
+          << "Predicated buffer load is not currently supported in inject rolling buffer pass.";
+      return BufferLoad(op->buffer, indices, op->predicate, op->span);
     } else {
       return expr;
     }

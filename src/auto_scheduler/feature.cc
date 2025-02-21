@@ -1375,8 +1375,7 @@ void GetPerStoreFeaturesWorkerFunc(const SearchTask& task, const State& state, i
     auto pass_ctx = tvm::transform::PassContext::Current();
 
     auto mod = ScheduleToModule(sch, Array<ObjectRef>{tensors.begin(), tensors.end()}, name,
-                                std::unordered_map<te::Tensor, te::Buffer>(),
-                                GlobalVarSupply(NameSupply("")));
+                                std::unordered_map<te::Tensor, te::Buffer>(), GlobalVarSupply());
 
     bool disable_vectorize =
         pass_ctx->GetConfig<Bool>("tir.disable_vectorize", Bool(false)).value();
@@ -1408,9 +1407,7 @@ void GetPerStoreFeaturesWorkerFunc(const SearchTask& task, const State& state, i
     }
     if (IsHexagonTask(task)) {
       Target target = task->target;
-      const auto vtcm_capacity = target->GetAttr<Integer>("vtcm-capacity").value().IntValue();
-      const auto& optimize =
-          tir::transform::Sequential({tir::transform::VerifyVTCMLimit(vtcm_capacity)});
+      const auto& optimize = tir::transform::Sequential({tir::transform::VerifyVTCMLimit(target)});
       optimize(mod);
     }
     const auto& optimize =

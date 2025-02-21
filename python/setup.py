@@ -17,11 +17,10 @@
 # pylint: disable=invalid-name, exec-used
 """Setup TVM package."""
 import os
+import pathlib
 import shutil
 import sys
 import sysconfig
-import pathlib
-import platform
 
 from setuptools import find_packages
 from setuptools.dist import Distribution
@@ -37,6 +36,7 @@ else:
 CURRENT_DIR = os.path.dirname(__file__)
 FFI_MODE = os.environ.get("TVM_FFI", "auto")
 CONDA_BUILD = os.getenv("CONDA_BUILD") is not None
+INPLACE_BUILD = "--inplace" in sys.argv
 
 
 def get_lib_path():
@@ -47,7 +47,7 @@ def get_lib_path():
     libinfo = {"__file__": libinfo_py}
     exec(compile(open(libinfo_py, "rb").read(), libinfo_py, "exec"), libinfo, libinfo)
     version = libinfo["__version__"]
-    if not CONDA_BUILD:
+    if not CONDA_BUILD and not INPLACE_BUILD:
         lib_path = libinfo["find_lib_path"]()
         libs = [lib_path[0]]
         if "runtime" not in libs[0]:
@@ -55,6 +55,11 @@ def get_lib_path():
                 if "runtime" in name:
                     libs.append(name)
                     break
+
+        # Add byoc shared libraries, if present
+        for name in lib_path:
+            if "3rdparty" in name:
+                libs.append(name)
 
         # Add standalone_crt, if present
         for name in lib_path:
@@ -77,6 +82,40 @@ def get_lib_path():
                 libs.append(candidate_path)
                 break
 
+        for dir in [
+            "3rdparty",
+            "jvm",
+            "web",
+            "rust",
+            "golang",
+            "include",
+            "src",
+            "cmake",
+            "CMakeLists.txt",
+        ]:
+            for name in lib_path:
+                candidate_path = os.path.abspath(os.path.join(os.path.dirname(name), "..", dir))
+                if os.path.exists(candidate_path):
+                    libs.append(candidate_path)
+                    if dir == "3rdparty":
+                        # remove large files
+                        _remove_path(os.path.join(candidate_path, "cutlass", "docs"))
+                        _remove_path(os.path.join(candidate_path, "cutlass", "media"))
+                        _remove_path(
+                            os.path.join(candidate_path, "cutlass_fpA_intB_gemm", "cutlass", "docs")
+                        )
+                        _remove_path(
+                            os.path.join(
+                                candidate_path, "cutlass_fpA_intB_gemm", "cutlass", "media"
+                            )
+                        )
+                        _remove_path(
+                            os.path.join(candidate_path, "libflash_attn", "cutlass", "docs")
+                        )
+                        _remove_path(
+                            os.path.join(candidate_path, "libflash_attn", "cutlass", "media")
+                        )
+                    break
     else:
         libs = None
 
@@ -92,6 +131,14 @@ def git_describe_version(original_version):
     if gd_version != original_version and "--inplace" not in sys.argv:
         print("Use git describe based version %s" % gd_version)
     return gd_version
+
+
+def _remove_path(path):
+    if os.path.exists(path):
+        if os.path.isfile(path):
+            os.remove(path)
+        elif os.path.isdir(path):
+            shutil.rmtree(path)
 
 
 LIB_LIST, __version__ = get_lib_path()
@@ -168,7 +215,7 @@ class BinaryDistribution(Distribution):
 
 
 setup_kwargs = {}
-if not CONDA_BUILD:
+if not CONDA_BUILD and not INPLACE_BUILD:
     with open("MANIFEST.in", "w") as fo:
         for path in LIB_LIST:
             if os.path.isfile(path):
@@ -251,19 +298,9 @@ setup(
 )
 
 
-if not CONDA_BUILD:
+if not CONDA_BUILD and not INPLACE_BUILD:
     # Wheel cleanup
     os.remove("MANIFEST.in")
     for path in LIB_LIST:
         _, libname = os.path.split(path)
-        path_to_be_removed = f"tvm/{libname}"
-
-        if os.path.isfile(path_to_be_removed):
-            os.remove(path_to_be_removed)
-
-        if os.path.isdir(path_to_be_removed):
-            shutil.rmtree(path_to_be_removed)
-
-    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/src"))
-    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/include"))
-    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/3rdparty"))
+        _remove_path(f"tvm/{libname}")

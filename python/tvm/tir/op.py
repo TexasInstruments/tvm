@@ -14,19 +14,19 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=redefined-builtin, invalid-name
+# pylint: disable=redefined-builtin, invalid-name, too-many-arguments
 """Operators used in TIR expression."""
-import warnings
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import tvm._ffi
+from tvm import tir
 from tvm.ir import Array, Op, PrimExpr
 from tvm.ir.base import Span
-from tvm.runtime import const, convert
+from tvm.runtime import const
 
 from . import _ffi_api
 from .buffer import Buffer
-from .expr import Call, CommReducer, IntImm, PrimExprWithOp, StringImm, Var
+from .expr import Call, CommReducer, IntImm, PrimExprWithOp, Var
 
 
 def _pack_buffer(buf, span=None):
@@ -182,7 +182,7 @@ def call_intrin(dtype, func_name, *args, span=None):
     call : PrimExpr
         The call expression.
     """
-    return Call(dtype, func_name, convert(args), span)
+    return Call(dtype, func_name, args, span)
 
 
 def call_pure_extern(dtype, func_name, *args, span=None):
@@ -207,9 +207,7 @@ def call_pure_extern(dtype, func_name, *args, span=None):
     call : PrimExpr
         The call expression.
     """
-    return Call(
-        dtype, Op.get("tir.call_pure_extern"), convert((StringImm(func_name),) + args), span
-    )
+    return Call(dtype, Op.get("tir.call_pure_extern"), [func_name, *args], span)
 
 
 def call_extern(dtype, func_name, *args, span=None):
@@ -234,9 +232,7 @@ def call_extern(dtype, func_name, *args, span=None):
     call : PrimExpr
         The call expression.
     """
-    return Call(
-        dtype, Op.get("tir.call_extern"), convert((StringImm(func_name),) + args), span=span
-    )
+    return Call(dtype, Op.get("tir.call_extern"), [func_name, *args], span=span)
 
 
 def call_llvm_intrin(dtype, name, *args, span=None):
@@ -251,7 +247,7 @@ def call_llvm_intrin(dtype, name, *args, span=None):
        The name of the llvm intrinsic function.
 
     args : list
-       Poistional arguments.
+       Positional arguments.
 
     span : Optional[Span]
         The location of this operator in the source code.
@@ -271,7 +267,7 @@ def call_llvm_intrin(dtype, name, *args, span=None):
     else:
         llvm_id = name
     if llvm_id == 0:
-        warnings.warn(f"Unknown llvm intrinsic function {name}, falling back to 0")
+        raise ValueError(f"Unknown llvm intrinsic function {name}")
     return call_intrin(
         dtype,
         Op.get("tir.call_llvm_intrin"),
@@ -293,7 +289,7 @@ def call_llvm_pure_intrin(dtype, name, *args, span=None):
        The name of the llvm intrinsic function.
 
     args : list
-       Poistional arguments.
+       Positional arguments.
 
     span : Optional[Span]
         The location of this operator in the source code.
@@ -313,7 +309,7 @@ def call_llvm_pure_intrin(dtype, name, *args, span=None):
     else:
         llvm_id = name
     if llvm_id == 0:
-        warnings.warn(f"Unknown llvm intrinsic function {name}, falling back to 0")
+        raise ValueError(f"Unknown llvm intrinsic function {name}")
     return call_intrin(
         dtype,
         Op.get("tir.call_llvm_pure_intrin"),
@@ -434,6 +430,25 @@ def undef():
         The call expression.
     """
     return call_intrin("int32", "tir.undef")
+
+
+def call_tir(global_var: tvm.ir.GlobalVar, *args):
+    """Performs a call into another PrimFunc in the same IRModule
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    assert isinstance(global_var, tvm.ir.GlobalVar)
+
+    dtype = "void"
+    if global_var.checked_type is not None:
+        ret_type = global_var.checked_type.ret_type
+        if hasattr(ret_type, "dtype"):
+            dtype = ret_type.dtype
+
+    return Call(dtype=dtype, op=global_var, args=args)
 
 
 def start_profile_intrinsic(id):
@@ -584,6 +599,23 @@ def tvm_thread_allreduce(*freduce_args):
     return call_intrin("handle", "tir.tvm_thread_allreduce", *freduce_args)
 
 
+def tvm_thread_invariant(cond):
+    """Mark condition as thread invariant.
+
+    Parameters
+    ----------
+    cond : Expr
+        The condition.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    assert isinstance(cond, PrimExpr)
+    return call_intrin(cond.dtype, "tir.tvm_thread_invariant", cond)
+
+
 def tvm_storage_sync(storage_scope):
     """Perform synchronization in specified scope.
 
@@ -597,7 +629,7 @@ def tvm_storage_sync(storage_scope):
     call : PrimExpr
         The call expression.
     """
-    return call_intrin("handle", "tir.tvm_storage_sync", storage_scope)
+    return call_intrin("int32", "tir.tvm_storage_sync", storage_scope)
 
 
 def tvm_warp_shuffle(mask, value, warp_id, width, warp_size):
@@ -1044,7 +1076,6 @@ def ptx_mma(
     saturate : bool
         The optional saturation at the output.
 
-
     operator : Optional[Literal["xor", "and"]]
         The 1-bit operator.
 
@@ -1316,7 +1347,7 @@ def ptx_ldmatrix(dtype, trans, num, type, local_ptr, local_offset, smem_ptr, sme
 
 
 def ptx_cp_async(dtype, shared_ptr, shared_offset, global_ptr, global_offset, bytes):
-    """TVM intrinsic for ptx async copy from global to shared memory
+    """TVM intrinsic for ptx async copy from global to shared memory using cp.async
     https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-cp-async
 
     Parameters
@@ -1349,6 +1380,52 @@ def ptx_cp_async(dtype, shared_ptr, shared_offset, global_ptr, global_offset, by
     )
 
 
+def ptx_cp_async_bulk(
+    dtype, shared_ptr, shared_offset, global_ptr, global_offset, bytes, barrier_id
+):
+    """TVM intrinsic for ptx async copy from global to shared memory using cp.async.bulk
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-cp-async-bulk
+
+    Parameters
+    ----------
+    dtype : str
+       The data type of the result.
+
+    shared_ptr : Var
+        The shared memory pointer variable.
+
+    shared_offset : Expr
+        The offset of shared memory pointer.
+
+    global_ptr : Var
+        The global memory pointer variable.
+
+    global_offset : Expr
+        The offset of global memory pointer.
+
+    bytes : int
+        The data size to copy.
+
+    barrier_id : int
+        The ID of the barrier shared memory pointer.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin(
+        dtype,
+        "tir.ptx_cp_async_bulk",
+        shared_ptr,
+        shared_offset,
+        global_ptr,
+        global_offset,
+        bytes,
+        barrier_id,
+    )
+
+
 def ptx_commit_group():
     """TVM intrinsic for ptx async copy commit
     https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-cp-async-commit-group
@@ -1376,6 +1453,304 @@ def ptx_wait_group(num):
         The call expression.
     """
     return call_intrin("", "tir.ptx_wait_group", num)
+
+
+def ptx_cp_async_barrier(barrier_id):
+    """TVM intrinsic for ptx async copy barrier using cp.async.mbarrier.arrive
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-cp-async-mbarrier-arrive
+
+    Parameters
+    ----------
+    barrier_id : int
+        The ID of the barrier shared memory pointer.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("", "tir.ptx_cp_async_barrier", barrier_id)
+
+
+def ptx_init_barrier_thread_count(barrier_id, thread_count):
+    """TVM intrinsic for ptx barrier initialization of thread count using mbarrier.init
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-init
+
+    Parameters
+    ----------
+    barrier_id : int
+        The ID of the barrier shared memory pointer.
+
+    thread_count : int
+        Number of threads expected to arrive at the barrier.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("", "tir.ptx_init_barrier_thread_count", barrier_id, thread_count)
+
+
+def ptx_arrive_barrier(barrier_id):
+    """TVM intrinsic for ptx barrier arrival using mbarrier.arrive
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-arrive
+
+    Parameters
+    ----------
+    barrier_id : int
+        The ID of the barrier shared memory pointer.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("", "tir.ptx_arrive_barrier", barrier_id)
+
+
+def ptx_arrive_barrier_expect_tx(barrier_id, byte_count):
+    """TVM intrinsic for ptx barrier arrival with expect tx using mbarrier.arrive.expect_tx
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-arrive
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-expect-tx-operation
+
+    Parameters
+    ----------
+    barrier_id : int
+        The ID of the barrier shared memory pointer.
+
+    byte_count : int
+        Increases the tx count of the mbarrier object to track completion of
+        addtional async transactions.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("", "tir.ptx_arrive_barrier_expect_tx", barrier_id, byte_count)
+
+
+def ptx_wait_barrier(barrier_id):
+    """TVM intrinsic for ptx barrier wait using mbarrier.try_wait
+    https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-mbarrier-try-wait
+
+    Parameters
+    ----------
+    barrier_id : int
+        The ID of the barrier shared memory pointer.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("", "tir.ptx_wait_barrier", barrier_id)
+
+
+def create_barriers(barrier_count):
+    """TVM intrinsic to create N barriers
+
+    Parameters
+    ----------
+    barrier_count : int
+        The number of barriers to create.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("", "tir.create_barriers", barrier_count)
+
+
+def make_filled_simdgroup_matrix(
+    d: Var,
+    index: PrimExpr,
+    value: PrimExpr,
+    col: int = 8,
+    row: int = 8,
+):
+    """Create a filled SIMDGroup matrix
+
+    Parameters
+    ----------
+    d : var
+        The simdgroup var
+
+    index : PrimExpr
+        The index of the matrix.
+
+    value : PrimExpr
+        The value to fill.
+
+    col : int
+        The number of columns.
+
+    row : int
+        The number of rows.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("handle", "tir.make_filled_simdgroup_matrix", d, index, value, col, row)
+
+
+def simdgroup_load(
+    d: Var,
+    index: PrimExpr,
+    ptr: PrimExpr,
+    stride: PrimExpr,
+    col: int = 8,
+    row: int = 8,
+    transpose_matrix: bool = False,
+):
+    """Load data from device memory or threadgroup memory to simdgroup
+
+    Parameters
+    ----------
+    d : var
+        The simdgroup var
+
+    index : PrimExpr
+        The index of the matrix.
+
+    ptr : PrimExpr
+        The pointer.
+
+    stride : PrimExpr
+        The stride.
+
+    col : int
+        The number of columns.
+
+    row : int
+        The number of rows.
+
+    transpose_matrix : bool
+        Whether to transpose the matrix.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin(
+        "handle",
+        "tir.simdgroup_load",
+        d,
+        index,
+        ptr,
+        stride,
+        col,
+        row,
+        transpose_matrix,
+    )
+
+
+def simdgroup_store(
+    d: PrimExpr,
+    index: PrimExpr,
+    ptr: PrimExpr,
+    stride: PrimExpr,
+    col: int = 8,
+    row: int = 8,
+    transpose_matrix: bool = False,
+):
+    """Store data from simdgroup to device memory or threadgroup memory
+
+    Parameters
+    ----------
+    d : PrimExpr
+        The SIMDGroup.
+
+    index : PrimExpr
+        The index of the matrix.
+
+    ptr : PrimExpr
+        The pointer.
+
+    stride : PrimExpr
+        The stride.
+
+    col : int
+        The number of columns.
+
+    row : int
+        The number of rows.
+
+
+    transpose_matrix : bool
+        Whether to transpose the matrix.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin(
+        "handle", "tir.simdgroup_store", d, index, ptr, stride, col, row, transpose_matrix
+    )
+
+
+def simdgroup_multiply_accumulate(
+    d: Var,
+    index_d: PrimExpr,
+    a: Var,
+    index_a: PrimExpr,
+    b: Var,
+    index_b: PrimExpr,
+    c: Var,
+    index_c: PrimExpr,
+):
+    """Multiply and accumulate two matrices in simdgroup
+    i.e. d = a * b + c
+
+    Parameters
+    ----------
+    d : Var
+        The destination matrix.
+
+    index_d : PrimExpr
+        The index of the destination matrix.
+
+    a : Var
+        The first matrix.
+
+    index_a : PrimExpr
+        The index of the first matrix.
+
+    b : Var
+        The second matrix.
+
+    index_b : PrimExpr
+        The index of the second matrix.
+
+    c : Var
+        The third matrix.
+
+    index_c : PrimExpr
+        The index of the third matrix.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin(
+        "handle",
+        "tir.simdgroup_multiply_accumulate",
+        d,
+        index_d,
+        a,
+        index_a,
+        b,
+        index_b,
+        c,
+        index_c,
+    )
 
 
 def vectorlow(dtype, vec):
@@ -1435,7 +1810,29 @@ def vectorcombine(dtype, vec1, vec2):
     return call_intrin(dtype, "tir.vectorcombine", vec1, vec2)
 
 
-def ret(val):
+def dp4a(vec1, vec2, acc=0):
+    """Dot product of two int8x4 vectors and add an optional accumulator
+
+    Parameters
+    ----------
+    vec1 : int8x4
+       The input vector.
+
+    vec2 : int8x4
+       The input vector.
+
+    acc : int32
+       The accumulator.
+
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("int32", "tir.dp4a", vec1, vec2, acc)
+
+
+def ret(val, span=None):
     """Create a tir return expression
 
     Parameters
@@ -1443,12 +1840,16 @@ def ret(val):
     val : Expr
         The returned tir expression, whose data type is int, float or void pointer.
 
+    span : Optional[Span]
+        The location of this operator in the source code.
+
     Returns
     -------
     ret : PrimExpr
         The return expression
     """
-    return call_intrin(val.dtype, "tir.ret", val)
+
+    return _ffi_api.ret(val, span)
 
 
 def any(*args, span=None):
@@ -1598,7 +1999,7 @@ def infinity(dtype: str, span: Optional[Span] = None) -> Any:
     return _ffi_api.infinity(dtype, span)  # type: ignore
 
 
-def reinterpret(dtype, value) -> Any:
+def reinterpret(dtype, value, span: Optional[Span] = None) -> Any:
     """infinity value of dtype
 
     Parameters
@@ -1617,7 +2018,7 @@ def reinterpret(dtype, value) -> Any:
     value : tvm.Expr
         The reinterpret cast value of dtype.
     """
-    return call_intrin(dtype, "tir.reinterpret", value)
+    return _ffi_api.reinterpret(dtype, value, span)  # type: ignore
 
 
 def exp(x):
@@ -1633,6 +2034,7 @@ def exp(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.exp", x)
 
 
@@ -1649,6 +2051,7 @@ def exp2(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.exp2", x)
 
 
@@ -1665,6 +2068,7 @@ def exp10(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.exp10", x)
 
 
@@ -1681,6 +2085,7 @@ def erf(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.erf", x)
 
 
@@ -1697,6 +2102,7 @@ def tanh(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.tanh", x)
 
 
@@ -1713,6 +2119,7 @@ def sigmoid(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.sigmoid", x)
 
 
@@ -1729,6 +2136,7 @@ def log(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.log", x)
 
 
@@ -1745,6 +2153,7 @@ def log2(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.log2", x)
 
 
@@ -1761,6 +2170,7 @@ def log10(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.log10", x)
 
 
@@ -1777,6 +2187,7 @@ def log1p(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.log1p", x)
 
 
@@ -1793,6 +2204,7 @@ def tan(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.tan", x)
 
 
@@ -1809,6 +2221,7 @@ def cos(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.cos", x)
 
 
@@ -1825,6 +2238,7 @@ def cosh(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.cosh", x)
 
 
@@ -1841,6 +2255,7 @@ def acos(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.acos", x)
 
 
@@ -1857,6 +2272,7 @@ def acosh(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.acosh", x)
 
 
@@ -1873,6 +2289,7 @@ def sin(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.sin", x)
 
 
@@ -1889,6 +2306,7 @@ def sinh(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.sinh", x)
 
 
@@ -1905,6 +2323,7 @@ def asin(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.asin", x)
 
 
@@ -1921,6 +2340,7 @@ def asinh(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.asinh", x)
 
 
@@ -1937,6 +2357,7 @@ def atan(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.atan", x)
 
 
@@ -1953,6 +2374,7 @@ def atanh(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.atanh", x)
 
 
@@ -1972,6 +2394,8 @@ def atan2(x1, x2):
     y : PrimExpr
         The result.
     """
+    x1 = tir.convert(x1)
+    x2 = tir.convert(x2)
     return call_intrin(x1.dtype, "tir.atan2", x1, x2)
 
 
@@ -1988,6 +2412,7 @@ def sqrt(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.sqrt", x)
 
 
@@ -2004,6 +2429,7 @@ def rsqrt(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.rsqrt", x)
 
 
@@ -2249,6 +2675,8 @@ def nextafter(x1, x2):
     y : PrimExpr
         The result.
     """
+    x1 = tir.convert(x1)
+    x2 = tir.convert(x2)
     return call_intrin(x1.dtype, "tir.nextafter", x1, x2)  # type: ignore
 
 
@@ -2268,6 +2696,8 @@ def hypot(x1, x2):
     y : PrimExpr
         The result.
     """
+    x1 = tir.convert(x1)
+    x2 = tir.convert(x2)
     return call_intrin(x1.dtype, "tir.hypot", x1, x2)  # type: ignore
 
 
@@ -2287,6 +2717,8 @@ def copysign(x1, x2):
     y : PrimExpr
         The result.
     """
+    x1 = tir.convert(x1)
+    x2 = tir.convert(x2)
     return call_intrin(x1.dtype, "tir.copysign", x1, x2)  # type: ignore
 
 
@@ -2306,6 +2738,8 @@ def ldexp(x1, x2):
     y : PrimExpr
         The result.
     """
+    x1 = tir.convert(x1)
+    x2 = tir.convert(x2)
     return call_intrin(x1.dtype, "tir.ldexp", x1, x2)  # type: ignore
 
 
@@ -2424,7 +2858,7 @@ def power(x, y, span=None):
     z : PrimExpr
         The result.
     """
-    return _ffi_api._OpPow(convert(x), convert(y), span)  # type: ignore
+    return _ffi_api._OpPow(x, y, span)  # type: ignore
 
 
 def pow(x, y, span=None):
@@ -2446,7 +2880,7 @@ def pow(x, y, span=None):
     z : PrimExpr
         The result.
     """
-    return _ffi_api._OpPow(convert(x), convert(y), span)  # type: ignore
+    return _ffi_api._OpPow(x, y, span)  # type: ignore
 
 
 def popcount(x):
@@ -2462,6 +2896,7 @@ def popcount(x):
     y : PrimExpr
         The result.
     """
+    x = tir.convert(x)
     return call_intrin(x.dtype, "tir.popcount", x)
 
 
@@ -2593,6 +3028,8 @@ def fmod(x, y):
     z : PrimExpr
         The result.
     """
+    x = tir.convert(x)
+    y = tir.convert(y)
     return call_intrin(x.dtype, "tir.fmod", x, y)
 
 
@@ -2626,7 +3063,7 @@ def if_then_else(cond, t, f, span=None):
     Unlike Select, if_then_else cannot be vectorized
     if some lanes in the vector have different conditions.
     """
-    return _ffi_api._OpIfThenElse(convert(cond), convert(t), convert(f), span)  # type: ignore
+    return _ffi_api._OpIfThenElse(cond, t, f, span)  # type: ignore
 
 
 def div(a, b, span=None):
@@ -2873,34 +3310,23 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
     def _make_reduce(expr, axis, where=None, init=None):
         code = fcombine.__code__
         assert fcombine.__code__.co_argcount == 2
-        expr = convert(expr)
+        expr = tir.convert(expr)
         if init is not None:
-            init = convert(init)
+            init = tir.convert(init)
         if isinstance(expr, Array):
             size = len(expr)
-            larr = []
-            rarr = []
+            lhs = []
+            rhs = []
             dtypes = []
             for i in range(size):
                 dtype = expr[i].dtype
                 dtypes.append(dtype)
                 lname = code.co_varnames[0] + "_" + str(i)
-                larr.append(Var(lname, dtype))
+                lhs.append(Var(lname, dtype))
                 rname = code.co_varnames[1] + "_" + str(i)
-                rarr.append(Var(rname, dtype))
-            if init is not None:
-                init = convert(init)
-                assert isinstance(init, Array)
-                assert len(init) == size
-                for init_i in range(size):
-                    init_i = convert(init_i)
-                    assert isinstance(
-                        init_i, (tvm.tir.ProducerLoad, tvm.tir.IntImm, tvm.tir.FloatImm)
-                    )
-            else:
-                init = convert([])
-            lhs = convert(larr)
-            rhs = convert(rarr)
+                rhs.append(Var(rname, dtype))
+            if init is None:
+                init = []
             result = fcombine(lhs, rhs)
             id_elem = fidentity(*dtypes)
         else:
@@ -2911,22 +3337,18 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
             rvar = Var(code.co_varnames[1], dtype)
             result = [fcombine(lvar, rvar)]
             id_elem = [fidentity(dtype)]
-            lhs = convert([lvar])
-            rhs = convert([rvar])
-            expr = convert([expr])
+            lhs = [lvar]
+            rhs = [rvar]
+            expr = [expr]
             if init is not None:
-                assert isinstance(init, (tvm.tir.ProducerLoad, tvm.tir.IntImm, tvm.tir.FloatImm))
-                init = convert([init])
-        result = convert(result)
-        id_elem = convert(id_elem)
+                init = [init]
         combiner = CommReducer(lhs, rhs, result, id_elem)
-        axis = convert(axis if isinstance(axis, (list, tuple)) else [axis])
+        if not isinstance(axis, (list, tuple, tvm.ir.Array)):
+            axis = [axis]
         if where is None:
-            where = convert(True)
+            where = tir.convert(True)
         if init is None:
-            outputs = tuple(
-                tvm.tir.Reduce(combiner, expr, axis, where, i, convert([])) for i in range(size)
-            )
+            outputs = tuple(tvm.tir.Reduce(combiner, expr, axis, where, i, []) for i in range(size))
         else:
             outputs = tuple(
                 tvm.tir.Reduce(combiner, expr, axis, where, i, init) for i in range(size)
@@ -2938,10 +3360,16 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
         if isinstance(axis, (tvm.tir.IterVar, list, tuple)):
             assert not args
             return _make_reduce(expr, axis, where, init)
+
         if where is None:
             assert not args
+            assert init is None
             return _reduce_directly(expr, axis)
-        return _reduce_directly(expr, axis, where, *args)
+        elif init is None:
+            assert not args
+            return _reduce_directly(expr, axis, where)
+        else:
+            return _reduce_directly(expr, axis, where, init, *args)
 
     doc_str = """Create a {0} expression over axis.
 
@@ -3035,6 +3463,122 @@ def TVMBackendFreeWorkspace(device_type, device_id, ptr):
         The call expression.
     """
     return call_intrin("int32", "tir.TVMBackendFreeWorkspace", device_type, device_id, ptr)
+
+
+def anylist_getitem(list_handle, index):
+    """Returns an item from any list.
+    list_handle: Var
+        The handle to anylist
+    index : int
+        The index
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("handle", "tir.anylist_getitem", list_handle, index)
+
+
+def anylist_resetitem(list_handle, index):
+    """Reset an item from any list.
+    list_handle: Var
+        The handle to anylist
+    index : int
+        The index
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin("int", "tir.anylist_resetitem", list_handle, index)
+
+
+def anylist_setitem_call_packed(list_handle, index, func_name, *args):
+    """Set anylist item by result of packed call.
+    list_handle: Var
+        The handle to anylist
+    index : int
+        The index
+    func_name: str
+        The name of the function to be called.
+    args:
+        Extra arguments
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin(
+        "int", "tir.anylist_setitem_call_packed", list_handle, index, func_name, *args
+    )
+
+
+def anylist_setitem_call_cpacked(list_handle, index, func_name, *args):
+    """Set anylist item by result of packed call.
+    list_handle: Var
+        The handle to anylist
+    index : int
+        The index
+    func_name: str
+        The name of the function to be called.
+    args:
+        Extra arguments
+    Returns
+    -------
+    call : PrimExpr
+        The call expression.
+    """
+    return call_intrin(
+        "int", "tir.anylist_setitem_call_cpacked", list_handle, index, func_name, *args
+    )
+
+
+def vscale():
+    """Get the target's vscale value. It will be lowered to llvm.vscale intrinsic
+    (https://llvm.org/docs/LangRef.html#llvm-vscale-intrinsic)
+    Returns
+    -------
+    call : PrimExpr
+        Call to the vscale intrinsic
+    """
+    return call_intrin("int32", "tir.vscale")
+
+
+def get_active_lane_mask(dtype, base, limit):
+    """
+    Calculate a predicate mask given an upper bound (limit) and a current value (base).
+
+    It will be lowered to the llvm.get.active.lane.mask intrinsic.
+    (https://llvm.org/docs/LangRef.html#llvm-get-active-lane-mask-intrinsics)
+
+    Parameters
+    ----------
+    dtype : str
+        The data type of the result.
+
+    base : PrimExpr
+        An expression reprsenting the base.
+
+    limit : PrimExpr
+        An expression representing the limit.
+    """
+    return call_intrin(dtype, "tir.get_active_lane_mask", base, limit)
+
+
+def get_vscale_expr(dtype: Union[str, tvm.DataType], min_size: int = 128) -> PrimExpr:
+    """
+    Create a datatype dependent scalable expression.
+
+    Parameters
+    ----------
+    dtype : Union[str, tvm.DataType]
+        Element data type.
+    min_size : int
+        The minimum size of the scalable vector in bits.
+    """
+    if isinstance(dtype, str):
+        dtype = tvm.DataType(dtype)
+    return min_size // dtype.bits * vscale()
 
 
 # pylint: disable=unnecessary-lambda

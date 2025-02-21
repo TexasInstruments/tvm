@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# pylint: disable=inconsistent-return-statements
 """Internal utilities for parsing Python subset to TIR"""
 
 import ast
@@ -32,9 +33,9 @@ from tvm.te.tensor import Tensor
 
 
 # pylint: disable=invalid-name
-np_arg_types = tuple(list(numeric_types) + [numpy.ndarray])
-tvm_arg_types = (Tensor, Array, _expr.Var, _expr.ConstExpr)
-halide_imm_types = (_expr.IntImm, _expr.FloatImm)
+np_arg_types = (numpy.ndarray, *numeric_types)
+tvm_arg_types = (Tensor, Array, _expr.Var, _expr.ConstExpr, *numeric_types, list, tuple, str)
+halide_imm_types = (_expr.IntImm, _expr.FloatImm, *numeric_types)
 
 
 def _internal_assert(cond, err):
@@ -90,19 +91,13 @@ def replace_io(body, rmap):
 def _is_tvm_arg_types(args):
     """Determine a list of element is either a list of tvm arguments of a list of numpy arguments.
     If neither is true, raise a value error."""
-    if isinstance(args[0], tvm_arg_types):
-        for elem in args[1:]:
-            _internal_assert(
-                isinstance(elem, tvm_arg_types),
-                "Expecting a Var, Tensor or ConstExpr instance but %s get!" % str(type(elem)),
-            )
+    if all(isinstance(elem, tvm_arg_types) for elem in args):
         return True
-
-    _internal_assert(
-        isinstance(args[0], np_arg_types), "Expect a numpy type but %s get!" % str(type(args[0]))
-    )
-    for elem in args[1:]:
-        _internal_assert(
-            isinstance(elem, np_arg_types), "Expect a numpy type but %s get!" % str(type(elem))
+    elif all(isinstance(elem, np_arg_types) for elem in args):
+        return False
+    else:
+        raise ValueError(
+            f"Expected arguments to be entirely TVM types, "
+            f"or entirely numpy types, "
+            f"but received {[type(elem) for elem in args]}"
         )
-    return False

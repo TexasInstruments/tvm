@@ -49,6 +49,7 @@ __name__ == "__main__":` block.
 
 import numpy as np
 import os
+import sys
 
 import tvm
 from tvm import relay, auto_scheduler
@@ -69,7 +70,6 @@ from tvm.contrib.utils import tempdir
 # with any layout, we found the best performance is typically achieved with NHWC layout.
 # We also implemented more optimizations for NHWC layout with the auto-scheduler.
 # So it is recommended to convert your models to NHWC layout to use the auto-scheduler.
-# You can use :ref:`ConvertLayout <convert-layout-usage>` pass to do the layout conversion in TVM.
 
 
 def get_network(name, batch_size, layout="NHWC", dtype="float32", use_sparse=False):
@@ -119,19 +119,6 @@ def get_network(name, batch_size, layout="NHWC", dtype="float32", use_sparse=Fal
     elif name == "inception_v3":
         input_shape = (batch_size, 3, 299, 299) if layout == "NCHW" else (batch_size, 299, 299, 3)
         mod, params = relay.testing.inception_v3.get_workload(batch_size=batch_size, dtype=dtype)
-    elif name == "mxnet":
-        # an example for mxnet model
-        from mxnet.gluon.model_zoo.vision import get_model
-
-        assert layout == "NCHW"
-
-        block = get_model("resnet50_v1", pretrained=True)
-        mod, params = relay.frontend.from_mxnet(block, shape={"data": input_shape}, dtype=dtype)
-        net = mod["main"]
-        net = relay.Function(
-            net.params, relay.nn.softmax(net.body), None, net.type_params, net.attrs
-        )
-        mod = tvm.IRModule.from_expr(net)
     elif name == "mlp":
         mod, params = relay.testing.mlp.get_workload(
             batch_size=batch_size, dtype=dtype, image_shape=image_shape, num_classes=1000
@@ -331,7 +318,7 @@ def tune_and_evaluate():
         from tvm.contrib import ndk
 
         filename = "net.so"
-        lib.export_library(tmp.relpath(filename), ndk.create_shared)
+        lib.export_library(tmp.relpath(filename), fcompile=ndk.create_shared)
     else:
         filename = "net.tar"
         lib.export_library(tmp.relpath(filename))

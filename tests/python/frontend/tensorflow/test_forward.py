@@ -14,14 +14,13 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=import-self, invalid-name, unused-argument
+# pylint: disable=import-self, invalid-name, unused-argument, ungrouped-imports, wrong-import-order
 """
 Tensorflow testcases
 ====================
 This article is a test script to test tensorflow operator with Relay.
 """
 from __future__ import print_function
-from distutils.version import LooseVersion
 
 import threading
 import platform
@@ -31,16 +30,6 @@ import numpy as np
 import pytest
 
 from PIL import Image
-from tvm import relay, ir
-from tvm.runtime.vm import VirtualMachine
-from tvm.relay.frontend.tensorflow import from_tensorflow
-from tvm.contrib import graph_executor
-from tvm.contrib import utils
-from relay.utils.tag_span import _set_span, _create_span, _verify_structural_equal_with_span
-
-import tvm
-import tvm.relay.testing.tf as tf_testing
-import tvm.testing
 
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import graph_util
@@ -63,6 +52,17 @@ try:
     tf.disable_v2_behavior()
 except ImportError:
     import tensorflow as tf
+
+import tvm
+from tvm import relay, ir
+from tvm.runtime.vm import VirtualMachine
+from tvm.relay.frontend.tensorflow import from_tensorflow
+from tvm.contrib import graph_executor
+from tvm.contrib import utils
+import tvm.testing
+import tvm.relay.testing.tf as tf_testing
+from relay.utils.tag_span import _set_span, _create_span, _verify_structural_equal_with_span
+
 
 # Only allow TF to run on half the GPU RAM to save the other half
 # For TVM
@@ -166,7 +166,7 @@ def run_tvm_graph(
             outputs=out_names,
             convert_config=convert_config,
         )
-    assert tvm.ir.structural_equal(mod["main"], mod_with_span["main"], map_free_vars=True)
+    tvm.ir.assert_structural_equal(mod["main"], mod_with_span["main"], map_free_vars=True)
 
     dev = tvm.device(target, 0)
     if mode == "debug":
@@ -742,7 +742,16 @@ def test_forward_convolution():
             "NCHW",
             [1, 1, 8, 8],
         )
-
+        _test_convolution(
+            "conv_transpose",
+            [4, 19, 8, 8],
+            [2, 2, 66, 19],
+            [1, 1],
+            [2, 2],
+            "VALID",
+            "NCHW",
+            [4, 66, 16, 16],
+        )
     _test_convolution("conv", [4, 8, 8, 176], [1, 1, 176, 32], [1, 1], [1, 1], "SAME", "NHWC")
     _test_convolution("conv", [4, 17, 17, 19], [3, 3, 19, 19], [1, 1], [2, 2], "VALID", "NHWC")
     _test_convolution("conv", [4, 17, 17, 124], [1, 1, 124, 19], [1, 1], [1, 1], "SAME", "NHWC")
@@ -916,6 +925,16 @@ def test_forward_convolution():
         "NHWC",
         [4, 8, 8, 176],
         add_shapes_to_graph_def=False,
+    )
+    _test_convolution(
+        "conv_transpose",
+        [4, 8, 8, 19],
+        [2, 2, 66, 19],
+        [1, 1],
+        [2, 2],
+        "VALID",
+        "NHWC",
+        [4, 16, 16, 66],
     )
     # Explicit padding
     if package_version.parse(tf.VERSION) >= package_version.parse("2.4.1"):
@@ -1735,7 +1754,7 @@ def _test_concat_v2(shape1, shape2, dim):
 
 
 def test_forward_concat_v2():
-    if tf.__version__ < LooseVersion("1.4.1"):
+    if package_version.parse(tf.__version__) < package_version.parse("1.4.1"):
         return
 
     _test_concat_v2([2, 3], [2, 3], 0)
@@ -1848,7 +1867,7 @@ def test_read_variable_op(target, dev):
                 mod_with_span, _ = relay.frontend.from_tensorflow(
                     final_graph_def, layout=None, shape=shape_dict, outputs=None
                 )
-            assert tvm.ir.structural_equal(mod["main"], mod_with_span["main"])
+            tvm.ir.assert_structural_equal(mod["main"], mod_with_span["main"])
 
         assert execinfo.value.args[0].startswith("Graph is not frozen. Provide a frozen graph")
 
@@ -3108,7 +3127,7 @@ def _test_forward_clip_by_value(ip_shape, clip_value_min, clip_value_max, dtype)
 
 def test_forward_clip_by_value():
     """test ClipByValue op"""
-    if tf.__version__ < LooseVersion("1.9"):
+    if package_version.parse(tf.__version__) < package_version.parse("1.9"):
         _test_forward_clip_by_value((4,), 0.1, 5.0, "float32")
         _test_forward_clip_by_value((4, 4), 1, 5, "int32")
 
@@ -4144,7 +4163,7 @@ def test_forward_ptb():
                     "Model/RNN/RNN/multi_rnn_cell/cell_0/lstm_cell/LSTMBlockCell_1:6",
                 ],
             )
-        assert tvm.ir.structural_equal(mod["main"], mod_with_span["main"])
+        tvm.ir.assert_structural_equal(mod["main"], mod_with_span["main"])
 
         target = "llvm"
         with tvm.transform.PassContext(opt_level=0):
@@ -4462,7 +4481,7 @@ def _test_forward_zeros_like(in_shape, dtype):
 
 
 def test_forward_zeros_like():
-    if tf.__version__ < LooseVersion("1.2"):
+    if package_version.parse(tf.__version__) < package_version.parse("1.2"):
         _test_forward_zeros_like((2, 3), "int32")
         _test_forward_zeros_like((2, 3, 5), "int8")
         _test_forward_zeros_like((2, 3, 5, 7), "uint16")
@@ -5171,7 +5190,7 @@ def _verify_infiniteness_ops(tf_op, name):
     for tf_dtype in tf_dtypes:
         shape = (8, 8)
         data = np.random.uniform(size=shape).astype(tf_dtype)
-        data.ravel()[np.random.choice(data.size, int(data.size * 0.5), replace=False)] = np.infty
+        data.ravel()[np.random.choice(data.size, int(data.size * 0.5), replace=False)] = np.inf
         data.ravel()[np.random.choice(data.size, int(data.size * 0.5), replace=False)] = np.nan
 
         tf.reset_default_graph()
@@ -5546,7 +5565,7 @@ def test_forward_spop():
     # This test is expected to fail in TF version >= 2.6
     # as the generated graph will be considered frozen, hence
     # not passing the criteria for the test below.
-    if tf.__version__ < LooseVersion("2.6.1"):
+    if package_version.parse(tf.__version__) < package_version.parse("2.6.1"):
         _test_spop_resource_variables()
 
     # Placeholder test cases
@@ -5789,7 +5808,7 @@ def test_moments():
         mod, _ = from_tensorflow(g.as_graph_def(add_shapes=True))
     with tvm.testing.enable_span_filling():
         mod_with_span, _ = from_tensorflow(g.as_graph_def(add_shapes=True))
-    assert tvm.ir.structural_equal(mod["main"], mod_with_span["main"], map_free_vars=True)
+    tvm.ir.assert_structural_equal(mod["main"], mod_with_span["main"], map_free_vars=True)
 
     program = """
     def @main(%A: Tensor[(4, 176, 8, 8), float32]) {
@@ -5912,7 +5931,7 @@ class TestSetSpan:
             with_span = res_fptr()
         with tvm.testing.disable_span_filling():
             without_span = res_fptr()
-        assert tvm.ir.structural_equal(with_span, without_span)
+        tvm.ir.assert_structural_equal(with_span, without_span)
         _verify_structural_equal_with_span(with_span, golden_fptr())
 
     def test_conv2d_bias_add_span(self):

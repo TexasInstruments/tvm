@@ -55,8 +55,9 @@ std::vector<int32_t> SampleWithoutReplacement(
  * \return The random variable sampled from candidates
  */
 TVM_DLL int64_t SampleCategorical(support::LinearCongruentialEngine::TRandState* rand_state,
-                                  const Array<Integer>& candidates, const Array<FloatImm>& probs,
-                                  Optional<Integer>* decision);
+                                  const Array<runtime::Int>& candidates,
+                                  const Array<runtime::Float>& probs,
+                                  Optional<runtime::Int>* decision);
 /*!
  * \brief Create a sampling function that does multinomial sampling.
  * \param rand_state The random state.
@@ -99,6 +100,44 @@ TVM_DLL std::vector<int64_t> SamplePerfectTile(
     support::LinearCongruentialEngine::TRandState* rand_state,  //
     const tir::StmtSRef& loop_sref, int32_t n_split, int32_t max_innermost_factor,
     Optional<Array<Integer>>* decision);
+/*!
+ * \brief Sample the factors to a partitioned tile for a specific loop
+ *
+ *  The sampled tile size will be partitioned into two parts. The second part has a guarantee
+ *  that their extent's product have a factor of `innerpart_factor`. The first part is loops at
+ *  [0, partition_pos); the second part is loops at [partition_pos, n) and we will have
+ *  `innerpart_factor` | prod_{l=partition_pos}^{n-1} l.extent
+ *
+ * \param rand_state The random state
+ * \param extent The loop extent to be tiled
+ * \param n_split The number of tiles to be sampled
+ * \param partition_pos The position to partition tiles to two parts
+ * \param innerpart_factor The factor of the second part\
+ * \return A list of length `n`, the random partitioned tile sizes sampled
+ */
+TVM_DLL std::vector<int64_t> SamplePartitionedTile(
+    support::LinearCongruentialEngine::TRandState* rand_state,  //
+    int32_t extent, int32_t n_split, int32_t partition_pos, int32_t innerpart_factor);
+/*!
+ * \brief Sample the factors to a partitioned tile for a specific loop
+ *
+ *  The sampled tile size will be partitioned into two parts. The second part has a guarantee
+ *  that their extent's product have a factor of `innerpart_factor`. The first part is loops at
+ *  [0, partition_pos); the second part is loops at [partition_pos, n) and we will have
+ *  `innerpart_factor` | prod_{l=partition_pos}^{n-1} l.extent
+ *
+ * \param rand_state The random state
+ * \param loop_sref The loop to be tiled
+ * \param n_split The number of tiles to be sampled
+ * \param partition_pos The position to partition tiles to two parts
+ * \param innerpart_factor The factor of the second part
+ * \param decision The sampling decision
+ * \return A list of length `n`, the random partitioned tile sizes sampled
+ */
+TVM_DLL std::vector<int64_t> SamplePartitionedTile(
+    support::LinearCongruentialEngine::TRandState* rand_state,  //
+    const tir::StmtSRef& loop_sref, int32_t n_split, int32_t partition_pos,
+    int32_t innerpart_factor, Optional<Array<Integer>>* decision);
 /*!
  * \brief Sample a compute-at location of the given block
  * \param self The schedule state
@@ -166,10 +205,27 @@ Array<StmtSRef> GetOutputBlocks(const ScheduleState& self, const StmtSRef& scope
  * \param loop_sref The sref to the loop being split
  * \param factors The splitting factors
  * \param preserve_unit_iters Whether or not to preserve unit iterators in block bindings
- * \return An array of srefs to the loops after splitting
+ * \param disable_predication If enabled, don't create a predicate for guarding the
+ *      loop. This can be useful when splitting with scalable factors that the schedule writer
+ *      knows are divisible by the loop bound.
+ *      Warning: enabling this feature may result in incorrect code generation if not used
+ * carefully. \return An array of srefs to the loops after splitting
  */
 TVM_DLL Array<StmtSRef> Split(ScheduleState self, const StmtSRef& loop_sref,
-                              const Array<PrimExpr>& factors, bool preserve_unit_iters);
+                              const Array<PrimExpr>& factors, bool preserve_unit_iters,
+                              bool disable_predication);
+
+/*!
+ * Partition a loop into a list of consecutive loops. It requires:
+ * 1) The loop can't have annotation or thread binding.
+ * \param self The state of the schedule
+ * \param loop_sref The sref to the loop being partition
+ * \param factors The partitioning factors
+ * \param preserve_unit_iters Whether or not to preserve unit iterators in block bindings
+ * \return An array of srefs to the loops after partitioning
+ */
+TVM_DLL Array<StmtSRef> LoopPartition(ScheduleState self, const StmtSRef& loop_sref,
+                                      const Array<PrimExpr>& factors, bool preserve_unit_iters);
 
 /*!
  * \brief Merge a list of loops into one. The loops under their LCA requires:
@@ -265,7 +321,7 @@ TVM_DLL void Vectorize(ScheduleState self, const StmtSRef& loop_sref);
  * \param loop_sref The sref of the loop to be bound to the thread axis
  * \param thread_axis The thread axis to be bound to the loop
  */
-TVM_DLL void Bind(ScheduleState self, const StmtSRef& loop_sref, const IterVar& thread_axis);
+TVM_DLL void Bind(ScheduleState self, const StmtSRef& loop_sref, const String& thread_axis);
 /*!
  * \brief Unroll the input loop. It requires nothing
  * \param self The state of the schedule
@@ -336,7 +392,7 @@ TVM_DLL StmtSRef ReindexCacheWrite(ScheduleState self, const StmtSRef& block_sre
 /*!
  *!
  * \brief Create 2 blocks that read&write a buffer region into a read/write cache.
- * It requires the the target block both read & write the target buffer.
+ * It requires the target block both read & write the target buffer.
  * \param self The state of the schedule
  * \param block_sref The target block operates on the target buffer.
  * \param read_buffer_index The index of the buffer in block's read region.
@@ -481,10 +537,7 @@ TVM_DLL StmtSRef DecomposeReduction(ScheduleState self, const StmtSRef& block_sr
  */
 TVM_DLL StmtSRef RFactor(ScheduleState self, const StmtSRef& loop_sref, int factor_axis);
 /******** Schedule: Block annotation ********/
-/*! \brief The quad used by StorageAlign for (buffer_idx, axis, factor, offset) */
-using StorageAlignTuple = Array<Integer>;
-/*! \brief A list of StorageAlignTuple, used by StorageAlign */
-using StorageAlignAnnotation = Array<StorageAlignTuple>;
+
 /*!
  * \brief Set alignment requirement for specific dimension such that
  *        stride[axis] == k * factor + offset for some k. This is useful to set memory layout for
@@ -544,6 +597,16 @@ TVM_DLL void SetAxisSeparator(ScheduleState self, const StmtSRef& block_sref, in
  * \return The new block
  */
 TVM_DLL StmtSRef Blockize(ScheduleState self, const StmtSRef& loop_sref, bool preserve_unit_iters);
+
+/*!
+ * \brief Convert specific blocks into a nested block.
+ * \param self The state of the schedule
+ * \param blocks The target blocks to construct the new block
+ * \param preserve_unit_iters Whether or not to preserve unit iterators in block bindings
+ * \return The new block
+ */
+TVM_DLL StmtSRef Blockize(ScheduleState self, const Array<StmtSRef>& blocks,
+                          bool preserve_unit_iters);
 
 /*!
  * \brief Tensorize the computation enclosed by loop with the tensor intrinsic.
@@ -627,7 +690,6 @@ TVM_DLL StmtSRef DecomposePadding(ScheduleState self, const StmtSRef& block_sref
  */
 TVM_DLL void PadEinsum(ScheduleState self, const StmtSRef& block_sref,
                        const Array<Integer>& padding);
-
 /******** Schedule: Buffer transformation ********/
 /*!
  * \brief Compute the target buffer via rolling buffering.
@@ -645,6 +707,16 @@ TVM_DLL void PadEinsum(ScheduleState self, const StmtSRef& block_sref,
  */
 TVM_DLL void RollingBuffer(ScheduleState self, const StmtSRef& block_sref, int write_buffer_index);
 /******** Schedule: Misc ********/
+
+/*!
+ * \brief Hide some buffer access in the given block.
+ * \param self The state of the schedule.
+ * \param block_sref The sref of the block we hide access.
+ * \param buf_type The buffer type: read/write
+ * \param buf_index_array The array of buffer indices we hide access.
+ */
+TVM_DLL void UnsafeHideBufferAccess(ScheduleState self, const StmtSRef& block_sref,
+                                    const String& buf_type, const Array<IntImm>& buf_index_array);
 
 }  // namespace tir
 }  // namespace tvm

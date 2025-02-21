@@ -16,13 +16,17 @@
 # under the License.
 """The core parser"""
 
+import abc
+import inspect
 from collections import defaultdict
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional, Set, Union
-import numpy as np
-from tvm._ffi.base import TVMError
 
+import numpy as np
+
+from tvm._ffi.base import TVMError
 from tvm.error import DiagnosticError
+from tvm.ir import GlobalVar
 
 from . import dispatch, doc
 from .diagnostics import Diagnostics, Source
@@ -62,6 +66,108 @@ def _deferred(exit_f: Callable[[], None]):
 
 def _do_nothing(*args, **kwargs):  # pylint: disable=unused-argument
     pass
+
+
+class ScriptMacro(abc.ABC):
+    """Representation of a script macro.
+
+    This is a callable object, intended to be called from the expression evaluator.
+    The evaluator is expected to insert the current parser into the environment
+    undef the name given by "parser_object_name".
+
+    Once called, the ScriptMacro object will locate the current parser, and use it
+    to parse the macro's body and produce the result.
+
+    There were two major considerations for this design:
+    1. Implementing hygienic and non-hygienic macros.
+    2. Implementing macros that return values.
+
+    Macro uses in TIR are only allowed at a statement-level, and they don't produce
+    any values. Parsing of such macros could easily be done by intercepting doc.Call
+    nodes in the TIR parser. If a macro is a value-producing expression, then there
+    may not be a direct way to intercept calls to it if it's embedded in a complex
+    expression. Because macros use function-call syntax, the evaluator will try to
+    call the macro object, which this design relies on to parse and evaluate the macro.
+    """
+
+    parser_object_name = "__current_script_parser__"
+
+    def __init__(
+        self,
+        source: Source,
+        closure_vars: Dict[str, Any],
+        func: Callable,
+        hygienic: bool,
+    ) -> None:
+        self.source = source
+        self.closure_vars = closure_vars
+        self.func = func
+        self.hygienic = hygienic
+
+    def __repr__(self):
+        return self.source.source
+
+    @abc.abstractmethod
+    def parse_macro(self, parser: "Parser") -> Any:
+        """The main macro parsing function. Different scripts may have different
+        ways to parse a macro, and to return a value to the evaluator.
+
+        Parameters
+        ----------
+        parser : Parser
+            The parser with the appropriate frame already created and populated depending
+            macro's hygiene settings,
+
+        Returns
+        -------
+            The return value depends on the specifics of the particular script. It can be
+            "None" or any other value or any type.
+        """
+
+    def _find_parser_def(self):
+        outer_frame_infos = inspect.getouterframes(inspect.currentframe())
+        for finfo in outer_frame_infos:
+            parser = finfo.frame.f_globals.get(ScriptMacro.parser_object_name)
+            if parser is not None:
+                return parser
+        raise RuntimeError(f"{ScriptMacro.parser_object_name} not available")
+
+    def get_macro_def(self):
+        ast_module = self.source.as_ast()
+        for decl in ast_module.body:
+            if isinstance(decl, doc.FunctionDef) and decl.name == self.func.__name__:
+                return decl
+        raise RuntimeError(f"cannot find macro definition for {self.func.__name__}")
+
+    def __call__(self, *args, **kwargs):
+        param_binding = inspect.signature(self.func).bind(*args, **kwargs)
+        param_binding.apply_defaults()
+        local_vars = param_binding.arguments
+        parser = self._find_parser_def()
+
+        with parser.with_diag_source(self.source):
+            if self.hygienic:
+                saved_var_table = parser.var_table
+                parser.var_table = VarTable()
+
+                with parser.var_table.with_frame():
+                    for k, v in self.closure_vars.items():
+                        parser.var_table.add(k, v)
+                    for k, v in local_vars.items():
+                        parser.var_table.add(k, v)
+
+                    parse_result = self.parse_macro(parser)
+
+                parser.var_table = saved_var_table
+
+            else:
+                with parser.var_table.with_frame():
+                    for k, v in local_vars.items():
+                        parser.var_table.add(k, v)
+
+                    parse_result = self.parse_macro(parser)
+
+        return parse_result
 
 
 class VarTableFrame:
@@ -152,7 +258,7 @@ class VarTable:
             The value of variable.
 
         allow_shadowing : bool
-            The options of whether variable shadowing allwed for this variable.
+            The options of whether variable shadowing allowed for this variable.
         """
         # Skip if the key and value are equal to those in the var_table
         if self.name2value[var] and isinstance(self.name2value[var][-1], type(value)):
@@ -201,10 +307,8 @@ def _dispatch_wrapper(func: dispatch.ParseMethod) -> dispatch.ParseMethod:
     def _wrapper(self: "Parser", node: doc.AST) -> None:
         try:
             return func(self, node)
-        except DiagnosticError:
-            raise
-        except Exception as e:  # pylint: disable=broad-except,invalid-name
-            self.report_error(node, e)
+        except Exception as err:  # pylint: disable=broad-except
+            self.report_error(node, err)
             raise
 
     return _wrapper
@@ -236,12 +340,20 @@ class Parser(doc.NodeVisitor):
 
     diag: Diagnostics
     dispatch_tokens: List[str]
+    function_annotations: Optional[Dict[str, Dict[str, Any]]]
     var_table: VarTable
+    inside_function: bool  # whether we are within a function
 
-    def __init__(self, source: Source) -> None:
+    def __init__(
+        self,
+        source: Source,
+        function_annotations: Dict[str, Dict[str, Any]],
+    ) -> None:
         self.diag = Diagnostics(source)
         self.dispatch_tokens = ["default"]
+        self.function_annotations = function_annotations
         self.var_table = VarTable()
+        self.inside_function = False
 
     def parse(self, extra_vars: Optional[Dict[str, Any]] = None) -> Any:
         """The main parse method for parser.
@@ -281,7 +393,7 @@ class Parser(doc.NodeVisitor):
         Parameters
         ----------
         token : str
-            The dispathing token.
+            The dispatching token.
 
         Returns
         -------
@@ -289,11 +401,40 @@ class Parser(doc.NodeVisitor):
             The context with new dispatching token.
         """
 
+        self.dispatch_tokens.append(token)
+        enter_func = dispatch.get(token=token, type_name="enter_token", default=lambda *args: None)
+        context = enter_func(self)
+
         def pop_token():
+            exit_func = dispatch.get(
+                token=token, type_name="exit_token", default=lambda *args: None
+            )
+            exit_func(self, context)
             self.dispatch_tokens.pop()
 
-        self.dispatch_tokens.append(token)
         return _deferred(pop_token)
+
+    def with_diag_source(self, source: Source):
+        """Add a new source as with statement.
+
+        Parameters
+        ----------
+        source : Source
+            The source for diagnostics.
+
+        Returns
+        -------
+        res : Any
+            The context with new source.
+        """
+
+        last_diag = self.diag
+        self.diag = Diagnostics(source)
+
+        def pop_source():
+            self.diag = last_diag
+
+        return _deferred(pop_source)
 
     def eval_expr(
         self,
@@ -319,6 +460,7 @@ class Parser(doc.NodeVisitor):
         if extra_vars is not None:
             for k, v in extra_vars.items():
                 var_values[k] = v
+        var_values[ScriptMacro.parser_object_name] = self
         return eval_expr(self, node, var_values)
 
     def _duplicate_lhs_check(self, target: doc.expr) -> Union[bool, Set[str]]:
@@ -348,6 +490,8 @@ class Parser(doc.NodeVisitor):
             return vars
         elif isinstance(target, doc.Name):
             return {target.id}
+        elif isinstance(target, doc.Starred):
+            return self._duplicate_lhs_check(target.value)
         else:
             self.report_error(target, "Invalid type in assign statement")
             raise NotImplementedError
@@ -373,12 +517,12 @@ class Parser(doc.NodeVisitor):
             The value binding method when assigning the values to variables.
 
         allow_shadowing : bool
-            The options of whether variable shadowing allwed for assignment.
+            The options of whether variable shadowing allowed for assignment.
 
         Returns
         -------
         res : Dict[str, Any]
-            The dirctionary of assignment result.
+            The dictionary of assignment result.
         """
         if self._duplicate_lhs_check(target) is True:
             self.report_error(target, "Duplicate vars assigned.")
@@ -401,6 +545,12 @@ class Parser(doc.NodeVisitor):
         err: Union[Exception, str]
             The error to report.
         """
+
+        # If the error is already being raised as a DiagnosticError,
+        # re-raise it without wrapping it in a DiagnosticContext.
+        if isinstance(err, DiagnosticError):
+            raise err
+
         # Only take the last line of the error message
         if isinstance(err, TVMError):
             msg = list(filter(None, str(err).split("\n")))[-1]
@@ -408,7 +558,18 @@ class Parser(doc.NodeVisitor):
             msg = "KeyError: " + str(err)
         else:
             msg = str(err)
-        self.diag.error(node, msg)
+
+        try:
+            self.diag.error(node, msg)
+        except Exception as diag_err:
+            # Calling self.diag.error is guaranteed to throw an
+            # exception.  When shown to a user, this error should
+            # reference the point of error within the provided
+            # TVMScript.  However, when caught in pdb, the full
+            # traceback should be available for debugging.
+            if isinstance(err, Exception):
+                diag_err = diag_err.with_traceback(err.__traceback__)
+            raise diag_err
 
     def visit(self, node: doc.AST) -> None:
         """The general visiting method.
@@ -438,11 +599,8 @@ class Parser(doc.NodeVisitor):
             raise NotImplementedError(f"Visitor of AST node is not implemented: {name}")
         try:
             func(node)
-        except DiagnosticError:
-            raise
-        except Exception as e:  # pylint: disable=broad-except,invalid-name
-            self.report_error(node, str(e))
-            raise
+        except Exception as err:  # pylint: disable=broad-except
+            self.report_error(node, err)
 
     def visit_body(self, node: List[doc.stmt]) -> Any:
         """The general body visiting method.
@@ -484,24 +642,17 @@ class Parser(doc.NodeVisitor):
             The doc FunctionDef node.
         """
         token = self.get_dispatch_token(node)
-        current_token = self.dispatch_tokens[-1]
         func = dispatch.get(token=token, type_name="FunctionDef", default=None)
         if func is None:
             self.report_error(node, "The parser does not understand the decorator")
-        pre_func = dispatch.get(
-            token=current_token, type_name="pre_token_switch", default=_do_nothing
-        )
-        post_func = dispatch.get(
-            token=current_token, type_name="post_token_switch", default=_do_nothing
-        )
-        pre_func(self, node)
+        _dispatch(self, "pre_visit_local_function")(self, node)
         _dispatch_wrapper(func)(self, node)
-        post_func(self, node)
+        _dispatch(self, "post_visit_local_function")(self, node)
 
-    def visit_tvm_declare_function(self, node: doc.FunctionDef) -> None:
+    def visit_tvm_declare_function(self, node: doc.FunctionDef) -> GlobalVar:
         token = self.get_dispatch_token(node)
         with self.with_dispatch_token(token):
-            _dispatch(self, "tvm_declare_function")(self, node)
+            return _dispatch(self, "tvm_declare_function")(self, node)
 
     def visit_ClassDef(self, node: doc.ClassDef) -> Any:  # pylint: disable=invalid-name
         """The general class definition visiting method.
@@ -617,7 +768,7 @@ class Parser(doc.NodeVisitor):
         Parameters
         ----------
         node : doc.Expr
-            The doc AST exprssion node.
+            The doc AST expression node.
 
         Returns
         -------
@@ -685,3 +836,18 @@ class Parser(doc.NodeVisitor):
             The visiting result.
         """
         return _dispatch(self, "Return")(self, node)
+
+    def visit_Nonlocal(self, node: doc.Nonlocal) -> Any:  # pylint: disable=invalid-name
+        """The general nonlocal visiting method.
+
+        Parameters
+        ----------
+        node : doc.Nonlocal
+            The doc AST nonlocal node.
+
+        Returns
+        -------
+        res : Any
+            The visiting result.
+        """
+        return _dispatch(self, "Nonlocal")(self, node)

@@ -81,8 +81,8 @@ class LambdaLifter : public transform::DeviceAwareExprMutator {
 
   Expr DeviceAwareVisitExpr_(const CallNode* call_node) final {
     auto call = Downcast<Call>(DeviceAwareExprMutator::DeviceAwareVisitExpr_(call_node));
-    if (auto var_node = call_node->op.as<VarNode>()) {
-      auto var = GetRef<Var>(var_node);
+    if (auto opt = call_node->op.as<Var>()) {
+      auto var = opt.value();
       if (!letrec_.empty() && var == letrec_.back()) {
         auto it = lambda_map_.find(var);
         ICHECK(it != lambda_map_.end());
@@ -194,7 +194,7 @@ class LambdaLifter : public transform::DeviceAwareExprMutator {
       CHECK_EQ(before_arity, after_arity);
       lifted_func =
           Function(typed_captured_vars, rebound_body, /*ret_type=*/func->func_type_annotation(),
-                   free_type_vars, /*attrs=*/{}, func->span);
+                   free_type_vars, DictAttrs(), func->span);
       lifted_func->virtual_device_ = result_virtual_device;
       lifted_func = MarkClosure(lifted_func);
     }

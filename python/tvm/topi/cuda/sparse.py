@@ -17,13 +17,12 @@
 
 """Sparse operators"""
 import numpy as np
-import scipy.sparse as sp
 
 import tvm
 from tvm import relay, te
 
 from .. import nn
-from ..utils import traverse_inline, get_const_tuple, prod, get_const_int, ceil_div
+from ..utils import ceil_div, get_const_int, get_const_tuple, prod, traverse_inline
 from .transform import schedule_transpose_from_existing
 
 
@@ -159,10 +158,9 @@ def sparse_dense_tir(data, w_data, w_indices, w_indptr):
         bs_m = bs_n
         mb = m // bs_m
         mi = warp_size
-        assert (
-            mb >= mi
-        ), "Number of block rows in dense matrix must be larger than warp size: {} vs {}.".format(
-            warp_size, mb
+        assert mb >= mi, (
+            f"Number of block rows in dense matrix must be larger than warp size: "
+            f"{warp_size} vs {mb}."
         )
         mo = ceil_div(mb, mi)
         ni = 1  # TODO(tkonolige): how do I compute the number of warps per block?
@@ -359,6 +357,8 @@ def schedule_sparse_dense_padded(outs):
 
 def pad_sparse_matrix(matrix, blocksize):
     """Pad rows of sparse matrix matrix so that they are a multiple of blocksize."""
+    import scipy.sparse as sp  # pylint: disable=import-outside-toplevel
+
     assert isinstance(matrix, sp.bsr_matrix)
     new_entries = np.zeros(matrix.shape[0], dtype=matrix.indptr.dtype)
     bsr = matrix.blocksize[0]
@@ -395,6 +395,8 @@ def _alter_sparse_dense_layout(_attrs, inputs, _tinfos, _out_type):
     sparse_dense implementation for one that operates on a padded matrix. We
     also pad the matrix.
     """
+    import scipy.sparse as sp  # pylint: disable=import-outside-toplevel
+
     # TODO(ANSHUMAN87): Handle for sparse_lhs case too
     if (
         isinstance(inputs[1], relay.Constant)

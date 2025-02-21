@@ -143,42 +143,46 @@ def test_device_api_hooks_unpacked_api(device_api_main_func):
 
     # Activate Device
     assert (
-        str(main_func.body[0])
-        == "tir.tvm_check_return(0, -1, tir.call_extern("
-        + '"TVMDeviceEthosUActivate",'
-        + " device_context_ethos_u))\n"
+        str(main_func.body[0].value)
+        == "T.tvm_check_return(0, -1, T.call_extern("
+        + '"int32",'
+        + ' "TVMDeviceEthosUActivate",'
+        + " device_context_ethos_u))"
     )
     # Open Device
     print("main func", repr(main_func.body))
     assert (
-        str(main_func.body[1][0][0][0])
-        == "tir.tvm_check_return(0, -1, tir.call_extern("
-        + '"TVMDeviceEthosUOpen",'
-        + " device_context_ethos_u))\n"
+        str(main_func.body[1].value)
+        == "T.tvm_check_return(0, -1, T.call_extern("
+        + '"int32",'
+        + ' "TVMDeviceEthosUOpen",'
+        + " device_context_ethos_u))"
     )
     # Device Call
     # We dont need to check exact input and output var names in this test.
     # Hence, using a regex to cover any legal I/O name.
     regex = re.compile(
-        r"tir\.tvm_check_return\("
+        r"T\.tvm_check_return\("
         r"0, -1, "
-        r'tir\.call_extern\("tvmgen_default_ethos_u_main_0", '
+        r'T\.call_extern\("int32", "tvmgen_default_ethos_u_main_0", '
         r"\w+, \w+, device_context_ethos_u\)\)"
     )
-    assert regex.match(str(main_func.body[1][0][0][1]))
+    assert regex.match(str(main_func.body[2].value))
     # Close Device
     assert (
-        str(main_func.body[1][0][0][2])
-        == "tir.tvm_check_return(0, -1, tir.call_extern("
-        + '"TVMDeviceEthosUClose",'
-        + " device_context_ethos_u))\n"
+        str(main_func.body[3].value)
+        == "T.tvm_check_return(0, -1, T.call_extern("
+        + '"int32",'
+        + ' "TVMDeviceEthosUClose",'
+        + " device_context_ethos_u))"
     )
     # Deactivate Device
     assert (
-        str(str(main_func.body[2]))
-        == "tir.tvm_check_return(0, -1, tir.call_extern("
-        + '"TVMDeviceEthosUDeactivate",'
-        + " device_context_ethos_u))\n"
+        str(str(main_func.body[4].value))
+        == "T.tvm_check_return(0, -1, T.call_extern("
+        + '"int32",'
+        + ' "TVMDeviceEthosUDeactivate",'
+        + " device_context_ethos_u))"
     )
 
 
@@ -238,7 +242,7 @@ def test_without_device_api_unpacked_api(non_device_api_main_func):
     """Test a graph without the Device API with the unpacked internal calls"""
 
     main_func = non_device_api_main_func(interface_api="c", use_unpacked_api=True)
-    body = main_func.body.seq[1].seq[0].seq[0].value
+    body = main_func.body.value
     assert (
         repr(body)
         == 'T.tvm_check_return(0, -1, T.call_extern("int32", '
@@ -252,7 +256,7 @@ def test_without_device_api_packed_api(non_device_api_main_func):
 
     main_func = non_device_api_main_func(interface_api="packed", use_unpacked_api=False)
 
-    body = main_func.body.seq[1].seq[0].seq[0].value
+    body = main_func.body.value
     assert repr(body) == (
         'T.call_cpacked("tvmgen_default_fused_multiply", '
         "T.tvm_stack_make_array(x_buffer_var, T.tvm_stack_make_shape(10, 10), "

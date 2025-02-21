@@ -40,6 +40,7 @@
 
 #include "../../support/arena.h"
 #include "../../support/ring_buffer.h"
+#include "../../support/utils.h"
 #include "../object_internal.h"
 #include "rpc_local_session.h"
 
@@ -174,8 +175,11 @@ class RPCEndpoint::EventHandler : public dmlc::Stream {
     for (int i = 0; i < num_args; ++i) {
       int tcode = type_codes[i];
       if (tcode == kTVMObjectHandle || tcode == kTVMObjectRValueRefArg) {
-        LOG(FATAL) << "ValueError: Cannot pass argument " << i << ", type "
-                   << args[i].AsObjectRef<ObjectRef>()->GetTypeKey() << " is not supported by RPC";
+        if (!args[i].IsObjectRef<RPCObjectRef>()) {
+          LOG(FATAL) << "ValueError: Cannot pass argument " << i << ", type "
+                     << args[i].AsObjectRef<ObjectRef>()->GetTypeKey()
+                     << " is not supported by RPC";
+        }
       } else if (tcode == kDLDevice) {
         DLDevice dev = args[i];
         ICHECK(!IsRPCSessionDevice(dev)) << "InternalError: cannot pass RPC device in the channel";
@@ -218,6 +222,54 @@ class RPCEndpoint::EventHandler : public dmlc::Stream {
     this->Write(cdata);
   }
 
+  void WriteObject(Object* obj) {
+    // NOTE: for now all remote object are encoded as RPCObjectRef
+    // follow the same disco protocol in case we would like to upgrade later
+    //
+    // Rationale note: Only handle remote object allows the same mechanism to work for minRPC
+    // which is needed for wasm and other env that goes through C API
+    if (obj->IsInstance<RPCObjectRefObj>()) {
+      auto* ref = static_cast<RPCObjectRefObj*>(obj);
+      this->template Write<uint32_t>(kRuntimeRPCObjectRefTypeIndex);
+      uint64_t handle = reinterpret_cast<uint64_t>(ref->object_handle());
+      this->template Write<int64_t>(handle);
+    } else {
+      LOG(FATAL) << "ValueError: Object type is not supported in RPC calling convention: "
+                 << obj->GetTypeKey() << " (type_index = " << obj->type_index() << ")";
+    }
+  }
+  uint64_t GetObjectBytes(Object* obj) {
+    if (obj->IsInstance<RPCObjectRefObj>()) {
+      return sizeof(uint32_t) + sizeof(int64_t);
+    } else {
+      LOG(FATAL) << "ValueError: Object type is not supported in RPC calling convention: "
+                 << obj->GetTypeKey() << " (type_index = " << obj->type_index() << ")";
+    }
+  }
+
+  void ReadObject(int* tcode, TVMValue* value) {
+    // NOTE: for now all remote object are encoded as RPCObjectRef
+    // follow the same disco protocol in case we would like to upgrade later
+    //
+    // Rationale note: Only handle remote object allows the same mechanism to work for minRPC
+    // which is needed for wasm and other env that goes through C API
+    uint32_t type_index;
+    this->template Read<uint32_t>(&type_index);
+    if (type_index == kRuntimeRPCObjectRefTypeIndex) {
+      uint64_t handle;
+      this->template Read<uint64_t>(&handle);
+      // Always wrap things back in RPCObjectRef
+      // this is because we want to enable multi-hop RPC
+      // and next hop would also need to check the object index
+      RPCObjectRef rpc_obj(make_object<RPCObjectRefObj>(reinterpret_cast<void*>(handle), nullptr));
+      TVMArgsSetter(value, tcode)(0, rpc_obj);
+      object_arena_.push_back(rpc_obj);
+    } else {
+      LOG(FATAL) << "ValueError: Object type is not supported in Disco calling convention: "
+                 << Object::TypeIndex2Key(type_index) << " (type_index = " << type_index << ")";
+    }
+  }
+
   void MessageDone() {
     // Unused here, implemented for microTVM framing layer.
   }
@@ -226,6 +278,12 @@ class RPCEndpoint::EventHandler : public dmlc::Stream {
   T* ArenaAlloc(int count) {
     static_assert(std::is_pod<T>::value, "need to be trival");
     return arena_.template allocate_<T>(count);
+  }
+
+  /*! \brief Recycle all the memory used in the arena */
+  void RecycleAll() {
+    this->object_arena_.clear();
+    this->arena_.RecycleAll();
   }
 
  protected:
@@ -248,6 +306,8 @@ class RPCEndpoint::EventHandler : public dmlc::Stream {
   bool async_server_mode_{false};
   // Internal arena
   support::Arena arena_;
+  // internal arena for temp objects
+  std::vector<ObjectRef> object_arena_;
 
   // State switcher
   void SwitchToState(State state) {
@@ -265,7 +325,7 @@ class RPCEndpoint::EventHandler : public dmlc::Stream {
     if (state == kRecvPacketNumBytes) {
       this->RequestBytes(sizeof(uint64_t));
       // recycle arena for the next session.
-      arena_.RecycleAll();
+      this->RecycleAll();
     }
   }
 
@@ -372,8 +432,11 @@ class RPCEndpoint::EventHandler : public dmlc::Stream {
     if (code == RPCCode::kException) {
       // switch to the state before sending exception.
       this->SwitchToState(kRecvPacketNumBytes);
-      std::string msg = args[0];
-      LOG(FATAL) << "RPCError: Error caught from RPC call:\n" << msg;
+      String msg = args[0];
+      if (!support::StartsWith(msg, "RPCSessionTimeoutError: ")) {
+        msg = "RPCError: Error caught from RPC call:\n" + msg;
+      }
+      LOG(FATAL) << msg;
     }
 
     ICHECK(setreturn != nullptr) << "fsetreturn not available";
@@ -603,8 +666,12 @@ class RPCEndpoint::EventHandler : public dmlc::Stream {
     pending_request_bytes_ -= size;
     return size;
   }
-  // wriite the data to the channel.
-  void Write(const void* data, size_t size) final { writer_->Write(data, size); }
+  // write the data to the channel.
+  size_t Write(const void* data, size_t size) final {
+    writer_->Write(data, size);
+    return size;
+  }
+
   // Number of pending bytes requests
   size_t pending_request_bytes_{0};
   // The ring buffer to read data from.
@@ -943,6 +1010,11 @@ void RPCDevSetStream(RPCSession* handler, TVMArgs args, TVMRetValue* rv) {
   handler->GetDeviceAPI(dev)->SetStream(dev, stream);
 }
 
+void RPCDevGetCurrentStream(RPCSession* handler, TVMArgs args, TVMRetValue* rv) {
+  Device dev = args[0];
+  *rv = handler->GetDeviceAPI(dev)->GetCurrentStream(dev);
+}
+
 void RPCEndpoint::EventHandler::HandleSyscall(RPCCode code) {
   // Event handler sit at clean state at this point.
   switch (code) {
@@ -979,6 +1051,9 @@ void RPCEndpoint::EventHandler::HandleSyscall(RPCCode code) {
       break;
     case RPCCode::kDevSetStream:
       SysCallHandler(RPCDevSetStream);
+      break;
+    case RPCCode::kDevGetCurrentStream:
+      SysCallHandler(RPCDevGetCurrentStream);
       break;
     case RPCCode::kCopyAmongRemote:
       SysCallHandler(RPCCopyAmongRemote);
@@ -1123,6 +1198,10 @@ class RPCClientSession : public RPCSession, public DeviceAPI {
 
   void SetStream(Device dev, TVMStreamHandle stream) final {
     endpoint_->SysCallRemote(RPCCode::kDevSetStream, dev, stream);
+  }
+
+  TVMStreamHandle GetCurrentStream(Device dev) final {
+    return endpoint_->SysCallRemote(RPCCode::kDevGetCurrentStream, dev);
   }
 
   DeviceAPI* GetDeviceAPI(Device dev, bool allow_missing) final { return this; }

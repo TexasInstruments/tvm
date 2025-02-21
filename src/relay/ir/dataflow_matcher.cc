@@ -73,6 +73,42 @@ bool DFPatternMatcher::VisitDFPattern_(const AltPatternNode* op, const Expr& exp
 }
 
 bool MatchRetValue(const ObjectRef& lhs, const TVMRetValue& rhs) {
+  // Unwrapping arrays may find user-provided FFI types in the
+  // attributes (e.g. Defining pad_value as ((0,0), (0,0)) will result
+  // in runtime::Int.  These need to be converted to compile-time IR
+  // types when encountered.
+  if (lhs->IsInstance<runtime::Bool::ContainerType>() ||
+      lhs->IsInstance<runtime::Int::ContainerType>() ||
+      lhs->IsInstance<runtime::Float::ContainerType>()) {
+    TVMRetValue lhs_convert;
+    lhs_convert = lhs;
+    PrimExpr lhs_expr = lhs_convert;
+    return MatchRetValue(lhs_expr, rhs);
+  }
+
+  // StructuralEqual doesn't check for conversions between FFI types
+  // and IR types, but the pattern-matcher should.  Therefore,
+  // explicitly recurse into the array.
+  if (auto opt_lhs_array = lhs.as<Array<ObjectRef>>()) {
+    if (Optional<Array<ObjectRef>> opt_rhs_array = rhs) {
+      Array<ObjectRef> lhs_array = opt_lhs_array.value();
+      Array<ObjectRef> rhs_array = opt_rhs_array.value();
+      if (lhs_array.size() != rhs_array.size()) {
+        return false;
+      }
+      for (size_t i = 0; i < lhs_array.size(); i++) {
+        TVMRetValue rhs_item;
+        rhs_item = rhs_array[i];
+        if (!MatchRetValue(lhs_array[i], rhs_item)) {
+          return false;
+        }
+      }
+      return true;
+    } else {
+      return false;
+    }
+  }
+
   switch (rhs.type_code()) {
     case kDLInt:
       if (auto* val = lhs.as<IntImmNode>()) {
@@ -128,8 +164,8 @@ bool DFPatternMatcher::VisitDFPattern_(const AttrPatternNode* attr_pattern, cons
     return matches;
   }
   auto attributes = attr_pattern->attrs.as<DictAttrsNode>()->dict;
-  if (const auto* op_node = expr.as<OpNode>()) {
-    Op op = GetRef<Op>(op_node);
+  if (auto optional = expr.as<Op>()) {
+    Op op = optional.value();
     for (auto kv : attributes) {
       auto attr_name = kv.first;
       auto attr_value = kv.second;
@@ -300,14 +336,20 @@ bool DFPatternMatcher::VisitDFPattern_(const CallPatternNode* op, const Expr& ex
 
 // Recursively find the Dominator parent along all inputs paths.
 bool DFPatternMatcher::MatchesPath(const DominatorPatternNode* op, const Expr& expr) {
+  // utilities
+  auto is_leaf_node = [](const Expr& expr) {
+    return expr.as<ConstantNode>() || expr.as<VarNode>();
+  };
+
+  // logic
   auto call_node = expr.as<CallNode>();
   auto index_node = expr_to_node(expr);
+  size_t arg_counter{0};
   for (auto node : index_node->inputs_) {
-    if (!(call_node && node->ref() == call_node->op)) {
+    if (!(call_node && (node->ref() == call_node->op || is_leaf_node(node->ref())))) {
+      arg_counter += 1;
       memoize_ = true;
-      if (VisitDFPattern(op->parent, node->ref())) {
-        return true;
-      } else {
+      if (!VisitDFPattern(op->parent, node->ref())) {
         memoize_ = false;
         if (!VisitDFPattern(op->path, node->ref())) {
           return false;
@@ -317,6 +359,9 @@ bool DFPatternMatcher::MatchesPath(const DominatorPatternNode* op, const Expr& e
         }
       }
     }
+  }
+  if (!arg_counter) {
+    return false;
   }
   return true;
 }
@@ -435,7 +480,7 @@ Expr InferTypeWithModule(const Expr& expr, const IRModule& m) {
   if (expr.as<FunctionNode>()) {
     func = Downcast<Function>(expr);
   } else {
-    func = relay::Function(relay::FreeVars(expr), expr, Type(), relay::FreeTypeVars(expr, mod), {});
+    func = relay::Function(relay::FreeVars(expr), expr, Type(), relay::FreeTypeVars(expr, mod));
   }
   mod->Add(gvar, func);
   mod = transform::InferType()(mod);
@@ -485,7 +530,11 @@ bool DFPatternMatcher::VisitDFPattern_(const ConstantPatternNode* op, const Expr
 }
 
 bool DFPatternMatcher::VisitDFPattern_(const WildcardPatternNode* op, const Expr& expr) {
-  return true;
+  if (op->pattern) {
+    return VisitDFPattern(op->pattern.value(), expr);
+  } else {
+    return true;
+  }
 }
 
 bool MatchPattern(DFPattern pattern, Expr expr) {
@@ -605,8 +654,10 @@ void PatternGrouper::CreateGroup(const Expr& expr) {
     // Don't treat fuzzy Dominator patterns input variables for partition
     if (auto op = node->ref().as<DominatorPatternNode>()) {
       for (auto fuzzy_op : {op->parent, op->path}) {
-        for (auto match : node_map[fuzzy_op]) {
-          fuzzy_matches.insert(match);
+        if (node_map.count(fuzzy_op)) {
+          for (auto match : node_map[fuzzy_op]) {
+            fuzzy_matches.insert(match);
+          }
         }
       }
     }

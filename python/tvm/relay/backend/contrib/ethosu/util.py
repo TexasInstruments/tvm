@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# pylint: disable=invalid-name
 """
 Helper utility Enums and Functions used through out code generation.
 
@@ -143,7 +144,7 @@ class QDenseArgs(Enum):
     WEIGHTS_SCALE = 5
 
 
-class QPad2DArgs(Enum):
+class QPadArgs(Enum):
     """
     This is a helper enum to obtain the correct index
     of nn.pad arguments.
@@ -155,7 +156,7 @@ class QPad2DArgs(Enum):
 
 def is_npu_func(func: relay.Function) -> bool:
     """Check if the given function is an NPU function."""
-    return func.attrs and "Compiler" in func.attrs and func.attrs["Compiler"] == "ethos-u"
+    return "Compiler" in func.attrs and func.attrs["Compiler"] == "ethos-u"
 
 
 def is_composite_func(func: relay.Function, name: str) -> bool:
@@ -251,16 +252,22 @@ def get_accelerator_config():
     return compiler_attrs.accelerator_config
 
 
-def is_cascader_enabled():
+def is_cascader_enabled() -> bool:
     """Determine whether the cascader is enabled"""
     compiler_attrs = tvm.get_global_func("relay.ext.ethos-u.get_compiler_attrs")()
-    return compiler_attrs.enable_cascader
+    return bool(compiler_attrs.enable_cascader)
 
 
-def is_striping_enabled():
+def is_copying_constants_disabled() -> bool:
+    """Determine whether copying constants is disabled for case without cascader"""
+    compiler_attrs = tvm.get_global_func("relay.ext.ethos-u.get_compiler_attrs")()
+    return bool(compiler_attrs.disable_copying_constants)
+
+
+def is_striping_enabled() -> bool:
     """Determine whether the cascader is enabled"""
     compiler_attrs = tvm.get_global_func("relay.ext.ethos-u.get_compiler_attrs")()
-    return compiler_attrs.enable_striping
+    return bool(compiler_attrs.enable_striping)
 
 
 def get_arg_count(func):

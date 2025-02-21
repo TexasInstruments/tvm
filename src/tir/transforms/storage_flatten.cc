@@ -730,7 +730,7 @@ class ThreadScopePropagate : public StmtExprMutator {
 
     auto it = buf_remap_.find(op->buffer->data);
     if (it != buf_remap_.end()) {
-      return BufferLoad(it->second, op->indices, op->span);
+      return BufferLoad(it->second, op->indices, op->predicate, op->span);
     } else {
       return expr;
     }
@@ -743,7 +743,7 @@ class ThreadScopePropagate : public StmtExprMutator {
 
     auto it = buf_remap_.find(op->buffer->data);
     if (it != buf_remap_.end()) {
-      return BufferStore(it->second, op->value, op->indices, op->span);
+      return BufferStore(it->second, op->value, op->indices, op->predicate, op->span);
     } else {
       return stmt;
     }
@@ -788,7 +788,7 @@ class ThreadScopePropagate : public StmtExprMutator {
     }
   }
 
-  std::unordered_map<Var, Buffer, ObjectPtrHash, ObjectPtrEqual> buf_remap_;
+  std::unordered_map<Var, Buffer> buf_remap_;
   std::unordered_set<Buffer, ObjectPtrHash, ObjectPtrEqual> external_buffers_;
 
   // The current thread scope.
@@ -938,8 +938,11 @@ class BufferBindUnwrapper : public StmtExprMutator {
     const BufferEntry& e = GetBufferEntry(op->buffer);
 
     if (e.remap) {
+      ICHECK(!op->predicate.defined()) << "Predicated buffer load is not currently supported in "
+                                          "storage flatten pass.";
       return BufferLoad(e.remap->target,
-                        remap_indices(op->indices, e.remap->begins, e.remap->extents), op->span);
+                        remap_indices(op->indices, e.remap->begins, e.remap->extents),
+                        op->predicate, op->span);
     } else {
       return expr;
     }
@@ -952,8 +955,11 @@ class BufferBindUnwrapper : public StmtExprMutator {
     const BufferEntry& e = GetBufferEntry(op->buffer);
 
     if (e.remap) {
+      ICHECK(!op->predicate.defined()) << "Predicated buffer store is not currently supported in "
+                                          "storage flatten pass.";
       return BufferStore(e.remap->target, op->value,
-                         remap_indices(op->indices, e.remap->begins, e.remap->extents), op->span);
+                         remap_indices(op->indices, e.remap->begins, e.remap->extents),
+                         op->predicate, op->span);
     } else {
       return stmt;
     }
@@ -1265,7 +1271,7 @@ class ApplyLayoutTransforms : public StmtExprMutator {
 
       Array<IndexMap> transforms = lookup.value();
       for (const auto& transform : transforms) {
-        write_ptr->bounds = transform->MapRanges(realize->bounds);
+        write_ptr->bounds = transform->MapRanges(realize->bounds, &analyzer);
       }
     }
 
@@ -1292,7 +1298,7 @@ class ApplyLayoutTransforms : public StmtExprMutator {
 
       Array<IndexMap> transforms = lookup.value();
       for (const auto& transform : transforms) {
-        write_ptr->indices = transform->MapIndices(node->indices);
+        write_ptr->indices = transform->MapIndices(node->indices, &analyzer);
       }
     }
     return node;
@@ -1315,7 +1321,7 @@ class ApplyLayoutTransforms : public StmtExprMutator {
 
       auto write_ptr = buf.CopyOnWrite();
       for (const auto& transform : transforms) {
-        write_ptr->shape = transform->MapShape(buf->shape);
+        write_ptr->shape = transform->MapShape(buf->shape, &analyzer);
       }
     }
 
@@ -1326,6 +1332,7 @@ class ApplyLayoutTransforms : public StmtExprMutator {
   std::unordered_map<const BufferNode*, Buffer> buf_map_;
 
   Map<Buffer, Array<IndexMap>> layout_transforms_;
+  arith::Analyzer analyzer;
 };
 
 class StorageFlattener : public StmtExprMutator {
@@ -1417,7 +1424,9 @@ class StorageFlattener : public StmtExprMutator {
 
     auto flattened_indices = e.buffer->ElemOffset(op->indices);
 
-    Stmt body = BufferStore(e.flattened_buffer, value, flattened_indices, op->span);
+    ICHECK(!op->predicate.defined()) << "Predicated buffer store is not currently supported in "
+                                        "storage flatten pass.";
+    Stmt body = BufferStore(e.flattened_buffer, value, flattened_indices, op->predicate, op->span);
     if (create_bound_attributes_ && ShapeIsValid(e.buffer->shape)) {
       shape_collector_.push_back(std::make_pair(e.buffer->data, e.buffer->shape));
     }
@@ -1429,6 +1438,15 @@ class StorageFlattener : public StmtExprMutator {
       }
     }
     return body;
+  }
+
+  Stmt VisitStmt_(const DeclBufferNode* op) final {
+    auto node = Downcast<DeclBuffer>(StmtExprMutator::VisitStmt_(op));
+    const BufferEntry& entry = GetBufferEntry(node->buffer);
+    if (!entry.flattened_buffer.same_as(node->buffer)) {
+      node.CopyOnWrite()->buffer = entry.flattened_buffer;
+    }
+    return std::move(node);
   }
 
   // AllocateNodes may be present from tvm.tir.ir_builder.  This can
@@ -1563,8 +1581,10 @@ class StorageFlattener : public StmtExprMutator {
       shape_collector_.push_back(std::make_pair(e.buffer->data, e.buffer->shape));
     }
 
+    ICHECK(!op->predicate.defined()) << "Predicated buffer load is not currently supported in "
+                                        "storage flatten pass.";
     auto flattened_indices = e.buffer->ElemOffset(op->indices);
-    PrimExpr val = BufferLoad(e.flattened_buffer, flattened_indices, op->span);
+    PrimExpr val = BufferLoad(e.flattened_buffer, flattened_indices, op->predicate, op->span);
 
     if (op->dtype == DataType::Bool()) {
       ICHECK_EQ(e.flattened_buffer->dtype, DataType::Int(8))

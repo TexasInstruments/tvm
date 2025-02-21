@@ -25,6 +25,10 @@
 #include <tvm/tir/expr.h>
 #include <tvm/tir/op.h>
 
+#include "./scalable_expression.h"
+#include "const_fold.h"
+#include "product_normal_form.h"
+
 namespace tvm {
 namespace arith {
 
@@ -59,6 +63,56 @@ void Analyzer::Bind(const Var& var, const Range& range, bool allow_override) {
   }
   // skip modular_set
   // skip rewrite simplify
+}
+
+void Analyzer::MarkGlobalNonNegValue(const PrimExpr& value) {
+  // decompose value as symbol * scale + offset
+  int64_t offset = 0;
+  PrimExpr symbol_scale = tir::make_const(value.dtype(), 0);
+
+  auto fcollect_sum = [&](PrimExpr val, int sign) {
+    if (const auto* intimm = val.as<IntImmNode>()) {
+      offset += intimm->value * sign;
+    } else {
+      if (sign > 0) {
+        symbol_scale = symbol_scale + val;
+      } else {
+        symbol_scale = symbol_scale - val;
+      }
+    }
+  };
+  UnpackSum(value, fcollect_sum);
+
+  // split out the symbol and non-symbolic part
+  int64_t cscale = 1;
+  PrimExpr symbol = tir::make_const(value.dtype(), 1);
+  auto fcollect_prod = [&](PrimExpr val) {
+    if (const auto* intimm = val.as<IntImmNode>()) {
+      cscale *= intimm->value;
+    } else {
+      symbol = symbol * val;
+    }
+  };
+  UnpackReduction<tir::MulNode>(symbol_scale, fcollect_prod);
+  if (cscale <= 0) return;
+  // override the constant int bound by marking it as non-negative
+  // NOTE: there might be future opportunities of more bound hint
+  // this is a simple step and covers all the current needs
+  //
+  // We may consider enhance the sub analyzer to directly take
+  // MarkPositiveVar so their bounds do not overlap
+  if (const auto* var_ptr = symbol.as<VarNode>()) {
+    Var var = GetRef<Var>(var_ptr);
+    // skip non-index type, keep it to be compatible
+    // with any_dim that do not represent any value
+    if (!IsIndexType(var.dtype())) return;
+    bool allow_override = true;
+    // mark the constant bound is sufficient
+    // we cannot mark interval set as that will cause relaxation of the var
+    // during bound proof which is not our intention
+    this->const_int_bound.Update(var, ConstIntBound(-offset, ConstIntBound::kPosInf),
+                                 allow_override);
+  }
 }
 
 void Analyzer::Bind(const Map<Var, Range>& variables, bool allow_override) {
@@ -115,6 +169,24 @@ bool Analyzer::CanProveEqual(const PrimExpr& lhs, const PrimExpr& rhs) {
   return CanProve(lhs - rhs == 0);
 }
 
+bool Analyzer::CanProveLessEqualThanSymbolicShapeValue(const PrimExpr& lhs, const PrimExpr& shape) {
+  if (this->CanProve(lhs <= shape, ProofStrength::kSymbolicBound)) return true;
+  // no need to do further attempt if shape is already a constant.
+  if (tir::is_const_int(shape)) return false;
+  // collect constant scale and ignore symbolic part
+  // so 32 * n => cscale = 32
+  int64_t cscale = 1;
+  auto fcollect = [&](const PrimExpr& expr) {
+    if (auto* ptr = expr.as<IntImmNode>()) {
+      cscale *= ptr->value;
+    }
+  };
+  UnpackReduction<tir::MulNode>(shape, fcollect);
+  PrimExpr const_shape_bound = IntImm(shape.dtype(), std::abs(cscale));
+  if (this->CanProve(lhs <= const_shape_bound, ProofStrength::kSymbolicBound)) return true;
+  return false;
+}
+
 bool Analyzer::CanProve(const PrimExpr& expr, ProofStrength strength) {
   // Avoid potentially expensive simplification unless required.
   if (const auto* ptr = expr.as<IntImmNode>()) {
@@ -154,6 +226,23 @@ bool Analyzer::CanProve(const PrimExpr& expr, ProofStrength strength) {
         if (relaxed_lower_bound->min_value >= lower_bound) return true;
       }
     }
+  }
+
+  // Current analysis may not be powerful enough to prove expressions containing
+  // the same symbolic value multiple times. However, when the symbolic values are
+  // "T.vscale" and the compile target uses a scalable architecture extension like
+  // SVE, we can make some assumptions about the value of vscale and iterate over a
+  // space of pre-defined values to attempt to prove the expression.
+  Target curr_target = Target::Current();
+  if (ContainsVscaleCall(simplified)) {
+    if (TargetHasSVE(curr_target)) {
+      return CanProveVscaleExpressionFromKnownValues(this, simplified, kAArch64VScaleValues);
+    }
+    LOG(WARNING)
+        << "The expression contains scalable values. An attempt to prove by substituting "
+           "with known values of vscale was not performed. This proof currently only supports "
+           "AArch64 SVE targets, but the target was "
+        << curr_target;
   }
   return false;
 }
@@ -207,6 +296,13 @@ TVM_REGISTER_GLOBAL("arith.CreateAnalyzer").set_body([](TVMArgs args, TVMRetValu
     } else if (name == "rewrite_simplify") {
       return PackedFunc(
           [self](TVMArgs args, TVMRetValue* ret) { *ret = self->rewrite_simplify(args[0]); });
+    } else if (name == "get_rewrite_simplify_stats") {
+      return PackedFunc([self](TVMArgs args, TVMRetValue* ret) {
+        *ret = self->rewrite_simplify.GetStatsCounters();
+      });
+    } else if (name == "reset_rewrite_simplify_stats") {
+      return PackedFunc(
+          [self](TVMArgs args, TVMRetValue* ret) { self->rewrite_simplify.ResetStatsCounters(); });
     } else if (name == "canonical_simplify") {
       return PackedFunc(
           [self](TVMArgs args, TVMRetValue* ret) { *ret = self->canonical_simplify(args[0]); });
@@ -238,6 +334,16 @@ TVM_REGISTER_GLOBAL("arith.CreateAnalyzer").set_body([](TVMArgs args, TVMRetValu
     } else if (name == "can_prove_equal") {
       return PackedFunc(
           [self](TVMArgs args, TVMRetValue* ret) { *ret = self->CanProveEqual(args[0], args[1]); });
+    } else if (name == "get_enabled_extensions") {
+      return PackedFunc([self](TVMArgs args, TVMRetValue* ret) {
+        *ret = static_cast<std::int64_t>(self->rewrite_simplify.GetEnabledExtensions());
+      });
+    } else if (name == "set_enabled_extensions") {
+      return PackedFunc([self](TVMArgs args, TVMRetValue* ret) {
+        std::int64_t flags = args[0];
+        self->rewrite_simplify.SetEnabledExtensions(
+            static_cast<RewriteSimplifier::Extension>(flags));
+      });
     }
     return PackedFunc();
   };

@@ -72,6 +72,10 @@ struct TypeIndex {
     kRuntimeShapeTuple = 6,
     /*! \brief runtime::PackedFunc. */
     kRuntimePackedFunc = 7,
+    /*! \brief runtime::DRef for disco distributed runtime */
+    kRuntimeDiscoDRef = 8,
+    /*! \brief runtime::RPCObjectRef */
+    kRuntimeRPCObjectRef = 9,
     // static assignments that may subject to change.
     kRuntimeClosure,
     kRuntimeADT,
@@ -507,6 +511,10 @@ class ObjectPtr {
   friend ObjectPtr<BaseType> GetObjectPtr(ObjType* ptr);
 };
 
+// Forward declaration, to prevent circular includes.
+template <typename T>
+class Optional;
+
 /*! \brief Base class of all object reference */
 class ObjectRef {
  public:
@@ -550,19 +558,42 @@ class ObjectRef {
   bool unique() const { return data_.unique(); }
   /*! \return The use count of the ptr, for debug purposes */
   int use_count() const { return data_.use_count(); }
+
   /*!
    * \brief Try to downcast the internal Object to a
    *  raw pointer of a corresponding type.
    *
    *  The function will return a nullptr if the cast failed.
    *
-   * if (const Add *add = node_ref.As<Add>()) {
-   *   // This is an add node
-   * }
-   * \tparam ObjectType the target type, must be a subtype of Object/
+   *      if (const AddNode *ptr = node_ref.as<AddNode>()) {
+   *        // This is an add node
+   *      }
+   *
+   * \tparam ObjectType the target type, must be a subtype of Object
    */
-  template <typename ObjectType>
+  template <typename ObjectType, typename = std::enable_if_t<std::is_base_of_v<Object, ObjectType>>>
   inline const ObjectType* as() const;
+
+  /*!
+   * \brief Try to downcast the ObjectRef to a
+   *    Optional<T> of the requested type.
+   *
+   *  The function will return a NullOpt if the cast failed.
+   *
+   *      if (Optional<Add> opt = node_ref.as<Add>()) {
+   *        // This is an add node
+   *      }
+   *
+   * \note While this method is declared in <tvm/runtime/object.h>,
+   * the implementation is in <tvm/runtime/container/optional.h> to
+   * prevent circular includes.  This additional include file is only
+   * required in compilation units that uses this method.
+   *
+   * \tparam ObjectRefType the target type, must be a subtype of ObjectRef
+   */
+  template <typename ObjectRefType,
+            typename = std::enable_if_t<std::is_base_of_v<ObjectRef, ObjectRefType>>>
+  inline Optional<ObjectRefType> as() const;
 
   /*! \brief type indicate the container type. */
   using ContainerType = Object;
@@ -710,13 +741,23 @@ struct ObjectPtrEqual {
  * \param ParentType The parent type of the objectref
  * \param ObjectName The type name of the object.
  */
-#define TVM_DEFINE_OBJECT_REF_METHODS(TypeName, ParentType, ObjectName)                        \
-  TypeName() = default;                                                                        \
+#define TVM_DEFINE_OBJECT_REF_METHODS_WITHOUT_DEFAULT_CONSTRUCTOR(TypeName, ParentType,        \
+                                                                  ObjectName)                  \
   explicit TypeName(::tvm::runtime::ObjectPtr<::tvm::runtime::Object> n) : ParentType(n) {}    \
   TVM_DEFINE_DEFAULT_COPY_MOVE_AND_ASSIGN(TypeName);                                           \
   const ObjectName* operator->() const { return static_cast<const ObjectName*>(data_.get()); } \
   const ObjectName* get() const { return operator->(); }                                       \
   using ContainerType = ObjectName;
+
+/*
+ * \brief Define object reference methods.
+ * \param TypeName The object type name
+ * \param ParentType The parent type of the objectref
+ * \param ObjectName The type name of the object.
+ */
+#define TVM_DEFINE_OBJECT_REF_METHODS(TypeName, ParentType, ObjectName) \
+  TypeName() = default;                                                 \
+  TVM_DEFINE_OBJECT_REF_METHODS_WITHOUT_DEFAULT_CONSTRUCTOR(TypeName, ParentType, ObjectName)
 
 /*
  * \brief Define object reference methods that is not nullable.
@@ -782,14 +823,18 @@ struct ObjectPtrEqual {
  *
  * \endcode
  */
-#define TVM_DEFINE_OBJECT_REF_COW_METHOD(ObjectName)     \
-  ObjectName* CopyOnWrite() {                            \
-    ICHECK(data_ != nullptr);                            \
-    if (!data_.unique()) {                               \
-      auto n = make_object<ObjectName>(*(operator->())); \
-      ObjectPtr<Object>(std::move(n)).swap(data_);       \
-    }                                                    \
-    return static_cast<ObjectName*>(data_.get());        \
+#define TVM_DEFINE_OBJECT_REF_COW_METHOD(ObjectName)               \
+  static_assert(ObjectName::_type_final,                           \
+                "TVM's CopyOnWrite may only be used for "          \
+                "Object types that are declared as final, "        \
+                "using the TVM_DECLARE_FINAL_OBJECT_INFO macro."); \
+  ObjectName* CopyOnWrite() {                                      \
+    ICHECK(data_ != nullptr);                                      \
+    if (!data_.unique()) {                                         \
+      auto n = make_object<ObjectName>(*(operator->()));           \
+      ObjectPtr<Object>(std::move(n)).swap(data_);                 \
+    }                                                              \
+    return static_cast<ObjectName*>(data_.get());                  \
   }
 
 // Implementations details below
@@ -861,7 +906,7 @@ inline bool Object::IsInstance() const {
 
 inline bool Object::unique() const { return use_count() == 1; }
 
-template <typename ObjectType>
+template <typename ObjectType, typename>
 inline const ObjectType* ObjectRef::as() const {
   if (data_ != nullptr && data_->IsInstance<ObjectType>()) {
     return static_cast<ObjectType*>(data_.get());

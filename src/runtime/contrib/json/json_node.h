@@ -42,7 +42,6 @@ namespace tvm {
 namespace runtime {
 namespace json {
 
-using namespace tvm::runtime;
 using JSONGraphAttrs = std::unordered_map<std::string, dmlc::any>;
 
 /*!
@@ -256,7 +255,7 @@ class JSONGraphNode {
    */
   template <typename T>
   T GetAttr(const std::string& key) const {
-    ICHECK_GT(attrs_.count(key), 0U) << "Key: " << key << "is not found";
+    ICHECK_GT(attrs_.count(key), 0U) << "Key: " << key << " is not found";
     return dmlc::get<T>(attrs_.at(key));
   }
 

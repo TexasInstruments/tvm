@@ -60,7 +60,7 @@
 // 'python3 jenkins/generate.py'
 // Note: This timestamp is here to ensure that updates to the Jenkinsfile are
 // always rebased on main before merging:
-// Generated at 2023-04-25T11:40:51.612532
+// Generated at 2024-01-10T13:15:25.155555
 
 import org.jenkinsci.plugins.pipeline.modeldefinition.Utils
 // These are set at runtime from data in ci/jenkins/docker-images.yml, update
@@ -112,7 +112,7 @@ properties([
 upstream_revision = null
 
 // command to start a docker container
-docker_run = 'docker/bash.sh --env CI --env TVM_SHARD_INDEX --env TVM_NUM_SHARDS --env RUN_DISPLAY_URL --env PLATFORM --env SKIP_SLOW_TESTS --env TEST_STEP_NAME'
+docker_run = 'docker/bash.sh --env CI --env PLATFORM --env TVM_SHARD_INDEX --env TVM_NUM_SHARDS --env RUN_DISPLAY_URL --env PLATFORM --env SKIP_SLOW_TESTS --env TEST_STEP_NAME'
 docker_build = 'docker/build.sh'
 // timeout in minutes
 max_time = 180
@@ -158,7 +158,7 @@ def init_git() {
     script: """
       set -eux
       . ${jenkins_scripts_root}/retry.sh
-      retry 3 timeout 5m git submodule update --init -f --jobs 0
+      retry 3 timeout 5m git submodule update --init --recursive -f --jobs 0
     """,
     label: 'Update git submodules',
   )
@@ -355,9 +355,9 @@ def check_pr(pr_number) {
 
 }
 
-def prepare() {
+def prepare(node_type) {
   stage('Prepare') {
-    node('CPU-SMALL') {
+    node(node_type) {
       ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/prepare") {
         init_git()
 
@@ -494,10 +494,12 @@ def make_standalone_crt(image, build_dir) {
       set -eux
       ${docker_run} ${image} python3 ./tests/scripts/task_build.py \
         --sccache-bucket tvm-sccache-prod \
+        --sccache-region us-west-2 \
         --cmake-target standalone_crt \
         --build-dir build
       ${docker_run} ${image} python3 ./tests/scripts/task_build.py \
         --sccache-bucket tvm-sccache-prod \
+        --sccache-region us-west-2 \
         --cmake-target crttest \
         --build-dir build
       """,
@@ -511,6 +513,7 @@ def make_cpp_tests(image, build_dir) {
       set -eux
       ${docker_run} ${image} python3 ./tests/scripts/task_build.py \
         --sccache-bucket tvm-sccache-prod \
+        --sccache-region us-west-2 \
         --cmake-target cpptest \
         --build-dir ${build_dir}
       """,
@@ -520,7 +523,7 @@ def make_cpp_tests(image, build_dir) {
 
 def cmake_build(image, path, make_flag) {
   sh (
-    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --build-dir ${path}",
+    script: "${docker_run} --env CI_NUM_EXECUTORS ${image} ./tests/scripts/task_build.py --sccache-bucket tvm-sccache-prod --sccache-region us-west-2 --build-dir ${path}",
     label: 'Run cmake build',
   )
 }
@@ -540,16 +543,24 @@ def micro_cpp_unittest(image) {
 
 cancel_previous_build()
 
-prepare()
-def build() {
+try {
+    prepare('CPU-SMALL-SPOT')
+} catch(Exception ex) {
+  prepare('CPU-SMALL')
+}
+def build(node_type) {
   stage('Build') {
     if (!skip_ci && is_docs_only_build != 1) {
-      node('CPU-SMALL') {
+      node(node_type) {
         ws("workspace/exec_${env.EXECUTOR_NUMBER}/tvm/build-wasm") {
           init_git()
           docker_init(ci_wasm)
           timeout(time: max_time, unit: 'MINUTES') {
-            sh (
+
+            withEnv([
+              'PLATFORM=wasm',
+              ], {
+              sh (
           script: "${docker_run} ${ci_wasm} ./tests/scripts/task_config_build_wasm.sh build",
           label: 'Create WASM cmake config',
         )
@@ -562,6 +573,7 @@ def build() {
           script: "${docker_run} ${ci_wasm} ./tests/scripts/task_web_wasm.sh",
           label: 'Run WASM lint and tests',
         )
+            })
           }
         }
       }
@@ -570,4 +582,8 @@ def build() {
     }
   }
 }
-build()
+try {
+    build('CPU-SMALL-SPOT')
+} catch (Exception ex) {
+    build('CPU-SMALL')
+}

@@ -38,9 +38,11 @@ set -euo pipefail
 function show_usage() {
     cat <<EOF
 Usage: docker/bash.sh [-i|--interactive] [--net=host] [-t|--tty]
-         [--mount MOUNT_DIR] [--repo-mount-point REPO_MOUNT_POINT]
-         [--dry-run] [--name NAME]
-         <DOCKER_IMAGE_NAME> [--] [COMMAND]
+          [--cpus NUM_CPUS] [--mount MOUNT_DIR]
+          [--repo-mount-point REPO_MOUNT_POINT]
+          [--dry-run] [--name NAME]
+          <DOCKER_IMAGE_NAME> [--] [COMMAND]
+
 
 -h, --help
 
@@ -53,6 +55,10 @@ Usage: docker/bash.sh [-i|--interactive] [--net=host] [-t|--tty]
 -t, --tty
 
     Start the docker session with a pseudo terminal (tty).
+
+--cpus NUM_CPUS
+
+    Limit the number of CPU cores to be used.
 
 --net=host
 
@@ -87,6 +93,10 @@ Usage: docker/bash.sh [-i|--interactive] [--net=host] [-t|--tty]
 --dry-run
 
     Print the docker command to be run, but do not execute it.
+
+--build-dir BUILD_DIR
+
+    The build directory of TVM. This is appended to LD_LIBRARY_PATH
 
 --env
 
@@ -184,6 +194,11 @@ while (( $# )); do
             eval $break_joined_flag
             ;;
 
+        --cpus)
+            DOCKER_FLAGS+=(--cpus "$2")
+            shift 2
+            ;;
+
         --net=host)
             USE_NET_HOST=true
             shift
@@ -254,6 +269,11 @@ while (( $# )); do
         --repo-mount-point=?*)
             REPO_MOUNT_POINT="${1#*=}"
             shift
+            ;;
+
+        --build-dir)
+            DOCKER_ENV+=( --env LD_LIBRARY_PATH=${REPO_MOUNT_POINT}/${2})
+            shift 2
             ;;
 
         --)
@@ -337,11 +357,17 @@ DOCKER_ENV+=( --env CI_BUILD_HOME="${REPO_MOUNT_POINT}"
               --env CI_IMAGE_NAME="${DOCKER_IMAGE_NAME}"
             )
 
-# Remove the container once it finishes running (--rm) and share the
-# PID namespace (--pid=host).  The process inside does not have pid 1
-# and SIGKILL is propagated to the process inside, allowing jenkins to
-# kill it if needed.
-DOCKER_FLAGS+=( --rm --pid=host)
+# Remove the container once it finishes running (--rm).
+DOCKER_FLAGS+=(--rm)
+
+# Share the PID namespace (--pid=host).  The process inside does not
+# have pid 1 and SIGKILL is propagated to the process inside, allowing
+# jenkins to kill it if needed.  This is only necessary for docker
+# daemons running as root.
+if [ -z "${DOCKER_IS_ROOTLESS}" ]; then
+    DOCKER_FLAGS+=(--pid=host)
+fi
+
 
 # Expose services running in container to the host.
 if $USE_NET_HOST; then
@@ -460,6 +486,16 @@ if [ -f "${REPO_DIR}/.git" ]; then
     fi
 fi
 
+# If the docker daemon is running as root, use the TVM-provided
+# "with_the_same_user" script to update the PID.  When using rootless
+# docker, this step is unnecessary.
+if [ -z "${DOCKER_IS_ROOTLESS}" ]; then
+    COMMAND=(
+        bash --login /docker/with_the_same_user
+        ${COMMAND[@]+"${COMMAND[@]}"}
+    )
+fi
+
 # Print arguments.
 echo "REPO_DIR: ${REPO_DIR}"
 echo "DOCKER CONTAINER NAME: ${DOCKER_IMAGE_NAME}"
@@ -473,7 +509,6 @@ DOCKER_CMD=(${DOCKER_BINARY} run
             ${DOCKER_MOUNT[@]+"${DOCKER_MOUNT[@]}"}
             ${DOCKER_DEVICES[@]+"${DOCKER_DEVICES[@]}"}
             "${DOCKER_IMAGE_NAME}"
-            bash --login /docker/with_the_same_user
             ${COMMAND[@]+"${COMMAND[@]}"}
            )
 

@@ -503,7 +503,7 @@ in scope in its value to allow for recursively defined functions
 The value of a :code:`let` binding is the value of the final expression
 after evaluating the bindings it depends on. For example, in the
 following example the entire expression evaluates to a tensor
-of shape :code:`(10, 10)` where all elements are 2:
+of shape :code:`(10, 10)` where all elements are 1:
 
 .. code-block::
 
@@ -540,9 +540,7 @@ the graph node will only be evaluated once by the compiled program.
 These bindings allow for a style of programming that corresponds to that already
 employed by NNVM and other dataflow graph-based input formats. The fact that the variables
 are not scoped offers some flexibility in evaluation order compared to :code:`let`
-bindings, though this can also introduce some ambiguity in programs (the
-:ref:`developer introduction to the Relay IR<relay-dev-intro>` includes more detailed discussion
-of this nuance).
+bindings, though this can also introduce some ambiguity in programs.
 
 *Note: Graph bindings are not currently parsed by the text format.*
 

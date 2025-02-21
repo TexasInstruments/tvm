@@ -33,11 +33,39 @@
 #include <utility>
 #include <vector>
 
+#include "../../tir/transforms/ir_utils.h"
 #include "literal/cuda_half_t.h"
+#include "literal/cuda_int8_t.h"
 #include "ptx.h"
 
 namespace tvm {
 namespace codegen {
+
+std::string GetFP8Type(DataType type) {
+  std::stringstream stream;
+  int32_t lanes = type.lanes();
+  std::string vec;
+  if (type.is_scalar()) {
+    vec = "";
+  } else if (lanes == 2) {
+    vec = "x2";
+  } else if (lanes == 4) {
+    vec = "x4";
+  } else {
+    LOG(FATAL) << "Only support scalar and vector types of width (2, 4, 8) for FP8";
+  }
+  stream << "__nv_fp8";
+  std::string suffix;
+  if (type.code() == DataType::kE4M3Float) {
+    suffix = "_e4m3";
+  } else if (type.code() == DataType::kE5M2Float) {
+    suffix = "_e5m2";
+  } else {
+    LOG(FATAL) << "Unsupported FP8 type in CUDA codegen";
+  }
+  stream << vec << suffix;
+  return stream.str();
+}
 
 CodeGenCUDA::CodeGenCUDA() { restrict_keyword_ = "__restrict__"; }
 
@@ -48,7 +76,7 @@ void CodeGenCUDA::Init(bool output_ssa) {
   ICHECK_EQ(vid_global_barrier_state_, runtime::symbol::tvm_global_barrier_state);
 }
 
-void CodeGenCUDA::PrintFuncPrefix(std::ostream& os) { os << "extern \"C\" __global__ void"; }
+void CodeGenCUDA::PrintFuncPrefix(std::ostream& os) { os << "extern \"C\" __global__ "; }
 
 class ThreadIdxExtractor : public tir::StmtVisitor {
  private:
@@ -74,7 +102,7 @@ class ThreadIdxExtractor : public tir::StmtVisitor {
   PrimExpr threadIdx_z_ext = Integer(1);
 };
 
-void CodeGenCUDA::PrintExtraAttrs(const PrimFunc& f) {
+void CodeGenCUDA::PrintExtraAttrs(const PrimFunc& f, std::ostream& os) {
   ThreadIdxExtractor extractor;
   extractor(f->body);
   arith::Analyzer analyzer;
@@ -85,7 +113,7 @@ void CodeGenCUDA::PrintExtraAttrs(const PrimFunc& f) {
       // unable to extract the number of threads per block, hence directly return
       return;
     }
-    stream << " __launch_bounds__(" << threadIdx_ext_int->value << ")";
+    os << " __launch_bounds__(" << threadIdx_ext_int->value << ")";
   }
 }
 
@@ -116,6 +144,13 @@ std::string CodeGenCUDA::Finish() {
     decl_stream << _cuda_bfloat16_util;
   }
 
+  if (enable_fp8_) {
+    decl_stream << "#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 890)\n";
+    decl_stream << "#include <cuda_fp8.h>\n";
+    decl_stream << "#endif\n\n";
+  }
+  declare_vector_type_extensions(decl_stream, enable_fp16_, enable_fp8_);
+
   if (enable_warp_shuffle_) {
     decl_stream << _cuda_warp_intrinsic_util;
   }
@@ -123,6 +158,7 @@ std::string CodeGenCUDA::Finish() {
   if (enable_int8_) {
     decl_stream << "#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 610)\n";
     decl_stream << "#include <sm_61_intrinsics.h>\n";
+    decl_stream << _cuda_int8_t_def;
     decl_stream << "#endif\n";
   }
 
@@ -132,6 +168,18 @@ std::string CodeGenCUDA::Finish() {
 
   if (need_mma_h_) {
     decl_stream << "#include <mma.h>\n";
+  }
+
+  if (need_cast_smem_ptr_to_int_) {
+    decl_stream << "__forceinline__ __device__ unsigned int\n";
+    decl_stream << "cast_smem_ptr_to_int(const void* const smem_ptr)\n";
+    decl_stream << "{\n";
+    decl_stream << "  unsigned int smem_int;\n";
+    decl_stream << "  asm volatile (\"{ .reg .u64 smem_int; cvta.to.shared.u64 smem_int, %1; "
+                   "cvt.u32.u64 %0, smem_int; }\"\n";
+    decl_stream << "    : \"=r\"(smem_int) : \"l\"(smem_ptr));\n";
+    decl_stream << "  return smem_int;\n";
+    decl_stream << "}\n";
   }
 
   decl_stream << "\n#if (((__CUDACC_VER_MAJOR__ == 11) && (__CUDACC_VER_MINOR__ >= 4)) || \\\n";
@@ -193,17 +241,12 @@ void CodeGenCUDA::PrintType(DataType t, std::ostream& os) {  // NOLINT(*)
         if (t.is_scalar()) {
           os << "half";
         } else if (lanes <= 8) {
-          // Emit CUDA code to access fp16 vector elements.
-          //
-          // half4 is stored as uint2
-          //
-          // h4.x is emitted as *(half2*)(&(u2.x)).x
-          // h4.y is emitted as *(half2*)(&(u2.x)).y
-          // h4.z is emitted as *(half2*)(&(u2.y)).x
-          // h4.w is emitted as *(half2*)(&(u2.y)).y
-          //
-          ICHECK_EQ(lanes % 2, 0) << "only support even lane for half type";
-          os << "uint" << lanes / 2;
+          ICHECK_EQ(lanes % 2, 0) << "Only support an even number of lanes for half type";
+          if (lanes <= 4) {
+            os << "half" << lanes;
+          } else {
+            os << "uint" << lanes / 2;
+          }
         } else {
           fail = true;
         }
@@ -249,6 +292,14 @@ void CodeGenCUDA::PrintType(DataType t, std::ostream& os) {  // NOLINT(*)
       fail = true;
     }
     if (!fail) return;
+  } else if (t.is_float8()) {
+    enable_fp8_ = true;
+    if (t.lanes() <= 4) {
+      os << GetFP8Type(t);
+    } else {
+      os << "uint" << t.lanes() / 4;
+    }
+    return;
   } else if (t == DataType::Bool()) {
     os << "bool";
     return;
@@ -407,9 +458,14 @@ void CodeGenCUDA::PrintType(DataType t, std::ostream& os) {  // NOLINT(*)
   LOG(FATAL) << "Cannot convert type " << t << " to CUDA type";
 }
 
+void CodeGenCUDA::PrintVecConstructor(DataType t, std::ostream& os) {
+  os << "make_";
+  PrintType(t, os);
+}
+
 void CodeGenCUDA::PrintVecBinaryOp(const std::string& op, DataType t, PrimExpr lhs, PrimExpr rhs,
                                    std::ostream& os) {  // NOLINT(*)
-  // Delcare the result.
+  // Declare the result.
   std::string sret = name_supply_->FreshName("_");
   this->PrintIndent();
   this->PrintType(t, stream);
@@ -460,7 +516,11 @@ void CodeGenCUDA::PrintVecElemLoad(const std::string& vec, DataType t, int i,
       os << "((" << type_name << ")(" << ac << " >> " << i % 4 * 8 << "))";
     }
   } else if (t.is_float16()) {
-    os << "((half2*)(&(" << vec << "." << access[i / 2] << ")))->" << access[i % 2];
+    if (t.lanes() <= 4) {
+      os << vec << "." << access[i];
+    } else {
+      os << "((half2*)(&(" << vec << "." << access[i / 2] << ")))->" << access[i % 2];
+    }
   } else if (t.is_bfloat16()) {
     os << "((nv_bfloat162*)(&(" << vec << "." << access[i / 2] << ")))->" << access[i % 2];
   } else if (t.lanes() > 4 && t.lanes() <= 8) {
@@ -506,8 +566,13 @@ void CodeGenCUDA::PrintVecElemStore(const std::string& vec, DataType t, int i,
       stream << "(" << value << " << " << i % 4 * 8 << ");\n";
     }
   } else if (t.is_float16()) {
-    stream << "((half2*)(&(" << vec << "." << access[i / 2] << ")))->" << access[i % 2] << " = "
-           << value << ";\n";
+    if (t.lanes() <= 4) {
+      stream << vec << "." << access[i] << " = " << value << ";\n";
+    } else {
+      stream << "((half2*)(&(" << vec << "." << access[i / 2] << ")))->" << access[i % 2] << " = "
+             << value << ";\n";
+    }
+
   } else if (t.is_bfloat16()) {
     stream << "((nv_bfloat162*)(&(" << vec << "." << access[i / 2] << ")))->" << access[i % 2]
            << " = " << value << ";\n";
@@ -611,6 +676,16 @@ void CodeGenCUDA::VisitExpr_(const CastNode* op, std::ostream& os) {
   // Emit simple C-style type conversion.
   if (from_ty.is_scalar()) return CodeGenC::VisitExpr_(op, os);
 
+  if (target_ty.code() == DataType::kE4M3Float || target_ty.code() == DataType::kE5M2Float ||
+      from_ty.code() == DataType::kE4M3Float || from_ty.code() == DataType::kE5M2Float) {
+    std::ostringstream val;
+    val << "(";
+    PrintType(target_ty, val);
+    val << ")(" << PrintExpr(op->value) << ")";
+    os << val.str();
+    return;
+  }
+
   // We could emit make_float4 like calls, but the emitted code looks
   // too compact to read. Emit this as vectorized unary ops.
   std::string sret = name_supply_->FreshName("_");
@@ -635,7 +710,7 @@ void CodeGenCUDA::VisitExpr_(const CastNode* op, std::ostream& os) {
 void CodeGenCUDA::PrintCallExtern(Type ret_type, String global_symbol, const Array<PrimExpr>& args,
                                   bool skip_first_arg, std::ostream& os) {  // NOLINT(*)
   DataType ret_dtype = GetRuntimeDataType(ret_type);
-  if (ret_dtype.is_vector()) {
+  if (ret_dtype.is_fixed_length_vector()) {
     //
     // Emit an unsupported vector call
     //
@@ -687,8 +762,8 @@ void CodeGenCUDA::PrintCallExtern(Type ret_type, String global_symbol, const Arr
 }
 
 void CodeGenCUDA::VisitExpr_(const CallNode* op, std::ostream& os) {
-  if (auto* ptr_op = op->op.as<OpNode>()) {
-    Op call_op = GetRef<Op>(ptr_op);
+  if (auto opt_call_opt = op->op.as<Op>()) {
+    Op call_op = opt_call_opt.value();
     // This is only for backward compatibility with __shfl_{up/down}.
     // A macro will be used to replace *_sync calls to legacy ones.
     if (op_need_warp_shuffle_.get(call_op, false)) {
@@ -855,6 +930,7 @@ void CodeGenCUDA::VisitExpr_(const CallNode* op, std::ostream& os) {
       os << "}\n";
     } else {
       std::string smem_elem_offset = this->PrintExpr(op->args[6]);
+      need_cast_smem_ptr_to_int_ = true;
       this->stream << PrintLoadMatrixAssembly(trans, num, type, local_ptr, local_elem_offset,
                                               smem_ptr, smem_elem_offset);
     }
@@ -880,8 +956,9 @@ void CodeGenCUDA::VisitExpr_(const CallNode* op, std::ostream& os) {
         runtime::Registry::Get("tir.index_map.shared_16x16_to_ldmatrix_32x8_layout");
     ICHECK(index_map_func);
 
+    arith::Analyzer analyzer;
     auto inverse_index_map =
-        IndexMap::FromFunc(2, *index_map_func).Inverse({Range(0, m), Range(0, n)});
+        IndexMap::FromFunc(2, *index_map_func).Inverse({Range(0, m), Range(0, n)}, &analyzer);
     auto indices_16x16 = inverse_index_map->final_indices;
 
     // "//" and "%" in the index map are translated to FloorDiv/Mod, but the plain Div/Mod are fine.
@@ -921,6 +998,7 @@ void CodeGenCUDA::VisitExpr_(const CallNode* op, std::ostream& os) {
     std::string src = this->PrintExpr(op->args[2]);
     std::string src_offset = this->PrintExpr(op->args[3]);
     std::string size = this->PrintExpr(op->args[4]);
+    need_cast_smem_ptr_to_int_ = true;
     // use size of argument list to indicate whether or not to use predicated cp.async
     if (op->args.size() == 5) {
       this->stream << PrintCpAsyncAssembly(dst, dst_offset, src, src_offset, size);
@@ -928,11 +1006,68 @@ void CodeGenCUDA::VisitExpr_(const CallNode* op, std::ostream& os) {
       this->stream << PrintPredicatedCpAsyncAssembly(dst, dst_offset, src, src_offset, size,
                                                      this->PrintExpr(op->args[5]));
     }
+  } else if (op->op.same_as(builtin::ptx_cp_async_bulk())) {
+    need_cast_smem_ptr_to_int_ = true;
+    std::string dst = this->PrintExpr(op->args[0]);
+    std::string dst_offset = this->PrintExpr(op->args[1]);
+    std::string src = this->PrintExpr(op->args[2]);
+    std::string src_offset = this->PrintExpr(op->args[3]);
+    std::string size = this->PrintExpr(op->args[4]);
+    int barrier_id = Downcast<IntImm>(op->args[5])->value;
+    CHECK(barrier_id < barrier_count_);
+    std::string barrier = barrier_name_ + "[" + std::to_string(barrier_id) + "]";
+    this->stream << PrintCpAsyncBulkAsm(dst, dst_offset, src, src_offset, size, barrier);
   } else if (op->op.same_as(builtin::ptx_commit_group())) {
     this->stream << "__asm__ __volatile__(\"cp.async.commit_group;\");\n\n";
   } else if (op->op.same_as(builtin::ptx_wait_group())) {
-    std::string N = this->PrintExpr(op->args[0]);
-    this->stream << "__asm__ __volatile__(\"cp.async.wait_group " + N + ";\");\n\n";
+    int n = Downcast<IntImm>(op->args[0])->value;
+    this->stream << "__asm__ __volatile__(\"cp.async.wait_group " << n << ";\");\n\n";
+  } else if (op->op.same_as(builtin::ptx_cp_async_barrier())) {
+    need_cast_smem_ptr_to_int_ = true;
+    int barrier_id = Downcast<IntImm>(op->args[0])->value;
+    CHECK(barrier_id < barrier_count_);
+    std::string barrier = barrier_name_ + "[" + std::to_string(barrier_id) + "]";
+    this->stream << PrintCpAsyncBarrierAsm(barrier);
+  } else if (op->op.same_as(builtin::ptx_init_barrier_thread_count())) {
+    need_cast_smem_ptr_to_int_ = true;
+    int barrier_id = Downcast<IntImm>(op->args[0])->value;
+    CHECK(barrier_id < barrier_count_);
+    std::string barrier = barrier_name_ + "[" + std::to_string(barrier_id) + "]";
+    std::string thread_count = this->PrintExpr(op->args[1]);
+    this->stream << PrintInitBarrierThreadCountAsm(barrier, thread_count);
+  } else if (op->op.same_as(builtin::ptx_arrive_barrier())) {
+    need_cast_smem_ptr_to_int_ = true;
+    int barrier_id = Downcast<IntImm>(op->args[0])->value;
+    CHECK(barrier_id < barrier_count_);
+    std::string barrier = barrier_name_ + "[" + std::to_string(barrier_id) + "]";
+    this->stream << PrintArriveBarrierAsm(barrier);
+  } else if (op->op.same_as(builtin::ptx_arrive_barrier_expect_tx())) {
+    need_cast_smem_ptr_to_int_ = true;
+    int barrier_id = Downcast<IntImm>(op->args[0])->value;
+    CHECK(barrier_id < barrier_count_);
+    std::string barrier = barrier_name_ + "[" + std::to_string(barrier_id) + "]";
+    std::string byte_count = this->PrintExpr(op->args[1]);
+    this->stream << PrintArriveBarrierExpectTxAsm(barrier, byte_count);
+  } else if (op->op.same_as(builtin::ptx_wait_barrier())) {
+    need_cast_smem_ptr_to_int_ = true;
+    int barrier_id = Downcast<IntImm>(op->args[0])->value;
+    CHECK(barrier_id < barrier_count_);
+    std::string barrier = barrier_name_ + "[" + std::to_string(barrier_id) + "]";
+    this->stream << PrintWaitBarrierAsm(barrier);
+  } else if (op->op.same_as(builtin::create_barriers())) {
+    CHECK_EQ(barrier_count_, -1);
+    int barrier_count = Downcast<IntImm>(op->args[0])->value;
+    // pad barrier alignment to avoid runtime alignment errors
+    CHECK_EQ(barrier_alignment_bytes_ % sizeof(uint64_t), 0);
+    int barrier_alignment_count = barrier_alignment_bytes_ / sizeof(uint64_t);
+    if (barrier_count % barrier_alignment_count != 0) {
+      barrier_count = ((barrier_count / barrier_alignment_count) + 1) * barrier_alignment_count;
+    }
+    barrier_count_ = barrier_count;
+    this->stream << "__shared__ __align__(" << barrier_alignment_bytes_ << ") uint64_t "
+                 << barrier_name_ << "[" << barrier_count << "];\n";
+    this->stream << "for (int i = 0; i < " << barrier_count << "; ++i) { " << barrier_name_
+                 << "[i] = 0; }\n";
   } else if (op->op.same_as(builtin::ptx_ldg32())) {
     /*
     asm volatile (
@@ -1065,20 +1200,21 @@ void CodeGenCUDA::VisitStmt_(const EvaluateNode* op) {
 }
 
 void CodeGenCUDA::VisitExpr_(const RampNode* op, std::ostream& os) {
-  CHECK_LE(op->lanes, 4) << "ValueError: Ramp of more than 4 lanes is not allowed.";
-  os << "(make_";
-  PrintType(op->dtype, os);
+  int lanes = op->dtype.lanes();
+  CHECK_LE(lanes, 4) << "ValueError: Ramp of more than 4 lanes is not allowed.";
+  PrintVecConstructor(op->dtype, os);
   os << "(";
-  for (int i = 0; i < op->lanes; i++) {
+  for (int i = 0; i < lanes; i++) {
     os << "(" << PrintExpr(op->base) << ")"
        << "+(" << PrintExpr(op->stride) << "*" << i << ")";
-    if (i != op->lanes - 1) os << ", ";
+    if (i != lanes - 1) os << ", ";
   }
-  os << "))";
+  os << ")";
 }
 
 void CodeGenCUDA::VisitExpr_(const BroadcastNode* op, std::ostream& os) {  // NOLINT(*)
-  if ((op->dtype.is_int() || op->dtype.is_uint()) && op->dtype.bits() == 8 && op->lanes == 4) {
+  int lanes = op->dtype.lanes();
+  if ((op->dtype.is_int() || op->dtype.is_uint()) && op->dtype.bits() == 8 && lanes == 4) {
     // make_int8x4
     const int64_t* p = as_const_int(op->value);
     ICHECK(p);
@@ -1094,12 +1230,18 @@ void CodeGenCUDA::VisitExpr_(const BroadcastNode* op, std::ostream& os) {  // NO
 
   if (op->dtype.is_float16()) {
     std::string v = PrintExpr(op->value);
-    os << "make_";
-    PrintType(op->dtype, os);
+    PrintVecConstructor(op->dtype, os);
     os << '(';
-    for (int i = 0; i < op->lanes / 2; ++i) {
-      if (i != 0) os << ", ";
-      os << "__pack_half2(" << v << ", " << v << ")";
+    if (lanes <= 4) {
+      for (int i = 0; i < lanes / 2; ++i) {
+        if (i != 0) os << ", ";
+        os << v << ", " << v;
+      }
+    } else {
+      for (int i = 0; i < lanes / 2; ++i) {
+        if (i != 0) os << ", ";
+        os << "__pack_half2(" << v << ", " << v << ")";
+      }
     }
     os << ')';
     return;
@@ -1107,14 +1249,28 @@ void CodeGenCUDA::VisitExpr_(const BroadcastNode* op, std::ostream& os) {  // NO
 
   if (op->dtype.is_bfloat16()) {
     std::string v = PrintExpr(op->value);
-    os << "make_";
-    PrintType(op->dtype, os);
+    PrintVecConstructor(op->dtype, os);
     os << '(';
-    for (int i = 0; i < op->lanes / 2; ++i) {
+    for (int i = 0; i < lanes / 2; ++i) {
       if (i != 0) os << ", ";
       os << "__pack_nv_bfloat162(" << v << ", " << v << ")";
     }
     os << ')';
+    return;
+  }
+
+  if (op->dtype.is_float8()) {
+    int lanes = op->dtype.lanes();
+    ICHECK(lanes == 1 || lanes == 2 || lanes == 4);
+    std::string v = PrintExpr(op->value);
+    // Implicit conversion from float back to fp8
+    PrintType(op->dtype, os);
+    os << "(make_float" << lanes << "(";
+    for (int i = 0; i < lanes; ++i) {
+      if (i != 0) os << ", ";
+      os << "static_cast<float>(" << v << ")";
+    }
+    os << "))";
     return;
   }
 
@@ -1124,7 +1280,7 @@ void CodeGenCUDA::VisitExpr_(const BroadcastNode* op, std::ostream& os) {  // NO
     ICHECK(p);
     int64_t v = *p & 0xF;
 
-    if (op->lanes == 4) {
+    if (lanes == 4) {
       v = (v << 12) | (v << 8) | (v << 4) | v;
       if (op->dtype.is_uint()) {
         os << "(uint16_t)" << v;
@@ -1133,17 +1289,16 @@ void CodeGenCUDA::VisitExpr_(const BroadcastNode* op, std::ostream& os) {  // NO
       }
     } else {
       v = (v << 28) | (v << 24) | (v << 20) | (v << 16) | (v << 12) | (v << 8) | (v << 4) | v;
-      if (op->lanes == 8) {
+      if (lanes == 8) {
         if (op->dtype.is_uint()) {
           os << "(uint)" << v;
         } else {
           os << "(int)" << v;
         }
-      } else if (op->lanes == 16 || op->lanes == 32) {
-        os << "make_";
-        PrintType(op->dtype, os);
+      } else if (lanes == 16 || lanes == 32) {
+        PrintVecConstructor(op->dtype, os);
         os << '(';
-        for (int i = 0; i < op->lanes / 8; ++i) {
+        for (int i = 0; i < lanes / 8; ++i) {
           if (i != 0) os << ", ";
           if (op->dtype.is_uint()) {
             os << "(uint)" << v;
@@ -1163,37 +1318,18 @@ void CodeGenCUDA::VisitExpr_(const BroadcastNode* op, std::ostream& os) {  // NO
   }
 
   std::string v = PrintExpr(op->value);
-  os << "make_";
-  PrintType(op->dtype, os);
+  PrintVecConstructor(op->dtype, os);
   os << '(';
-  for (int i = 0; i < op->lanes; ++i) {
+  for (int i = 0; i < lanes; ++i) {
     if (i != 0) os << ", ";
     os << v;
   }
   os << ')';
 }
 
-void CodeGenCUDA::VisitExpr_(const ShuffleNode* op, std::ostream& os) {
-  std::vector<std::string> to_shuffle(op->vectors.size());
-  for (int i = 0, e = op->vectors.size(); i < e; ++i) {
-    ICHECK(op->vectors[i].dtype().lanes() == 1) << "Only scalars can be shuffled in CUDA!";
-    to_shuffle[i] = PrintExpr(op->vectors[i]);
-  }
-  os << "make_";
-  PrintType(op->dtype, os);
-  os << '(';
-  for (int i = 0, e = op->indices.size(); i < e; ++i) {
-    const int64_t* val = as_const_int(op->indices[i]);
-    ICHECK(val && *val >= 0 && (int)*val < (int)to_shuffle.size());
-    if (i != 0) os << ", ";
-    os << to_shuffle[*val];
-  }
-  os << ')';
-}
-
 void CodeGenCUDA::VisitExpr_(const SelectNode* op, std::ostream& os) {
   // Non-vector cases.
-  if (!op->dtype.is_vector()) {
+  if (!op->dtype.is_fixed_length_vector()) {
     CodeGenC::VisitExpr_(op, os);
     return;
   }
@@ -1234,6 +1370,12 @@ inline void PrintConst(const FloatImmNode* op, std::ostream& os, CodeGenCUDA* p)
   // Type code is kBFloat
   if (op->dtype.is_bfloat16()) {
     os << "__float2bfloat16_rn";
+    os << '(' << std::scientific << op->value << 'f' << ')';
+    return;
+  }
+  // Type code is kE5M2Float or kE4M4Float
+  if (op->dtype.is_float8()) {
+    p->PrintType(op->dtype, os);
     os << '(' << std::scientific << op->value << 'f' << ')';
     return;
   }
@@ -1333,23 +1475,11 @@ int32_t CodeGenCUDA::GetWmmaFragmentSize(const std::string& scope, const VarNode
   ICHECK(fragment_shapes.count(variable))
       << "Cannot find shape of the wmma fragment " << variable->name_hint;
   std::string shape_str = fragment_shapes.at(variable);
-  size_t m, n, k;
-  size_t last_pos = 0, pos = 0;
-  pos = shape_str.find(", ", last_pos);
-  m = tvm::codegen::stoi(shape_str.substr(last_pos, pos - last_pos));
-  last_pos = pos + 2;
-  pos = shape_str.find(", ", last_pos);
-  n = tvm::codegen::stoi(shape_str.substr(last_pos, pos - last_pos));
-  last_pos = pos + 2;
-  k = tvm::codegen::stoi(shape_str.substr(last_pos, shape_str.length() - last_pos));
-  if (scope == "wmma.matrix_a") {
-    return size / m / k;
-  } else if (scope == "wmma.matrix_b") {
-    return size / n / k;
-  } else if (scope == "wmma.accumulator") {
-    return size / m / n;
-  }
-  return 0;
+  std::pair<int32_t, int32_t> dim = GetWmmaFragmentDimSize(shape_str, scope);
+  if (dim.first * dim.second != 0)
+    return size / dim.first / dim.second;
+  else
+    return 0;
 }
 
 void CodeGenCUDA::HandleVolatileLoads(const std::string& value, const BufferLoadNode* op,
@@ -1381,27 +1511,20 @@ void CodeGenCUDA::PrintVecElemLoadExpr(DataType t, int i, const std::string& val
 
   if (t.is_float16()) {
     if (i == 0) {
-      os << "make_";
-      PrintType(t, os);
+      PrintVecConstructor(t, os);
       os << '(';
     }
-    if (i % 2 == 0) {
-      os << "__pack_half2(" << value;
+    if (i == t.lanes() - 1) {
+      os << value << ")";
     } else {
-      os << "," << value << ")";
-      if (i != t.lanes() - 1) {
-        os << ",";
-      } else {
-        os << ")";
-      }
+      os << value << ",";
     }
     return;
   }
 
   if (t.is_bfloat16()) {
     if (i == 0) {
-      os << "make_";
-      PrintType(t, os);
+      PrintVecConstructor(t, os);
       os << '(';
     }
     if (i % 2 == 0) {
@@ -1418,8 +1541,7 @@ void CodeGenCUDA::PrintVecElemLoadExpr(DataType t, int i, const std::string& val
   }
 
   if (i == 0) {
-    os << "make_";
-    PrintType(t, os);
+    PrintVecConstructor(t, os);
     os << "(";
   }
   os << value;

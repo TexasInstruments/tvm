@@ -50,11 +50,27 @@ class ThreadSyncPlanner : public StorageAccessVisitor {
   }
   // Plan the sync
   std::vector<AccessEntry> Summarize(std::vector<StmtEntry> seq, const ForNode* loop) final {
+    // Redirect all "shared.dyn" buffer access to the same buffer var
+    // so that the accesses can be planned together.
+    Var shared_dyn_buf;
+    for (StmtEntry& entry : seq) {
+      for (AccessEntry& access : entry.access) {
+        if (access.scope.rank == StorageRank::kShared && access.scope.tag == ".dyn" &&
+            access.buffer.defined()) {
+          if (!shared_dyn_buf.defined()) {
+            shared_dyn_buf = access.buffer;
+          } else {
+            access.buffer = shared_dyn_buf;
+          }
+        }
+      }
+    }
+
     // Unsynced reads and writes
     std::vector<AccessEntry> reads;
     std::vector<AccessEntry> writes;
     // if it is a loop, rotate two times to consider effect of loop.
-    // simulation based approach to find dependenceies
+    // simulation based approach to find dependencies
     for (size_t i = 0; i < seq.size(); ++i) {
       const StmtEntry& s = seq[i];
       // check if sync before statement is needed.
@@ -353,7 +369,7 @@ class ThreadSyncInserter : public StmtExprMutator {
       PrimExpr expr = StmtExprMutator::VisitExpr_(op);
       op = expr.as<CallNode>();
       ICHECK_EQ(op->args.size(), 5U);
-      Var buffer_var(GetRef<Var>(op->args[1].as<VarNode>()));
+      Var buffer_var(Downcast<Var>(op->args[1]));
       const IntImmNode* flag = op->args[4].as<IntImmNode>();
       if ((flag->value & 1) && sync_scope_.rank == StorageRank::kGlobal &&
           GetScope(buffer_var).rank == StorageRank::kGlobal) {
@@ -424,7 +440,7 @@ class ThreadSyncInserter : public StmtExprMutator {
   StorageScope sync_scope_;
   const std::unordered_set<const Object*>& syncs_;
   // The read write statistics of storage
-  std::unordered_map<Var, Entry, ObjectPtrHash, ObjectPtrEqual> rw_stats_;
+  std::unordered_map<Var, Entry> rw_stats_;
   // The statistics for global barrier
   bool in_thread_env_{false};
   // memorized results

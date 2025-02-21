@@ -41,7 +41,7 @@
 #include <utility>
 #include <vector>
 
-#include "../../../runtime/vm/naive_allocator.h"
+#include "../../../runtime/memory/naive_allocator.h"
 #include "../../../runtime/vm/profiler/vm.h"
 #include "../../transforms/pass_utils.h"
 #include "../te_compiler.h"
@@ -51,7 +51,8 @@ namespace tvm {
 namespace relay {
 namespace vm {
 
-using namespace tvm::runtime;
+using tvm::runtime::ModulePropertyMask;
+using tvm::runtime::NDArray;
 using namespace tvm::runtime::vm;
 using namespace relay::transform;
 
@@ -89,7 +90,7 @@ class VMCompiler : public runtime::ModuleNode {
   VMCompiler() = default;
   virtual ~VMCompiler() = default;
 
-  virtual PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& sptr_to_self);
+  virtual PackedFunc GetFunction(const String& name, const ObjectPtr<Object>& sptr_to_self);
 
   const char* type_key() const final { return "VMCompiler"; }
 

@@ -56,7 +56,7 @@ using tvm::transform::Sequential;
  */
 TVM_DLL Pass CreatePrimFuncPass(
     const runtime::TypedPackedFunc<PrimFunc(PrimFunc, IRModule, PassContext)>& pass_func,
-    int opt_level, String name, tvm::Array<String> required);
+    int opt_level, String name, tvm::Array<String> required, bool traceable = false);
 
 /*!
  * \brief Inject prefetch instructions into stmt.
@@ -264,11 +264,49 @@ TVM_DLL Pass LowerCustomDatatypes();
 TVM_DLL Pass DecorateDeviceScope();
 
 /*!
+ * \brief Annotate locations that should be run on the device
+ *
+ * Insert `AttrStmt` nodes specifying a target on which regions within
+ * the PrimFunc should be executed.  Only modifies functions that have
+ * a `tvm::attr::kTarget` attribute, and where that target defines a
+ * host.
+ *
+ * \return The pass.
+ */
+TVM_DLL Pass AnnotateDeviceRegions();
+
+/*!
  * \brief Split the function into a host function and device functions.
+ *
+ * The resulting host-side function will keep the same
+ * `tvm::attr::kTarget` attribute (e.g. `T.target("cuda",
+ * host=T.target("llvm"))`).  This ensures that `MakePackedAPI` knows
+ * which device type should be used for the input buffers.
+ *
+ * The resulting device-side function will
+ * have the host stripped from its target attribute
+ * (e.g. `T.target("cuda")`).
  *
  * \return The pass.
  */
 TVM_DLL Pass SplitHostDevice();
+
+/*!
+ * \brief Lower cross-device function calls.
+ *
+ * Prior to this pass, host to device calls are represented as
+ * subroutine calls, with environment parameters (e.g. env_thread)
+ * specified internally.  The device function is an internal function,
+ * without a `tvm::attr::kGlobalSymbol` attribute.
+ *
+ * After this pass, host to device calls are represented as
+ * tvm_call_packed built-in.  The device function is an
+ * externally-exposed function, with a non-empty
+ * `tvm::attr::kGlobalSymbol` attribute.
+ *
+ * \return The pass.
+ */
+TVM_DLL Pass LowerDeviceKernelLaunch();
 
 /*!
  * \brief skip assert stmt.
@@ -350,6 +388,14 @@ TVM_DLL Pass CombineContextCall();
 TVM_DLL Pass NarrowDataType(int target_bits);
 
 /*!
+ * \brief Force to narrow down indexing expressions and integer buffers to int32 dtype.
+ *
+ * \return The pass.
+ * \note This pass should not be used in default cases.
+ */
+TVM_DLL Pass ForceNarrowIndexToInt32();
+
+/*!
  * \brief Legalize bf16 compute Ops. Add a cast to fp32
  *   before Ops, then add a cast back to bf16.
  * \return The pass.
@@ -357,10 +403,33 @@ TVM_DLL Pass NarrowDataType(int target_bits);
 TVM_DLL Pass BF16ComputeLegalize();
 
 /*!
+ * \brief Legalize fp8 compute Ops. Add a cast to fp16/fp32
+ *   before Ops, then add a cast back to fp8.
+ * \param promote_dtype_str The data type used for type promotion, defaults to float16
+ * \note Must be run after BindTarget, as it relies on target attributes for PrimFuncs
+ * \return The pass.
+ */
+TVM_DLL Pass FP8ComputeLegalize(String promote_dtype_str = "float16");
+
+/*!
  * \brief Legalize bf16 storage types to u16.
  * \return The pass.
  */
 TVM_DLL Pass BF16StorageLegalize();
+
+/*!
+ * \brief Legalize fp8 storage types to u8.
+ * \note Must be run after BindTarget, as it relies on target attributes for PrimFuncs
+ * \return The pass.
+ */
+TVM_DLL Pass FP8StorageLegalize();
+
+/*!
+ * \brief Inline calls to private functions
+ *
+ * \return The pass.
+ */
+TVM_DLL Pass InlinePrivateFunctions();
 
 /*!
  * \brief Rewrite the pointer content type of arguments,
@@ -423,6 +492,12 @@ TVM_DLL Pass PlanAndUpdateBufferAllocationLocation();
 TVM_DLL Pass ConvertBlocksToOpaque();
 
 /*!
+ * \brief Lift the same thread bindings to their LCA loops
+ * \return The pass.
+ */
+TVM_DLL Pass LiftThreadBinding();
+
+/*!
  * \brief Compact the buffer access region by removing the buffer regions that are not accessed,
  *        i.e. narrowing the buffer shape and adjust the access region if necessary.
  *
@@ -456,10 +531,11 @@ TVM_DLL Pass ConvertBlocksToOpaque();
  *
  *  \endcode
  *
- *
+ * \param is_strict ensure the compacted shape always smaller than the original shape.
+ *   otherwise it allows to grow the shape to match actual accessed buffer regions.
  * \return The pass.
  */
-TVM_DLL Pass CompactBufferAllocation();
+TVM_DLL Pass CompactBufferAllocation(bool is_strict = true);
 
 /*!
  * This pass legalizes packed calls by wrapping their arguments into TVMValues
@@ -471,6 +547,18 @@ TVM_DLL Pass LegalizePackedCalls();
  * \return The pass.
  */
 TVM_DLL Pass LowerMatchBuffer();
+
+/*!
+ * \brief Inject permuted layout for shared memory.
+ * \return The pass.
+ */
+TVM_DLL Pass InjectPermutedLayout();
+
+/*!
+ * \brief Transform Mma scope (m16n8k8.matrixA/B/C) to local scope with layout transformation.
+ * \return The pass.
+ */
+TVM_DLL Pass TransformMmaBufferLayout();
 
 /*!
  * \brief Remove the block to ensure that the TIR can not be scheduled again.
@@ -535,9 +623,9 @@ TVM_DLL Pass InstallDebugSpans();
 TVM_DLL Pass UnifyThreadBinding();
 
 /*!
- *  A pass to merge multiple TIR-level dynamic shared memory allocations into one
+ *  A pass to merge multiple TIR-level shared memory allocations into one
  */
-TVM_DLL Pass MergeDynamicSharedMemoryAllocations();
+TVM_DLL Pass MergeSharedMemoryAllocations();
 
 /*!
  * \brief This pass is post-scheduling pass to convert all
@@ -733,6 +821,26 @@ TVM_DLL Pass ManifestSharedMemoryLocalStage();
  * \return The pass.
  */
 TVM_DLL Pass InstrumentProfileIntrinsics();
+
+/*!
+ * \brief The pass sets default thread bindings for PrimFuncs, including symbolic shape functions,
+ *  allowing their build and execution on GPU devices. It examines all the blocks within the
+ *  PrimFunc and conducts loop fusion, splitting, and reordering operations based on the loop extent
+ *  and target information, such as the maximum thread block number and maximum thread per block.
+ * \note The primary objective of this pass is not to optimize performance, but rather to
+ *  generate a valid GPU kernel for unscheduled or symbolic shape PrimFuncs. The pass is
+ *  currently only working for CUDA targets.
+ * \return The Pass.
+ */
+TVM_DLL Pass DefaultGPUSchedule();
+
+/*!
+ * \brief This pass analyzes primfunc & eliminates branch introdued due to layout specific padding.
+ *  It leverages from the buffer assumptions and use the information to eliminate the branch.
+ * \note This creates more opportunity to vectorize the code.
+ * \return The Pass.
+ */
+TVM_DLL Pass UseAssumeToReduceBranches();
 
 }  // namespace transform
 }  // namespace tir

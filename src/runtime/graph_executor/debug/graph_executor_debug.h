@@ -79,7 +79,7 @@ class GraphExecutorDebug : public GraphExecutor {
    * \param name The function which needs to be invoked.
    * \param sptr_to_self Packed function pointer.
    */
-  PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& sptr_to_self);
+  PackedFunc GetFunction(const String& name, const ObjectPtr<Object>& sptr_to_self);
 
   /*!
    * \brief Get the node index given the name of node.
@@ -121,6 +121,18 @@ class GraphExecutorDebug : public GraphExecutor {
    * \param data_out the node data.
    */
   void DebugGetNodeOutput(int index, DLTensor* data_out);
+
+  /*!
+   * \brief return output of index-th node.
+   *
+   * This method will do a partial run of the graph
+   * from begining up to the index-th node and return output of index-th node.
+   * This is costly operation and suggest to use only for debug porpose.
+   *
+   * \param index: The  index of the node.
+   *
+   */
+  NDArray DebugGetNodeOutput(int index);
 
   /*!
    * \brief Profile execution time of the module.

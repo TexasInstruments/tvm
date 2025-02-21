@@ -26,10 +26,12 @@
 #include <tvm/tir/expr_functor.h>
 
 #include <algorithm>
+#include <optional>
 
 #include "constraint_extract.h"
 #include "int_operator.h"
 #include "pattern_match.h"
+#include "scalable_expression.h"
 
 namespace tvm {
 namespace arith {
@@ -80,6 +82,16 @@ struct ConstIntBoundAnalyzer::Entry {
 
   bool operator==(const Entry& other) const {
     return min_value == other.min_value && max_value == other.max_value;
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const Entry& entry) {
+    os << "Entry[";
+    PrintBoundValue(os, entry.min_value);
+    os << ", ";
+    PrintBoundValue(os, entry.max_value);
+    os << "]";
+
+    return os;
   }
 };
 
@@ -177,6 +189,8 @@ class ConstIntBoundAnalyzer::Impl
     return Union(a, b);
   }
 
+  Entry VisitExpr_(const BroadcastNode* op) final { return VisitExpr(op->value); }
+
   Entry VisitExpr_(const CastNode* op) final {
     Entry a;
 
@@ -193,6 +207,31 @@ class ConstIntBoundAnalyzer::Impl
     return Intersect(a, b);
   }
 
+  /*!
+   * \brief Process the divisor by making assumption that divide by zero
+   * won't happen in a valid program.
+   *
+   * This is important for us to get a lot of symbolic shape bound right
+   * now that the shape n >= 0, but in cases
+   * when mod or divide of n occur, the intention is actually n > 0
+   *
+   * \param divisor The input divsor entry
+   * \return The processed entry
+   */
+  Entry AssumeNoZeroDivisor(Entry divisor) {
+    ICHECK(!divisor.is_const(0)) << "Find divide by zero";
+    // NOTE: here we make the assumption that
+    // divide by zero won't happen in a valid program
+    // this is important for us to get a lot of symbolic shape bound right
+    // where most conditions know that the shape n >= 0, but in cases
+    // when mod or divide of n occur, the intention is actually n > 0
+    if (divisor.min_value == 0) {
+      divisor.min_value = 1;
+      ICHECK_GE(divisor.max_value, 1);
+    }
+    return divisor;
+  }
+
   Entry VisitExpr_(const IntImmNode* op) final { return MakeBound(op->value, op->value); }
 
   Entry VisitExpr_(const AddNode* op) final {
@@ -201,6 +240,7 @@ class ConstIntBoundAnalyzer::Impl
     Entry ret;
     ret.min_value = InfAwareAdd(a.min_value, b.min_value);
     ret.max_value = InfAwareAdd(a.max_value, b.max_value);
+
     return ret;
   }
 
@@ -210,6 +250,7 @@ class ConstIntBoundAnalyzer::Impl
     Entry ret;
     ret.min_value = InfAwareAdd(a.min_value, -b.max_value);
     ret.max_value = InfAwareAdd(a.max_value, -b.min_value);
+
     return ret;
   }
 
@@ -221,14 +262,14 @@ class ConstIntBoundAnalyzer::Impl
 
   Entry VisitExpr_(const DivNode* op) final {
     Entry a = VisitExpr(op->a);
-    Entry b = VisitExpr(op->b);
-    ICHECK(!b.is_const(0)) << "divide by zero";
+    Entry b = AssumeNoZeroDivisor(VisitExpr(op->b));
     return HandleDivision(a, b, op->dtype, InfAwareDiv);
   }
 
   Entry VisitExpr_(const ModNode* op) final {
     Entry a = VisitExpr(op->a);
-    Entry b = VisitExpr(op->b);
+    Entry b = AssumeNoZeroDivisor(VisitExpr(op->b));
+
     if (b.min_value > 0) {
       int64_t b_max_cap = InfAwareAdd(b.max_value, -1);
       if (a.min_value >= 0) {
@@ -250,8 +291,7 @@ class ConstIntBoundAnalyzer::Impl
 
   Entry VisitExpr_(const FloorDivNode* op) final {
     Entry a = VisitExpr(op->a);
-    Entry b = VisitExpr(op->b);
-    ICHECK(!b.is_const(0)) << "floordiv by zero";
+    Entry b = AssumeNoZeroDivisor(VisitExpr(op->b));
     return HandleDivision(a, b, op->dtype, InfAwareFloorDiv);
   }
 
@@ -274,7 +314,8 @@ class ConstIntBoundAnalyzer::Impl
      * That is, min(0, b_min + 1) <= floormod(a, b) <= max(0, b_max - 1)
      */
     Entry a = VisitExpr(op->a);
-    Entry b = VisitExpr(op->b);
+    Entry b = AssumeNoZeroDivisor(VisitExpr(op->b));
+
     if (b.min_value > 0) {
       int64_t b_max_cap = InfAwareAdd(b.max_value, -1);
       if (a.min_value >= 0) {
@@ -329,6 +370,10 @@ class ConstIntBoundAnalyzer::Impl
       return VisitLeftShift(op);
     } else if (op->op.same_as(tir::builtin::bitwise_and())) {
       return VisitBitwiseAnd(op);
+    } else if (op->op.same_as(tir::builtin::vscale()) && TargetHasSVE(Target::Current())) {
+      unsigned int max_val =
+          *std::max_element(kAArch64VScaleValues.begin(), kAArch64VScaleValues.end());
+      return MakeBound(1, max_val);
     } else {
       return Everything(op->dtype);
     }
@@ -407,7 +452,7 @@ class ConstIntBoundAnalyzer::Impl
  private:
   friend class ConstIntBoundAnalyzer;
   // internal variable map
-  std::unordered_map<Var, Entry, ObjectPtrHash, ObjectPtrEqual> var_map_;
+  std::unordered_map<Var, Entry> var_map_;
   // additional bound info
   std::vector<BoundInfo> additional_info_;
   // look up table for memorization
@@ -455,7 +500,6 @@ class ConstIntBoundAnalyzer::Impl
     // at a negative value and ends at a positive one, narrow it down to
     // be closer to 0, because BinaryOpBoundary only checks end-points of
     // the domain ranges.
-
     // If the range of b contains 0, then some infinity will be involved
     if (b.min_value <= 0 && 0 <= b.max_value && dt.is_int()) {
       Entry b_neg = b.min_value < 0 ? MakeBound(b.min_value, -1) : Everything(dt);
@@ -600,6 +644,25 @@ class ConstIntBoundAnalyzer::Impl
     Entry ret;
     ret.min_value = std::max(a.min_value, b.min_value);
     ret.max_value = std::min(a.max_value, b.max_value);
+    return ret;
+  }
+  /*!
+   * \brief Flip the sign of a set.
+   * \param entry The set of values
+   */
+  static Entry Negative(Entry entry) {
+    Entry ret;
+    if (entry.max_value == kPosInf) {
+      ret.min_value = kNegInf;
+    } else {
+      ret.min_value = -entry.max_value;
+    }
+    if (entry.min_value == kNegInf) {
+      ret.max_value = kPosInf;
+    } else {
+      ret.max_value = -entry.min_value;
+    }
+
     return ret;
   }
   /*!

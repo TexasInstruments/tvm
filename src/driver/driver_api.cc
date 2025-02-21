@@ -44,6 +44,7 @@ TVM_REGISTER_PASS_CONFIG_OPTION("tir.detect_global_barrier", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.instrument_bound_checkers", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.disable_assert", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.disable_vectorize", Bool);
+TVM_REGISTER_PASS_CONFIG_OPTION("tir.enable_buffer_level_predication", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.disable_cse_tir", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.enable_debug", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.enable_equiv_terms_in_cse_tir", Bool);
@@ -52,6 +53,7 @@ TVM_REGISTER_PASS_CONFIG_OPTION("tir.is_entry_func", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.add_lower_pass", Array<Array<ObjectRef>>);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.debug_keep_trivial_loop", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.use_async_copy", Bool);
+TVM_REGISTER_PASS_CONFIG_OPTION("tir.merge_static_smem", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.instrument_lwp", Bool);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.vtcm_capacity", Integer);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.ptx_ldg32", Bool);
@@ -69,13 +71,6 @@ using tvm::transform::Pass;
 bool LLVMEnabled() {
   const runtime::PackedFunc* pf = runtime::Registry::Get("target.build.llvm");
   return pf != nullptr;
-}
-
-bool ShouldAnnotateEntryFunc(const IRModule mod) {
-  Optional<tvm::relay::Executor> executor = mod->GetAttr<tvm::relay::Executor>("executor");
-  const bool aot_executor = executor.defined() && executor.value()->name == "aot";
-  const bool single_entry_func = (mod->functions.size() == 1);
-  return single_entry_func && !aot_executor;
 }
 
 /*! \return The default host target for a given device target */
@@ -97,8 +92,8 @@ void GetBinds(const Array<ObjectRef>& args, bool compact,
   *out_binds = binds;
 
   for (const ObjectRef& x : args) {
-    if (const te::TensorNode* tensor_node = x.as<te::TensorNode>()) {
-      te::Tensor x_ref = GetRef<te::Tensor>(tensor_node);
+    if (auto tensor_node = x.as<te::Tensor>()) {
+      te::Tensor x_ref = tensor_node.value();
       if (out_binds->find(x_ref) == out_binds->end()) {
         tir::Buffer buf = tir::BufferWithOffsetAlignment(x_ref->shape, x_ref->dtype,
                                                          x_ref->op->name, -1, 0, compact);
@@ -176,15 +171,15 @@ Array<tvm::transform::Pass> CreatePassList(bool disable_loop_partition) {
   // phase passes is of the form
   // [[phase_number, pass], [phase_number, pass]... ]
   for (Array<ObjectRef> phase_pass : add_lower_pass) {
-    const IntImmNode* phase_num = phase_pass[0].as<IntImmNode>();
+    auto phase_num = phase_pass[0].as<runtime::Int::ContainerType>();
     ICHECK(phase_num)
-        << "Expected the first entry in the inner Array of tir.add_lower_pass to be an integer";
+        << "Expected the first entry in the inner Array of tir.add_lower_pass to be an integer, "
+        << "but instead received " << phase_pass[0] << " with type " << phase_pass[0]->GetTypeKey();
     int phase_num_val = phase_num->value;
 
     CHECK_GE(phase_num_val, 0);
 
-    const tvm::transform::PassNode* pass_node = phase_pass[1].as<tvm::transform::PassNode>();
-    tvm::transform::Pass pass = GetRef<tvm::transform::Pass>(pass_node);
+    auto pass = Downcast<tvm::transform::Pass>(phase_pass[1]);
     // Copy the pass into the correct phase
     if (phase_num_val == 0) {
       user_lower_phase0.push_back(pass);
@@ -210,12 +205,17 @@ Array<tvm::transform::Pass> CreatePassList(bool disable_loop_partition) {
   pass_list.push_back(tir::transform::LowerInitBlock());
   pass_list.push_back(tir::transform::PlanAndUpdateBufferAllocationLocation());
   pass_list.push_back(tir::transform::ConvertBlocksToOpaque());
-  pass_list.push_back(tir::transform::UnifyThreadBinding());
+  pass_list.push_back(tir::transform::LiftThreadBinding());
   pass_list.push_back(tir::transform::ManifestSharedMemoryLocalStage());
   pass_list.push_back(tir::transform::CompactBufferAllocation());
   pass_list.push_back(tir::transform::LowerAutoCopy());
+  pass_list.push_back(tir::transform::UnifyThreadBinding());
   pass_list.push_back(tir::transform::LowerMatchBuffer());
+  pass_list.push_back(tir::transform::Simplify());
+  pass_list.push_back(tir::transform::InjectPermutedLayout());
+  pass_list.push_back(tir::transform::Simplify());
   pass_list.push_back(tir::transform::InjectSoftwarePipeline());
+  pass_list.push_back(tir::transform::TransformMmaBufferLayout());
   pass_list.push_back(tir::transform::LowerOpaqueBlock());
   pass_list.push_back(tir::transform::FlattenBuffer());
   pass_list.push_back(tir::transform::BF16ComputeLegalize());
@@ -241,6 +241,10 @@ Array<tvm::transform::Pass> CreatePassList(bool disable_loop_partition) {
   if (use_async_copy) {
     pass_list.push_back(tir::transform::LowerAsyncDMA());
   }
+  // HoistIfThenElse must be applied before UnrollLoop
+  // because HoistIfThenElse could utilize for loop structure
+  // which might be unrolled in UnrollLoop
+  pass_list.push_back(tir::transform::HoistIfThenElse());
   pass_list.push_back(tir::transform::UnrollLoop());
 
   // Add user-defined phase-2 passes
@@ -251,7 +255,6 @@ Array<tvm::transform::Pass> CreatePassList(bool disable_loop_partition) {
   pass_list.push_back(tir::transform::Simplify());
   pass_list.push_back(tir::transform::RemoveNoOp());
   pass_list.push_back(tir::transform::RewriteUnsafeSelect());
-  pass_list.push_back(tir::transform::HoistIfThenElse());
 
   // Add user-defined phase-3 passes
   pass_list.insert(pass_list.end(), user_lower_phase3.begin(), user_lower_phase3.end());
@@ -334,8 +337,7 @@ TVM_REGISTER_GLOBAL("driver.schedule_to_module")
           c_binds.insert({kv.first, kv.second});
         }
       }
-      IRModule mod =
-          ScheduleToModule(std::move(sch), args, name, c_binds, GlobalVarSupply(NameSupply("")));
+      IRModule mod = ScheduleToModule(std::move(sch), args, name, c_binds, GlobalVarSupply());
       return mod;
     });
 
@@ -398,8 +400,7 @@ TVM_REGISTER_GLOBAL("driver.lower_schedule")
           c_binds.insert({kv.first, kv.second});
         }
       }
-      return LowerSchedule(std::move(sch), args, name, c_binds, GlobalVarSupply(NameSupply("")),
-                           simple_mode);
+      return LowerSchedule(std::move(sch), args, name, c_binds, GlobalVarSupply(), simple_mode);
     });
 
 /**
@@ -433,8 +434,26 @@ std::pair<IRModule, IRModule> SplitMixedModule(IRModule mod_mixed, const Target&
   return {host_mod, device_mod};
 }
 
+/*!
+ * \brief Check and update host field of the given legacy heterogeneous targets and
+ *  target host.Note that this function is for legacy target api compatibility issue only,
+ *  not recommended for other use.
+ * \param ir_modules The pointer to a Map objects with keys being Target objects
+ * \param host The Target typed object for target host to be updated
+ */
+void CheckAndUpdateHostConsistency(Map<Target, IRModule>* targets, Target* host) {
+  Map<Target, IRModule> new_targets;
+  for (auto& it : *targets) {
+    auto target = it.first;
+    CheckAndUpdateHostConsistency(&target, host);
+    new_targets.Set(target, it.second);
+  }
+  *targets = new_targets;
+}
+
 runtime::Module TIRToRuntime(const Map<Target, IRModule>& inputs_arg,
                              const Target& target_host_arg) {
+  CHECK(inputs_arg.size()) << "TIRToRuntime expects at least one IRModule as input.";
   std::vector<runtime::Module> device_modules;
   Map<Target, IRModule> inputs = inputs_arg;
   Target target_host = target_host_arg;
@@ -545,32 +564,23 @@ runtime::Module build(const IRModule& funcs, const Target& target_arg,
   return TIRToRuntime(inputs, target_host);
 }
 
-int64_t GetVTCMCapacity(Target target, const transform::PassContext& pass_ctx) {
-  if (!target.defined()) target = Target::Current(/*allow_not_defined=*/true);
-  if (target.defined() && target->kind->name == "hexagon") {
-    auto value = Downcast<Integer>(target->attrs.at("vtcm-capacity"))->value;
-    if (value > 0) return value;
-  }
-  return pass_ctx->GetConfig<Integer>("tir.vtcm_capacity", Integer(0)).value()->value;
-}
-
 transform::Sequential MixedModulePassManager(IRModule mixed_mod, Target target) {
   transform::PassContext pass_ctx = transform::PassContext::Current();
 
   Array<Pass> mixed_pass_list;
 
+  // FPComputeLegalize uses the target attrs added by BindTarget, so it must come first
+  mixed_pass_list.push_back(tir::transform::BindTarget(target));
+  mixed_pass_list.push_back(tir::transform::FP8ComputeLegalize());
+
   // VerifyVTCMLimit must occur before LowerVtcmAlloc
-  mixed_pass_list.push_back(tir::transform::VerifyVTCMLimit(GetVTCMCapacity(target, pass_ctx)));
+  mixed_pass_list.push_back(tir::transform::VerifyVTCMLimit(target));
   // LowerVtcmAlloc must occur after any transformations that modify memory allocation locations
   mixed_pass_list.push_back(tir::transform::LowerVtcmAlloc());
 
-  mixed_pass_list.push_back(tir::transform::BindTarget(target));
-
   mixed_pass_list.push_back(tir::transform::VerifyMemory());
 
-  if (ShouldAnnotateEntryFunc(mixed_mod)) {
-    mixed_pass_list.push_back(tir::transform::AnnotateEntryFunc());
-  }
+  mixed_pass_list.push_back(tir::transform::AnnotateEntryFunc());
 
   bool detect_global_barrier =
       pass_ctx->GetConfig<Bool>("tir.detect_global_barrier", Bool(false)).value();
@@ -580,7 +590,6 @@ transform::Sequential MixedModulePassManager(IRModule mixed_mod, Target target) 
 
   mixed_pass_list.push_back(tir::transform::ThreadSync("shared"));
   mixed_pass_list.push_back(tir::transform::ThreadSync("shared.dyn"));
-  mixed_pass_list.push_back(tir::transform::MergeDynamicSharedMemoryAllocations());
   mixed_pass_list.push_back(tir::transform::ThreadSync("warp"));
   mixed_pass_list.push_back(tir::transform::InferFragment());
   mixed_pass_list.push_back(tir::transform::LowerThreadAllreduce());
@@ -596,6 +605,12 @@ transform::Sequential MixedModulePassManager(IRModule mixed_mod, Target target) 
     mixed_pass_list.push_back(tir::transform::InjectPTXLDG32());
   }
 
+  mixed_pass_list.push_back(tir::transform::AnnotateDeviceRegions());
+  mixed_pass_list.push_back(tir::transform::SplitHostDevice());
+  // MergeSharedMemoryAllocations must be applied after SplitHostDevice
+  // because the merged allocation site is at the beginning of each device function
+  mixed_pass_list.push_back(tir::transform::MergeSharedMemoryAllocations());
+
   bool unpacked_api = mixed_mod->GetAttr<relay::Executor>(tvm::attr::kExecutor)
                           .value_or(relay::Executor::Create("graph", {}))
                           ->GetAttr<Bool>("unpacked-api")
@@ -605,8 +620,10 @@ transform::Sequential MixedModulePassManager(IRModule mixed_mod, Target target) 
   } else {
     mixed_pass_list.push_back(tir::transform::MakePackedAPI());
   }
+  mixed_pass_list.push_back(tir::transform::FP8StorageLegalize());
   mixed_pass_list.push_back(tir::transform::BF16StorageLegalize());
-  mixed_pass_list.push_back(tir::transform::SplitHostDevice());
+
+  mixed_pass_list.push_back(tir::transform::LowerDeviceKernelLaunch());
 
   return transform::Sequential(mixed_pass_list);
 }

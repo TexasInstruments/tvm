@@ -42,9 +42,18 @@ def conv2d_strategy_adreno(attrs, inputs, out_type, target):
             or (data_layout == "NCHW" and kernel_layout == "OIHW4o")
         ):
             if len(kernel.shape) == 4:
-                _, _, kh, kw = get_const_tuple(kernel.shape)
+                oc, _, kh, kw = get_const_tuple(kernel.shape)
             else:
-                _, _, kh, kw, _ = get_const_tuple(kernel.shape)
+                oc, _, kh, kw, _ = get_const_tuple(kernel.shape)
+            # We cannot use textures for case than number of channels is less than 4.
+            # So, we use compute functions from cuda.
+            if len(kernel.shape) == 4 and oc < 4:
+                strategy.add_implementation(
+                    wrap_compute_conv2d(topi.cuda.conv2d_nchw),
+                    wrap_topi_schedule(topi.cuda.schedule_conv2d_nchw),
+                    name="conv2d_nchw.cuda",
+                )
+                return strategy
             if (
                 (2 < kh < 8 and 2 < kw < 8 and kh == kw)
                 and (stride_h == 1 and stride_w == 1)
@@ -69,9 +78,18 @@ def conv2d_strategy_adreno(attrs, inputs, out_type, target):
             or (data_layout == "NHWC" and kernel_layout == "HWIO4o")
         ):
             if len(kernel.shape) == 4:
-                kh, kw, _, _ = get_const_tuple(kernel.shape)
+                kh, kw, _, oc = get_const_tuple(kernel.shape)
             else:
-                kh, kw, _, _, _ = get_const_tuple(kernel.shape)
+                kh, kw, _, oc, _ = get_const_tuple(kernel.shape)
+            # We cannot use textures for case than number of channels is less than 4.
+            # So, we use compute functions from cuda.
+            if len(kernel.shape) == 4 and oc < 4:
+                strategy.add_implementation(
+                    wrap_compute_conv2d(topi.gpu.conv2d_nhwc),
+                    wrap_topi_schedule(topi.gpu.schedule_conv2d_nhwc),
+                    name="conv2d_nhwc.gpu",
+                )
+                return strategy
             if (
                 (2 < kh < 8 and 2 < kw < 8 and kh == kw)
                 and (stride_h == 1 and stride_w == 1)
@@ -109,7 +127,7 @@ def conv2d_strategy_adreno(attrs, inputs, out_type, target):
         elif data_layout == "NHWC4c":
             ic = data.shape[3] * data.shape[4]
         else:
-            raise RuntimeError("Unsupported depthwise_conv2d data layout {}".format(data_layout))
+            raise RuntimeError(f"Unsupported depthwise_conv2d data layout {data_layout}")
         if kernel_layout == "OIHW":
             oc = kernel.shape[0]
         elif kernel_layout == "OIHW4o":
@@ -119,20 +137,27 @@ def conv2d_strategy_adreno(attrs, inputs, out_type, target):
         elif kernel_layout == "HWOI4o":
             oc = kernel.shape[2] * kernel.shape[4]
         else:
-            raise RuntimeError(
-                "Unsupported depthwise_conv2d kernel layout {}".format(kernel_layout)
-            )
+            raise RuntimeError(f"Unsupported depthwise_conv2d kernel layout {kernel_layout}")
 
         if ic == oc == groups:
             if (data_layout == "NCHW" and kernel_layout == "OIHW") or (
                 data_layout == "NCHW4c" and kernel_layout == "OIHW4o"
             ):
-                strategy.add_implementation(
-                    wrap_compute_conv2d(topi.adreno.depthwise_conv2d_nchwc),
-                    wrap_topi_schedule(topi.adreno.schedule_depthwise_conv2d_nchwc),
-                    name="depthwise_conv2d_nchwc.image2d",
-                    plevel=10,
-                )
+                # We cannot use textures for case than number of channels is less than 4.
+                # So, we use compute functions from cuda.
+                if len(kernel.shape) == 4 and oc < 4:
+                    strategy.add_implementation(
+                        wrap_compute_conv2d(topi.cuda.depthwise_conv2d_nchw),
+                        wrap_topi_schedule(topi.cuda.schedule_depthwise_conv2d_nchw),
+                        name="depthwise_conv2d_nchw.cuda",
+                    )
+                else:
+                    strategy.add_implementation(
+                        wrap_compute_conv2d(topi.adreno.depthwise_conv2d_nchwc),
+                        wrap_topi_schedule(topi.adreno.schedule_depthwise_conv2d_nchwc),
+                        name="depthwise_conv2d_nchwc.image2d",
+                        plevel=10,
+                    )
             elif (data_layout == "NHWC" and kernel_layout == "HWOI") or (
                 data_layout == "NHWC4c" and kernel_layout == "HWOI4o"
             ):
@@ -157,8 +182,37 @@ def conv2d_strategy_adreno(attrs, inputs, out_type, target):
                     + kernel_layout
                     + ") - only support NCHW4c / OIHW4o and NHWC / HWOI layouts for conv2d"
                 )
+        elif (data_layout == "NCHW4c" or data_layout == "NCHW") and (
+            kernel_layout == "OIHW" or kernel_layout == "OIHW4o"
+        ):
+            pad_in_chunks = (len(data.shape) == 5 and data.shape[1] % groups != 0) or (
+                len(data.shape) == 4 and data.shape[1] % (groups * 4) != 0
+            )
+            pad_out_chunks = (len(kernel.shape) == 5 and kernel.shape[0] % groups != 0) or (
+                len(kernel.shape) == 4 and kernel.shape[0] % (groups * 4) != 0
+            )
+
+            if not (pad_in_chunks or pad_out_chunks):
+                strategy.add_implementation(
+                    wrap_compute_conv2d(topi.adreno.group_conv2d_nchwc),
+                    wrap_topi_schedule(topi.adreno.schedule_group_conv2d_nchwc),
+                    name="group_conv2d_nchwc.image2d",
+                    plevel=10,
+                )
+            elif len(data.shape) == 4 and len(kernel.shape) == 4:
+                strategy.add_implementation(
+                    wrap_compute_conv2d(topi.cuda.group_conv2d_nchw, has_groups=True),
+                    wrap_topi_schedule(topi.cuda.schedule_group_conv2d_nchw),
+                    name="group_conv2d_nchw.cuda",
+                )
+            else:
+                raise RuntimeError(
+                    "General group convolution is not currently supported for NCHWc layouts"
+                )
         else:
-            raise RuntimeError("General group convolution is not currently supported")
+            raise RuntimeError(
+                "General group convolution has limited support for NCHW(4c) layouts..."
+            )
     return strategy
 
 
@@ -186,8 +240,58 @@ def conv2d_winograd_without_weight_transform_strategy_adreno(attrs, inputs, out_
             plevel=5,
         )
     else:
+        raise RuntimeError(f"Unsupported conv2d_winograd_without_weight_transform layout {layout}")
+    return strategy
+
+
+@conv2d_transpose_strategy.register("adreno")
+def conv2d_transpose_strategy_adreno(attrs, inputs, out_type, target):
+    """conv2d_transpose adreno strategy"""
+    strategy = _op.OpStrategy()
+    _, kernel = inputs
+    dilation = attrs.get_int_tuple("dilation")
+    groups = attrs.groups
+    data_layout = attrs.data_layout
+    kernel_layout = attrs.kernel_layout
+    assert dilation == (1, 1), "not support dilate now"
+
+    if (groups == 1) and (
+        (data_layout == "NCHW" and kernel_layout == "IOHW")
+        or (data_layout == "NCHW4c" and kernel_layout == "IOHW4o")
+        or (data_layout == "NCHW" and kernel_layout == "IOHW4o")
+    ):
+        if len(kernel.shape) == 4:
+            _, oc, _, _ = get_const_tuple(kernel.shape)
+        else:
+            _, oc, _, _, _ = get_const_tuple(kernel.shape)
+        # We cannot use textures for case than number of channels is less than 4.
+        # So, we use compute functions from cuda.
+        if len(kernel.shape) == 4 and oc < 4:
+            strategy.add_implementation(
+                wrap_compute_conv2d_transpose(topi.cuda.conv2d_transpose_nchw),
+                wrap_topi_schedule(topi.cuda.schedule_conv2d_transpose_nchw),
+                name="conv2d_transpose_nchw.cuda",
+            )
+            return strategy
+        strategy.add_implementation(
+            wrap_compute_conv2d_transpose(topi.adreno.conv2d_transpose_nchwc),
+            wrap_topi_schedule(topi.adreno.schedule_conv2d_transpose_nchwc),
+            name="conv2d_transpose_nchwc.image2d",
+            plevel=10,
+        )
+    elif data_layout == "NCHW":
+        strategy.add_implementation(
+            wrap_compute_conv2d_transpose(topi.cuda.conv2d_transpose_nchw, has_groups=True),
+            wrap_topi_schedule(topi.cuda.schedule_conv2d_transpose_nchw),
+            name="conv2d_transpose_nchw.cuda",
+        )
+    else:
         raise RuntimeError(
-            "Unsupported conv2d_winograd_without_weight_transform layout {}".format(layout)
+            "Layout not supported: ("
+            + data_layout
+            + ", "
+            + kernel_layout
+            + ") - only support NCHW, NCHW4c / IOHW4o layouts for conv2d_transpose"
         )
     return strategy
 

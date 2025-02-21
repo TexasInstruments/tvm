@@ -116,7 +116,7 @@ def get_tvm_output_with_vm(
                 freeze_params=freeze_params,
                 convert_config=convert_config,
             )
-        assert tvm.ir.structural_equal(mod, mod_with_span)
+        tvm.ir.assert_structural_equal(mod, mod_with_span)
 
     result = relay.create_executor("vm", mod=mod, device=dev, target=target).evaluate()(
         *input_data, **params
@@ -1492,6 +1492,8 @@ def test_batch_matmul(target, dev):
     verify_batch_matmul((2, 4, 3), (3, 4), (2, 4, 4))
     verify_batch_matmul((2, 3, 4, 3), (3, 4), (2, 3, 4, 4))
     # Test implicit broadcasting.
+    verify_batch_matmul((5,), (5, 5, 4), (5, 4))
+    verify_batch_matmul((5, 4, 5), (5,), (5, 4))
     verify_batch_matmul((4, 3), (2, 3, 4), (2, 4, 4))
     verify_batch_matmul((2, 4, 3), (1, 3, 4), (2, 4, 4))
     verify_batch_matmul((1, 4, 3), (2, 3, 4), (2, 4, 4))
@@ -1711,6 +1713,27 @@ def test_upsample_nearest(target, dev):
     in_shape = (1, 1, 3, 3)
     out_shape = (1, 1, 3 * scale, 3 * scale)
     y = helper.make_node("Upsample", ["in"], ["out"], mode="nearest", scales=[1.0, 1.0, 2.0, 2.0])
+
+    in_array = np.random.uniform(size=in_shape).astype(np.float32)
+
+    graph = helper.make_graph(
+        [y],
+        "upsample_nearest_test",
+        inputs=[helper.make_tensor_value_info("in", TensorProto.FLOAT, list(in_shape))],
+        outputs=[helper.make_tensor_value_info("out", TensorProto.FLOAT, list(out_shape))],
+    )
+
+    model = helper.make_model(graph, producer_name="upsample_nearest_test")
+    verify_with_ort_with_inputs(model, [in_array], [out_shape], opset=7, target=target, dev=dev)
+
+
+@tvm.testing.parametrize_targets
+def test_upsample_nearest_default(target, dev):
+    """test_upsample_nearest_default"""
+    scale = 2
+    in_shape = (1, 1, 3, 3)
+    out_shape = (1, 1, 3 * scale, 3 * scale)
+    y = helper.make_node("Upsample", ["in"], ["out"], scales=[1.0, 1.0, 2.0, 2.0])
 
     in_array = np.random.uniform(size=in_shape).astype(np.float32)
 
@@ -2487,6 +2510,15 @@ def test_selu(target, dev):
         "Selu",
         {"alpha": 0.25, "gamma": 0.3},
     )
+
+
+@pytest.mark.skip("Currently ONNX Runtime in CI does not support domain version of 18")
+@tvm.testing.parametrize_targets
+def test_mish(target, dev):
+    def mish_x(x):
+        return x * np.tanh(np.log1p(np.exp(x)))
+
+    _test_onnx_op_elementwise(target, dev, (2, 4, 5, 6), mish_x, {}, "float64", "Mish", {})
 
 
 @tvm.testing.parametrize_targets
@@ -3331,6 +3363,15 @@ def test_convtranspose(target, dev):
             repeat(1, dims),
             auto_pad="SAME_UPPER",
         )
+        # Convolution with default stride
+        verify_convtranspose_with_padding(
+            (1, 1) + repeat(5, dims),
+            (1, 1) + repeat(3, dims),
+            2 * repeat(1, dims),
+            repeat(3, dims),
+            None,
+            repeat(1, dims),
+        )
         # Convolution with dilation
         # TODO(mbrookhart): Relay doesn't currently support convtranspose with dilation
         # verify_convtranspose_with_padding(
@@ -3363,6 +3404,36 @@ def test_convtranspose(target, dev):
                 repeat(1, dims),
                 auto_pad="SAME_LOWER",
             )
+
+            verify_convtranspose_with_output_shape(
+                (1, 1) + repeat(32, dims),
+                (1, 2) + repeat(4, dims),
+                repeat(num, dims),
+                repeat(4, dims),
+                repeat(2, dims),
+                repeat(1, dims),
+                auto_pad="SAME_UPPER",
+            )
+
+    verify_convtranspose_with_output_shape(
+        (1, 1, 3, 3),
+        (1, 2, 3, 3),
+        (6, 6),
+        (3, 3),
+        (2, 2),
+        (1, 1),
+        auto_pad="SAME_UPPER",
+    )
+
+    verify_convtranspose_with_output_shape(
+        (1, 1, 3, 3),
+        (1, 2, 3, 3),
+        (6, 6),
+        (3, 3),
+        (2, 2),
+        (1, 1),
+        auto_pad="SAME_LOWER",
+    )
 
 
 @tvm.testing.parametrize_targets
@@ -3939,6 +4010,17 @@ def test_lppool(target, dev):
         auto_pad="SAME_UPPER",
     )
 
+    # Pool2D with empty stride
+    verify_lppool(
+        x_shape=[1, 3, 32, 32],
+        kernel_shape=[2, 2],
+        p=4,
+        strides=None,
+        pads=None,
+        out_shape=[1, 3, 32, 32],
+        auto_pad="SAME_LOWER",
+    )
+
     # Pool3D with stride
     verify_lppool(
         x_shape=[1, 1, 32, 32, 32],
@@ -4473,6 +4555,7 @@ def test_resize(target, dev):
             # scales are specified instead of sizes
             verify([1, 16] + [32] * ndim, [], [1, 1] + [0.5] * ndim, method, coord_trans)
             verify([1, 16] + [32] * ndim, [], [1, 1] + [2] * ndim, method, coord_trans)
+            verify([1, 16] + [32] * ndim, [], [1, 1] + [2] * ndim, None, coord_trans)
 
         method = "linear"
         # upsampling
@@ -5128,6 +5211,101 @@ def test_if(target, dev):
 
 
 @tvm.testing.parametrize_targets
+def test_graph_input_use_in_if(target, dev):
+    """test_graph_input_use_in_if"""
+
+    def verify_if(num_nested, cond):
+        # return "graph input" if cond is True, else return constant(-1).
+
+        input_tensor = helper.make_tensor_value_info("graph_input", TensorProto.FLOAT, [1])
+        output_tensor = helper.make_tensor_value_info("graph_output", TensorProto.FLOAT, [1])
+        constant_node = make_constant_node("const_val", TensorProto.FLOAT, [1], [-1])
+        cond_tensor = helper.make_tensor_value_info("cond", TensorProto.BOOL, [1])
+        inner_if_node = None
+        for i in range(num_nested):
+            identity_node = helper.make_node(
+                "Identity",
+                inputs=["const_val"],
+                outputs=[f"const{i}"],
+                name=f"depth{i}'th else identity",
+            )
+            else_branch = helper.make_graph(
+                [identity_node],
+                f"else{i}_body",
+                inputs=[],
+                outputs=[helper.make_tensor_value_info(f"const{i}", TensorProto.FLOAT, [1])],
+            )
+            out_name = f"if_output{i}" if i != (num_nested - 1) else "graph_output"
+
+            if i == 0:
+                identity_node = helper.make_node(
+                    "Identity",
+                    inputs=["graph_input"],
+                    outputs=[f"input_identity{i}"],
+                    name=f"depth{i}'th then identity",
+                )
+                then_branch = helper.make_graph(
+                    [identity_node],
+                    f"then{i}_body",
+                    inputs=[],
+                    outputs=[
+                        helper.make_tensor_value_info(f"input_identity{i}", TensorProto.FLOAT, [1])
+                    ],
+                )
+                if_node = helper.make_node(
+                    "If",
+                    inputs=["cond"],
+                    outputs=[out_name],
+                    then_branch=then_branch,
+                    else_branch=else_branch,
+                    name=f"depth{i}'s If node",
+                )
+                inner_if_node = if_node
+            else:
+                then_branch = helper.make_graph(
+                    [inner_if_node],
+                    f"then{i}_body",
+                    inputs=[],
+                    outputs=[
+                        helper.make_tensor_value_info(f"if_output{i-1}", TensorProto.FLOAT, [1])
+                    ],
+                )
+                if_node = helper.make_node(
+                    "If",
+                    inputs=["cond"],
+                    outputs=[out_name],
+                    then_branch=then_branch,
+                    else_branch=else_branch,
+                    name=f"depth{i}'s If node",
+                )
+                inner_if_node = if_node
+        graph_nodes = [constant_node, inner_if_node]
+        graph = helper.make_graph(
+            graph_nodes,
+            "input_use_in_if_test",
+            inputs=[input_tensor, cond_tensor],
+            outputs=[output_tensor],
+        )
+        model = helper.make_model(graph, producer_name="input_use_in_if_test")
+
+        verify_with_ort_with_inputs(
+            model,
+            [np.array([3.0], dtype="float32"), np.array([cond])],
+            dtype="float32",
+            use_vm=True,
+            opset=14,
+            target=target,
+            dev=dev,
+        )
+
+    # Confirm that if works with cond as an array or scalar.
+    verify_if(num_nested=1, cond=True)
+    verify_if(num_nested=1, cond=False)
+    verify_if(num_nested=2, cond=True)
+    verify_if(num_nested=2, cond=False)
+
+
+@tvm.testing.parametrize_targets
 def test_size(target, dev):
     """test_size"""
 
@@ -5426,7 +5604,6 @@ unsupported_onnx_tests = [
     "test_cast_DOUBLE_to_FLOAT16",
     "test_castlike_DOUBLE_to_FLOAT16",
     "test_castlike_DOUBLE_to_FLOAT16_expanded",
-    "test_convtranspose_autopad_same",
     "test_convtranspose_dilations",
     "test_cumsum_1d",
     "test_cumsum_1d_exclusive",
@@ -5521,6 +5698,7 @@ unsupported_onnx_tests = [
     "test_unique_sorted_with_axis_3d",
     "test_unique_sorted_with_negative_axis",
     "test_upsample_nearest",
+    "test_upsample_nearest_default",
 ]
 
 
@@ -5557,6 +5735,15 @@ def _load_proto(proto_filename, target_list, model_type_proto):
             )
 
 
+def is_ort_version_lower_than(ver):
+    import onnxruntime as ort
+
+    v11, v12, v13 = tuple(int(v) for v in ort.__version__.split("."))
+    v21, v22, v23 = tuple(int(v) for v in ver.split("."))
+
+    return (v11 < v21) or (v11 == v21 and v12 < v22) or ((v11, v12) == (v21, v22) and v13 < v23)
+
+
 @pytest.mark.parametrize("onnx_test", onnx_test_folders)
 @tvm.testing.parametrize_targets
 def test_onnx_nodes(target, dev, onnx_test):
@@ -5572,6 +5759,12 @@ def test_onnx_nodes(target, dev, onnx_test):
     target_specific_skips = target_skips.get(target_kind, [])
     if onnx_test in target_specific_skips:
         pytest.skip(f"Onnx test '{onnx_test}' not yet supported by TVM on {target_kind} targets")
+
+    if is_ort_version_lower_than("1.13.1") and onnx_test == "test_convtranspose_autopad_same":
+        pytest.skip(
+            f"Onnx test '{onnx_test}' expected to fail for onnxruntime version lower than 1.13.1 "
+            "due to different interpretation of auto_pad parameters SAME_UPPER and SAME_LOWER."
+        )
 
     test_dir = os.path.join(onnx_test_node_dir, onnx_test)
 
@@ -5647,6 +5840,7 @@ def test_wrong_input():
         relay.frontend.from_onnx(model, shape=wrong_shape_dict)
 
 
+@pytest.mark.skip(reason="unsupported op numel")
 @tvm.testing.parametrize_targets
 def test_aten(target, dev):
     """test_aten"""
@@ -5839,7 +6033,7 @@ def test_biasgelu(target, dev, data_type, op_name):
     """test_biasgelu"""
     dtype = np.dtype(data_type)
     tensor_type = mapping.NP_TYPE_TO_TENSOR_TYPE[dtype]
-    absolute_tolerance = 1e-3 if data_type == "float16" else 1e-5
+    absolute_tolerance = 1e-2 if data_type == "float16" else 1e-5
 
     def verify_biasgelu(x, bias):
         node = onnx.helper.make_node(
@@ -8028,7 +8222,7 @@ def test_dft(target, dev):
     D = 7
 
     for axis in list(range(1, n)) + [-2]:
-        for inverse, onesided in [(0, 0), (0, 1), (1, 0)]:
+        for inverse, onesided in [(0, 0), (0, 1), (1, 0), (None, None)]:
             for n_fft in [D, D - 1, D + 1]:
                 for c in [1, 2]:
                     input_shape = [batch_size] + n * [D] + [c]
@@ -8224,7 +8418,7 @@ class TestSetSpan:
             with_span = res_fptr()
         with tvm.testing.disable_span_filling():
             without_span = res_fptr()
-        assert tvm.ir.structural_equal(with_span, without_span)
+        tvm.ir.assert_structural_equal(with_span, without_span)
         _verify_structural_equal_with_span(with_span, golden_fptr())
 
     def test_conv2d_bias_add_span(self):

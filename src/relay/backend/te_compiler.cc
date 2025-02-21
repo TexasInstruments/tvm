@@ -136,8 +136,7 @@ TVM_REGISTER_OBJECT_TYPE(TECompilerNode);
 class TECompilerImpl : public TECompilerNode {
  public:
   explicit TECompilerImpl(Optional<IRModule> opt_mod, Optional<String> opt_mod_name)
-      : global_var_supply_(GlobalVarSupply(NameSupply(opt_mod_name.value_or("")))),
-        constant_name_supply_(NameSupply("")) {
+      : global_var_supply_(GlobalVarSupply(NameSupply(opt_mod_name.value_or("")))) {
     // Make sure we don't collide with any existing globals in the module.
     if (opt_mod) {
       for (const auto& kv : opt_mod.value()->functions) {
@@ -160,7 +159,7 @@ class TECompilerImpl : public TECompilerNode {
 
   // For now, build one module per function.
   PackedFunc JIT(const CCacheKey& key) final {
-    CCacheValue value = LowerInternal(key, GlobalVarSupply(NameSupply("")));
+    CCacheValue value = LowerInternal(key, GlobalVarSupply());
     if (value->packed_func != nullptr) {
       return value->packed_func;
     }
@@ -659,8 +658,8 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
         BaseFunc base_func = module_->Lookup(GetRef<GlobalVar>(global_var_node));
         return ResolveToPrimitive(base_func);
       }
-    } else if (const auto* prim_func_node = expr.as<tir::PrimFuncNode>()) {
-      return GetRef<tir::PrimFunc>(prim_func_node);
+    } else if (auto prim_func = expr.as<tir::PrimFunc>()) {
+      return prim_func.value();
     } else if (const auto* var_node = expr.as<VarNode>()) {
       auto itr = primitive_functions_.find(var_node);
       if (itr == primitive_functions_.end()) {
@@ -734,8 +733,8 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
     }
 
     // Alas, WithAttr cannot work with base classes.
-    if (const auto* prim_func_node = original_function.as<te::PrimFuncNode>()) {
-      auto func_with_metadata = GetRef<te::PrimFunc>(prim_func_node);
+    if (auto opt = original_function.as<te::PrimFunc>()) {
+      auto func_with_metadata = opt.value();
       func_with_metadata = WithAttr(func_with_metadata, "prim_fn_var", prim_fn_var);
       func_with_metadata = WithAttr(func_with_metadata, "prim_funcs", prim_fns);
       func_with_metadata = WithAttr(func_with_metadata, tvm::attr::kTarget, target);
@@ -745,9 +744,7 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
       }
       this->process_fn_(func_with_metadata);
     } else {
-      const auto* function_node = original_function.as<FunctionNode>();
-      ICHECK(function_node);
-      auto func_with_metadata = GetRef<Function>(function_node);
+      auto func_with_metadata = original_function.as<Function>().value();
       func_with_metadata = WithAttr(func_with_metadata, "prim_fn_var", prim_fn_var);
       func_with_metadata = WithAttr(func_with_metadata, "prim_funcs", prim_fns);
       func_with_metadata = WithAttr(func_with_metadata, tvm::attr::kTarget, target);
@@ -874,8 +871,8 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
     BaseFunc primitive_func = ResolveToPrimitive(call_node->op);
     if (!primitive_func.defined()) {
       // Cases 5 and 6: Leave as ordinary call.
-      if (const auto* function_node = call_node->op.as<FunctionNode>()) {
-        process_fn_(GetRef<Function>(function_node));
+      if (auto function = call_node->op.as<Function>()) {
+        process_fn_(function.value());
       }
       return WithFields(GetRef<Call>(call_node), std::move(new_op), std::move(new_args));
     }
@@ -895,15 +892,14 @@ class LowerTensorExprMutator : public DeviceAwareExprMutator {
     ICHECK(call_node->type_args.empty()) << "lowered functions cannot be polymorphic";
 
     // Case 4: If the function has already been lowered we just need to update the call.
-    if (const auto* prim_func_node = primitive_func.as<tir::PrimFuncNode>()) {
+    if (auto prim_func = primitive_func.as<tir::PrimFunc>()) {
       // Function should already be Target annotated by this point
       // but the TE Compiler metadata is still needed for the callback
       // TODO(Mousius) - Robustify this to not assume we're in the GlobalVar for Target Hooks
       Optional<Target> opt_target = primitive_func->GetAttr<Target>(tvm::attr::kTarget);
       ICHECK(opt_target.defined());
       auto prim_fn_var = Downcast<GlobalVar>(call_node->op);
-      tir::PrimFunc prim_func = GetRef<tir::PrimFunc>(prim_func_node);
-      Map<GlobalVar, BaseFunc> prim_fns = {{prim_fn_var, prim_func}};
+      Map<GlobalVar, BaseFunc> prim_fns = {{prim_fn_var, prim_func.value()}};
       return MakeLoweredCall(primitive_func, prim_fn_var, std::move(new_args), call_node->span,
                              opt_target.value(), prim_fns);
     }

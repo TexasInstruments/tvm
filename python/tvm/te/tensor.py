@@ -61,19 +61,10 @@ class Tensor(DataProducer, _expr.ExprOp):
         ndim = self.ndim
         if len(indices) != ndim:
             raise ValueError(
-                "Need to provide %d index in tensor but %d was provided" % (ndim, len(indices))
+                f"Need to provide {ndim} index in tensor but {len(indices)} was provided"
             )
         indices = convert_to_object(indices)
-        args = []
-        for x in indices:
-            if isinstance(x, _expr.PrimExpr):
-                args.append(x)
-            elif isinstance(x, _expr.IterVar):
-                args.append(x.var)
-            else:
-                raise ValueError("The indices must be expression")
-
-        return _expr.ProducerLoad(self, args)
+        return _expr.ProducerLoad(self, indices)
 
     def __getitem__(self, indices):
         return TensorSlice(self, indices)
@@ -124,7 +115,7 @@ class Tensor(DataProducer, _expr.ExprOp):
         op = self.op
         if op.num_outputs == 1:
             return op.name
-        return "%s.v%d" % (op.name, self.value_index)
+        return f"{op.name}.v{self.value_index}"
 
 
 class Operation(Object):

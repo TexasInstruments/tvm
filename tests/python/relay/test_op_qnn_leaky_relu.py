@@ -47,7 +47,7 @@ def test_qnn_leaky_relu():
     alpha = 0.9
 
     x = relay.var("x", shape=(1, 4), dtype=data_dtype)
-    y = relay.qnn.op.leaky_relu(
+    y = relay.qnn.leaky_relu(
         x=x,
         alpha=alpha,
         input_scale=relay.const(input_scale, "float32"),
@@ -70,7 +70,7 @@ def test_qnn_leaky_relu():
 
     op_res = relay.create_executor("graph", device=tvm.cpu(0), target="llvm").evaluate(func)(x_data)
 
-    np.testing.assert_equal(op_res.numpy(), golden_output)
+    np.testing.assert_allclose(op_res.numpy(), golden_output, atol=1)
 
 
 if __name__ == "__main__":

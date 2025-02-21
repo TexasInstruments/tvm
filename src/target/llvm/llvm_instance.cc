@@ -33,6 +33,7 @@
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IRReader/IRReader.h>
+#include <llvm/MC/MCSubtargetInfo.h>
 #if TVM_LLVM_VERSION >= 140
 #include <llvm/MC/TargetRegistry.h>
 #else
@@ -41,7 +42,11 @@
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorOr.h>
+#if TVM_LLVM_VERSION >= 180
+#include <llvm/TargetParser/Host.h>
+#else
 #include <llvm/Support/Host.h>
+#endif
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/TargetSelect.h>
@@ -66,13 +71,45 @@
 #include <system_error>
 #include <utility>
 
+#if TVM_LLVM_VERSION < 180
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-stack-address"
+#endif
+namespace llvm {
+#if TVM_LLVM_VERSION < 170
+// SubtargetSubTypeKV view
+template <ArrayRef<SubtargetSubTypeKV> MCSubtargetInfo::*Member>
+struct ArchViewer {
+  friend ArrayRef<SubtargetSubTypeKV>& archViewer(MCSubtargetInfo Obj) { return Obj.*Member; }
+};
+template struct ArchViewer<&MCSubtargetInfo::ProcDesc>;
+ArrayRef<SubtargetSubTypeKV>& archViewer(MCSubtargetInfo);
+#endif
+// SubtargetFeatureKV view
+template <ArrayRef<SubtargetFeatureKV> MCSubtargetInfo::*Member>
+struct FeatViewer {
+  friend ArrayRef<SubtargetFeatureKV>& featViewer(MCSubtargetInfo Obj) { return Obj.*Member; }
+};
+template struct FeatViewer<&MCSubtargetInfo::ProcFeatures>;
+ArrayRef<SubtargetFeatureKV>& featViewer(MCSubtargetInfo);
+}  // namespace llvm
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+#endif
+
 namespace tvm {
 namespace codegen {
 
 namespace {
 namespace defaults {
 static const char* cpu = "generic";
+#if TVM_LLVM_VERSION <= 170
 static const llvm::CodeGenOpt::Level opt_level = llvm::CodeGenOpt::Aggressive;
+#else
+static const llvm::CodeGenOptLevel opt_level = llvm::CodeGenOptLevel::Aggressive;
+#endif
 }  // namespace defaults
 }  // namespace
 
@@ -162,21 +199,39 @@ std::ostream& operator<<(std::ostream& os, const LLVMTargetInfo::Option& opt) {
   return os;
 }
 
-LLVMTargetInfo::LLVMTargetInfo(LLVMInstance& instance, const Target& target) {
-  triple_ = target->GetAttr<String>("mtriple").value_or("default");
+LLVMTargetInfo::LLVMTargetInfo(LLVMInstance& instance, const Target& target)
+    : LLVMTargetInfo(instance, target->Export()) {}
 
+LLVMTargetInfo::LLVMTargetInfo(LLVMInstance& instance, const TargetJSON& target) {
+  triple_ = Downcast<String>(target.Get("mtriple").value_or(String("default")));
   if (triple_.empty() || triple_ == "default") {
     triple_ = llvm::sys::getDefaultTargetTriple();
   }
-  cpu_ = target->GetAttr<String>("mcpu").value_or(defaults::cpu);
+  cpu_ = Downcast<String>(target.Get("mcpu").value_or(String(defaults::cpu)));
 
-  if (const Optional<Array<String>>& v = target->GetAttr<Array<String>>("mattr")) {
+  if (const auto& v = Downcast<Optional<Array<String>>>(target.Get("mattr"))) {
     for (const String& s : v.value()) {
       attrs_.push_back(s);
     }
   }
+  // llvm module target
+  if (Downcast<String>(target.Get("kind")) == "llvm") {
+    // legalize -mcpu with the target -mtriple
+    auto arches = GetAllLLVMTargetArches();
+    bool has_arch =
+        std::any_of(arches.begin(), arches.end(), [&](const auto& var) { return var == cpu_; });
+    if (!has_arch) {
+      // Flag an error, but don't abort. This mimicks the behaviour of 'llc' to
+      // give the code a chance to run with a less-specific target.
+      LOG(ERROR) << "Using LLVM " << LLVM_VERSION_STRING << " with `-mcpu=" << cpu_
+                 << "` is not valid in `-mtriple=" << triple_ << "`"
+                 << ", using default `-mcpu=" << String(defaults::cpu) << "`";
+      // LLVM default cpu fallback
+      cpu_ = String(defaults::cpu);
+    }
+  }
 
-  if (const Optional<Array<String>>& v = target->GetAttr<Array<String>>("cl-opt")) {
+  if (const auto& v = Downcast<Optional<Array<String>>>(target.Get("cl-opt"))) {
     llvm::StringMap<llvm::cl::Option*>& options = llvm::cl::getRegisteredOptions();
     bool parse_error = false;
     for (const String& s : v.value()) {
@@ -197,7 +252,7 @@ LLVMTargetInfo::LLVMTargetInfo(LLVMInstance& instance, const Target& target) {
   }
 
   llvm::FloatABI::ABIType float_abi = llvm::FloatABI::Default;
-  if (const Optional<String>& v = target->GetAttr<String>("mfloat-abi")) {
+  if (const auto& v = Downcast<Optional<String>>(target.Get("mfloat-abi"))) {
     String value = v.value();
     if (value == "hard") {
       float_abi = llvm::FloatABI::Hard;
@@ -208,8 +263,23 @@ LLVMTargetInfo::LLVMTargetInfo(LLVMInstance& instance, const Target& target) {
     }
   }
 
-  // Target options
+  // LLVM JIT engine options
+  if (const auto& v = Downcast<Optional<String>>(target.Get("jit"))) {
+    String value = v.value();
+    if ((value == "mcjit") || (value == "orcjit")) {
+      jit_engine_ = value;
+    } else {
+      LOG(FATAL) << "invalid jit option " << value << " (can be `mcjit` or `orcjit`).";
+    }
+  }
 
+  // RISCV code model
+  auto arch = llvm::Triple(triple_).getArch();
+  if (arch == llvm::Triple::riscv32 || arch == llvm::Triple::riscv64) {
+    code_model_ = llvm::CodeModel::Medium;
+  }
+
+  // Target options
 #if TVM_LLVM_VERSION < 50
   target_options_.LessPreciseFPMADOption = true;
 #endif
@@ -220,12 +290,12 @@ LLVMTargetInfo::LLVMTargetInfo(LLVMInstance& instance, const Target& target) {
   target_options_.NoInfsFPMath = false;
   target_options_.NoNaNsFPMath = true;
   target_options_.FloatABIType = float_abi;
-  if (const Optional<String>& v = target->GetAttr<String>("mabi")) {
-    target_options_.MCOptions.ABIName = v.value();
+  if (target.find("mabi") != target.end()) {
+    target_options_.MCOptions.ABIName = Downcast<String>(target.Get("mabi"));
   }
 
-  auto maybe_level = target->GetAttr<Integer>("opt-level");
-
+  auto maybe_level = target.Get("opt-level").as<runtime::Int>();
+#if TVM_LLVM_VERSION <= 170
   if (maybe_level.defined()) {
     int level = maybe_level.value()->value;
     if (level <= 0) {
@@ -241,13 +311,34 @@ LLVMTargetInfo::LLVMTargetInfo(LLVMInstance& instance, const Target& target) {
   } else {
     opt_level_ = defaults::opt_level;
   }
+#else
+  if (maybe_level.defined()) {
+    int level = maybe_level.value()->value;
+    if (level <= 0) {
+      opt_level_ = llvm::CodeGenOptLevel::None;
+    } else if (level == 1) {
+      opt_level_ = llvm::CodeGenOptLevel::Less;
+    } else if (level == 2) {
+      opt_level_ = llvm::CodeGenOptLevel::Default;
+    } else {
+      // level >= 3
+      opt_level_ = llvm::CodeGenOptLevel::Aggressive;
+    }
+  } else {
+    opt_level_ = defaults::opt_level;
+  }
+#endif
 
   target_options_.UseInitArray = true;
 
   // Fast math options
 
-  auto GetBoolFlag = [&target](llvm::StringRef flag) -> bool {
-    return target->GetAttr<Bool>(flag.str()).value_or(Bool(false));
+  auto GetBoolFlag = [&target](llvm::StringRef name) -> bool {
+    if (auto flag = target.Get(name.str())) {
+      return Downcast<runtime::Bool>(flag);
+    } else {
+      return false;
+    }
   };
   if (GetBoolFlag("fast-math")) {
 #if TVM_LLVM_VERSION >= 60
@@ -288,19 +379,46 @@ LLVMTargetInfo::LLVMTargetInfo(LLVMInstance& scope, const std::string& target_st
 
 LLVMTargetInfo::~LLVMTargetInfo() = default;
 
+static const llvm::Target* CreateLLVMTargetInstance(const std::string triple,
+                                                    const bool allow_missing = true) {
+  std::string error;
+  // create LLVM instance
+  // required mimimum: llvm::InitializeAllTargets()
+  const llvm::Target* llvm_instance = llvm::TargetRegistry::lookupTarget(triple, error);
+  if (!allow_missing && !llvm_instance) {
+    ICHECK(llvm_instance) << "LLVM instance error: `" << error << "`";
+  }
+
+  return llvm_instance;
+}
+
+static std::unique_ptr<llvm::TargetMachine> CreateLLVMTargetMachine(
+    const llvm::Target* llvm_instance, const std::string& triple, const std::string& cpu,
+    const std::string& features, const llvm::TargetOptions& target_options = {},
+    const llvm::Reloc::Model& reloc_model = llvm::Reloc::Static,
+    const llvm::CodeModel::Model& code_model = llvm::CodeModel::Small,
+#if TVM_LLVM_VERSION <= 170
+    const llvm::CodeGenOpt::Level& opt_level = llvm::CodeGenOpt::Level(0)) {
+#else
+    const llvm::CodeGenOptLevel& opt_level = llvm::CodeGenOptLevel(0)) {
+#endif
+  llvm::TargetMachine* tm = llvm_instance->createTargetMachine(
+      triple, cpu, features, target_options, reloc_model, code_model, opt_level);
+  ICHECK(tm != nullptr);
+
+  return std::unique_ptr<llvm::TargetMachine>(tm);
+}
+
 llvm::TargetMachine* LLVMTargetInfo::GetOrCreateTargetMachine(bool allow_missing) {
   if (target_machine_) return target_machine_.get();
 
   std::string error;
-  if (const llvm::Target* llvm_instance = llvm::TargetRegistry::lookupTarget(triple_, error)) {
-    llvm::TargetMachine* tm =
-        llvm_instance->createTargetMachine(triple_, cpu_, GetTargetFeatureString(), target_options_,
-                                           reloc_model_, code_model_, opt_level_);
-    target_machine_ = std::unique_ptr<llvm::TargetMachine>(tm);
+  if (const llvm::Target* llvm_instance = CreateLLVMTargetInstance(triple_, allow_missing)) {
+    target_machine_ =
+        CreateLLVMTargetMachine(llvm_instance, triple_, cpu_, GetTargetFeatureString(),
+                                target_options_, reloc_model_, code_model_, opt_level_);
   }
-  if (!allow_missing) {
-    ICHECK(target_machine_ != nullptr) << error;
-  }
+  ICHECK(target_machine_ != nullptr);
   return target_machine_.get();
 }
 
@@ -362,6 +480,7 @@ std::string LLVMTargetInfo::str() const {
 #endif
   }
 
+#if TVM_LLVM_VERSION <= 170
   if (opt_level_ != defaults::opt_level) {
     os << " -opt-level=";
     switch (opt_level_) {
@@ -379,6 +498,25 @@ std::string LLVMTargetInfo::str() const {
         break;
     }
   }
+#else
+  if (opt_level_ != defaults::opt_level) {
+    os << " -opt-level=";
+    switch (opt_level_) {
+      case llvm::CodeGenOptLevel::None:
+        os << "0";
+        break;
+      case llvm::CodeGenOptLevel::Less:
+        os << "1";
+        break;
+      case llvm::CodeGenOptLevel::Default:
+        os << "2";
+        break;
+      case llvm::CodeGenOptLevel::Aggressive:
+        os << "3";
+        break;
+    }
+  }
+#endif
 
   if (size_t num = llvm_options_.size(); num > 0) {
     os << " -cl-opt=";
@@ -390,6 +528,10 @@ std::string LLVMTargetInfo::str() const {
     }
     auto* quote = num > 1 ? "'" : "";
     os << quote << Join(",", opts) << quote;
+  }
+
+  if (jit_engine_ != "mcjit") {
+    os << " -jit=" << jit_engine_;
   }
 
   return os.str();
@@ -662,6 +804,82 @@ void LLVMTargetInfo::GetOptionValue(LLVMTargetInfo::Option* opt) const {
   }
 }
 
+const Array<String> LLVMTargetInfo::GetAllLLVMTargets() const {
+  Array<String> llvm_targets;
+  // iterate all archtypes
+  for (auto a = llvm::Triple::ArchType(llvm::Triple::ArchType::UnknownArch + 1);
+       a < llvm::Triple::ArchType::LastArchType; a = llvm::Triple::ArchType(a + 1)) {
+    std::string target_name = llvm::Triple::getArchTypeName(a).str();
+    // get valid target
+    if (CreateLLVMTargetInstance(target_name + "--", true)) {
+      llvm_targets.push_back(target_name);
+    }
+  }
+
+  return llvm_targets;
+}
+
+const Array<String> LLVMTargetInfo::GetAllLLVMTargetArches() const {
+  Array<String> cpu_arches;
+  // get the subtarget info module
+  auto llvm_instance = CreateLLVMTargetInstance(triple_, true);
+  std::unique_ptr<llvm::TargetMachine> target_machine =
+      CreateLLVMTargetMachine(llvm_instance, triple_, "", "");
+  const auto MCInfo = target_machine->getMCSubtargetInfo();
+
+  if (!MCInfo) {
+    return cpu_arches;
+  }
+  // get all arches
+  llvm::ArrayRef<llvm::SubtargetSubTypeKV> llvm_arches =
+#if TVM_LLVM_VERSION < 170
+      llvm::archViewer(*(const llvm::MCSubtargetInfo*)MCInfo);
+#else
+      MCInfo->getAllProcessorDescriptions();
+#endif
+  for (const auto& arch : llvm_arches) {
+    cpu_arches.push_back(arch.Key);
+  }
+
+  return cpu_arches;
+}
+
+const Map<String, String> LLVMTargetInfo::GetAllLLVMCpuFeatures() const {
+  std::string feats = "";
+  for (const auto& attr : attrs_) {
+    feats += feats.empty() ? attr : ("," + attr);
+  }
+  // get the subtarget info module
+  auto llvm_instance = CreateLLVMTargetInstance(triple_, true);
+  std::unique_ptr<llvm::TargetMachine> target_machine =
+      CreateLLVMTargetMachine(llvm_instance, triple_, cpu_.c_str(), feats);
+  const auto MCInfo = target_machine->getMCSubtargetInfo();
+
+  // get all features for CPU
+  llvm::ArrayRef<llvm::SubtargetFeatureKV> llvm_features =
+#if TVM_LLVM_VERSION < 180
+      llvm::featViewer(*(const llvm::MCSubtargetInfo*)MCInfo);
+#else
+      MCInfo->getAllProcessorFeatures();
+#endif
+  // TVM doesn't have an FFI friendly Set, so use a Map instead for now
+  Map<String, String> cpu_features;
+  for (const auto& feat : llvm_features) {
+    if (MCInfo->checkFeatures("+" + std::string(feat.Key))) {
+      cpu_features.Set(feat.Key, "");
+    }
+  }
+
+  return cpu_features;
+}
+
+const bool LLVMTargetInfo::TargetHasCPUFeature(const std::string& feature) const {
+  // lookup features for `-mcpu`
+  auto feats = GetAllLLVMCpuFeatures();
+  bool has_feature = feats.find(feature) != feats.end();
+  return has_feature;
+}
+
 // LLVMTarget
 
 bool LLVMTarget::modified_llvm_state_ = false;
@@ -702,7 +920,11 @@ std::string LLVMTarget::GetTargetMetadata(const llvm::Module& module) {
   if (llvm::Metadata* tvm_target = module.getModuleFlag("tvm_target")) {
     auto* mdstr = llvm::cast<llvm::MDString>(tvm_target);
     llvm::StringRef meta = mdstr->getString();
+#if TVM_LLVM_VERSION >= 180
+    if (meta.starts_with("llvm")) {
+#else
     if (meta.startswith("llvm")) {
+#endif
       return meta.str();
     }
   }

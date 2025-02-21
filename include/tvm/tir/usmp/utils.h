@@ -27,6 +27,7 @@
 
 #include <tvm/ir/expr.h>
 #include <tvm/ir/memory_pools.h>
+#include <tvm/ir/module.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/target/target.h>
 #include <tvm/tir/stmt.h>
@@ -224,7 +225,7 @@ struct AllocatedPoolInfoNode : public Object {
     hash_reduce(pool_var_idx);
   }
 
-  static constexpr const char* _type_key = "tir.usmp.AllocatedPoolInfo";
+  static constexpr const char* _type_key = "ir.AllocatedPoolInfo";
   TVM_DECLARE_FINAL_OBJECT_INFO(AllocatedPoolInfoNode, Object);
 };
 

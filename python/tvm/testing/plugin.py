@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# pylint: disable=unused-argument
 
 """Pytest plugin for using tvm testing extensions.
 
@@ -360,7 +361,7 @@ if HAVE_XDIST:
                 # serialized
                 items = {
                     "test_tvm_testing_features": "functional-tests",
-                    "tests/python/unittest/test_crt": "crt-tests",
+                    "tests/python/micro/test_crt": "crt-tests",
                     "tests/python/driver/tvmc": "tvmc-tests",
                 }
 

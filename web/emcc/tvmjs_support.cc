@@ -148,8 +148,15 @@ class AsyncLocalSession : public LocalSession {
         int code = args[0];
         TVMRetValue rv;
         rv = args[1];
-        this->EncodeReturn(std::move(rv),
-                           [&](TVMArgs encoded_args) { callback(RPCCode::kReturn, encoded_args); });
+        if (code == static_cast<int>(RPCCode::kReturn)) {
+          this->EncodeReturn(std::move(rv), [&](TVMArgs encoded_args) {
+            callback(RPCCode::kReturn, encoded_args);
+          });
+        } else {
+          // for exception, we can pass through as since this is just normal encoding.
+          ICHECK_EQ(code, static_cast<int>(RPCCode::kException));
+          callback(RPCCode::kException, args);
+        }
       });
 
       TVMRetValue temp;
@@ -297,7 +304,7 @@ class AsyncLocalSession : public LocalSession {
       CHECK(time_exec != nullptr) << "Cannot find wasm.GetTimer in the global function";
       (*time_exec)(TypedPackedFunc<void(int)>(finvoke), dev, number, repeat, min_repeat_ms,
                    limit_zero_time_iterations, cooldown_interval_ms, repeats_to_cooldown,
-                   on_complete);
+                   /*cache_flush_bytes=*/0, on_complete);
     };
     return PackedFunc(ftimer);
   }

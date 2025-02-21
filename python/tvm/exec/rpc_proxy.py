@@ -19,6 +19,7 @@
 import logging
 import argparse
 import os
+import glob
 from tvm.rpc.proxy import Proxy
 
 
@@ -27,19 +28,38 @@ def find_example_resource():
     curr_path = os.path.dirname(os.path.realpath(os.path.expanduser(__file__)))
     base_path = os.path.abspath(os.path.join(curr_path, "..", "..", ".."))
     index_page = os.path.join(base_path, "web", "apps", "browser", "rpc_server.html")
+    default_plugin_page = os.path.join(base_path, "web", "apps", "browser", "rpc_plugin.html")
+
     resource_files = [
-        os.path.join(base_path, "web", "dist", "tvmjs.bundle.js"),
-        os.path.join(base_path, "web", "dist", "wasm", "tvmjs_runtime.wasi.js"),
+        ("/", os.path.join(base_path, "web", "dist", "tvmjs.bundle.js")),
+        ("/", os.path.join(base_path, "web", "dist", "wasm", "tvmjs_runtime.wasi.js")),
+        ("/", index_page),
     ]
-    resource_base = os.path.join(base_path, "web", "dist", "www")
-    if os.path.isdir(resource_base):
-        for fname in os.listdir(resource_base):
-            full_name = os.path.join(resource_base, fname)
-            if os.path.isfile(full_name):
-                resource_files.append(full_name)
-    for fname in [index_page] + resource_files:
+    allow_format = ("json", "bin", "js", "wasm", "html", "css", "model")
+
+    # recursively apend things in www, up to two levels
+    resource_bases = [
+        os.path.join(base_path, "web", "dist", "www"),
+        os.path.join(base_path, "web", ".ndarray_cache"),
+    ]
+    for base in resource_bases:
+        if not os.path.isdir(base):
+            continue
+        for full_name in glob.glob("%s/**" % base, recursive=True):
+            fname = os.path.relpath(full_name, base)
+            dirname = os.path.dirname(fname)
+            fmt = fname.rsplit(".", 1)[-1]
+            if os.path.isfile(full_name) and fmt in allow_format:
+                resource_files.append((dirname, full_name))
+
+    for item in resource_files:
+        fname = item[-1]
         if not os.path.exists(fname):
             raise RuntimeError("Cannot find %s" % fname)
+
+    if not any(item[-1].endswith("rpc_plugin.html") for item in resource_files):
+        resource_files.append(("/", default_plugin_page))
+
     return index_page, resource_files
 
 
@@ -57,13 +77,20 @@ def main(args):
         prox = Proxy(
             args.host,
             port=args.port,
+            port_end=args.port_end,
             web_port=args.web_port,
             index_page=index,
             resource_files=js_files,
             tracker_addr=tracker_addr,
         )
     else:
-        prox = Proxy(args.host, port=args.port, web_port=args.web_port, tracker_addr=tracker_addr)
+        prox = Proxy(
+            args.host,
+            port=args.port,
+            port_end=args.port_end,
+            web_port=args.web_port,
+            tracker_addr=tracker_addr,
+        )
     prox.proc.join()
 
 
@@ -71,6 +98,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="127.0.0.1", help="the hostname of the server")
     parser.add_argument("--port", type=int, default=9090, help="The port of the RPC")
+    parser.add_argument("--port-end", type=int, default=9199, help="The end search port of the RPC")
     parser.add_argument(
         "--web-port", type=int, default=8888, help="The port of the http/websocket server"
     )

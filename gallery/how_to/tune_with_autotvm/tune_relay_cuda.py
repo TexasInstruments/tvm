@@ -104,17 +104,6 @@ def get_network(name, batch_size):
     elif name == "inception_v3":
         input_shape = (batch_size, 3, 299, 299)
         mod, params = relay.testing.inception_v3.get_workload(batch_size=batch_size, dtype=dtype)
-    elif name == "mxnet":
-        # an example for mxnet model
-        from mxnet.gluon.model_zoo.vision import get_model
-
-        block = get_model("resnet18_v1", pretrained=True)
-        mod, params = relay.frontend.from_mxnet(block, shape={"data": input_shape}, dtype=dtype)
-        net = mod["main"]
-        net = relay.Function(
-            net.params, relay.nn.softmax(net.body), None, net.type_params, net.attrs
-        )
-        mod = tvm.IRModule.from_expr(net)
     else:
         raise ValueError("Unsupported network: " + name)
 
@@ -185,8 +174,30 @@ def tune_tasks(
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
 
         # create tuner
-        if tuner == "xgb" or tuner == "xgb-rank":
+        if tuner == "xgb":
+            tuner_obj = XGBTuner(tsk, loss_type="reg")
+        elif tuner == "xgb_knob":
+            tuner_obj = XGBTuner(tsk, loss_type="reg", feature_type="knob")
+        elif tuner == "xgb_itervar":
+            tuner_obj = XGBTuner(tsk, loss_type="reg", feature_type="itervar")
+        elif tuner == "xgb_curve":
+            tuner_obj = XGBTuner(tsk, loss_type="reg", feature_type="curve")
+        elif tuner == "xgb_rank":
             tuner_obj = XGBTuner(tsk, loss_type="rank")
+        elif tuner == "xgb_rank_knob":
+            tuner_obj = XGBTuner(tsk, loss_type="rank", feature_type="knob")
+        elif tuner == "xgb_rank_itervar":
+            tuner_obj = XGBTuner(tsk, loss_type="rank", feature_type="itervar")
+        elif tuner == "xgb_rank_curve":
+            tuner_obj = XGBTuner(tsk, loss_type="rank", feature_type="curve")
+        elif tuner == "xgb_rank_binary":
+            tuner_obj = XGBTuner(tsk, loss_type="rank-binary")
+        elif tuner == "xgb_rank_binary_knob":
+            tuner_obj = XGBTuner(tsk, loss_type="rank-binary", feature_type="knob")
+        elif tuner == "xgb_rank_binary_itervar":
+            tuner_obj = XGBTuner(tsk, loss_type="rank-binary", feature_type="itervar")
+        elif tuner == "xgb_rank_binary_curve":
+            tuner_obj = XGBTuner(tsk, loss_type="rank-binary", feature_type="curve")
         elif tuner == "ga":
             tuner_obj = GATuner(tsk, pop_size=100)
         elif tuner == "random":

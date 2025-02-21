@@ -73,7 +73,7 @@ int component_for_device(Device dev) {
       component_name = "rocm";
       break;
     default:
-      LOG(WARNING) << "PAPI does not support device " << DeviceName(dev.device_type);
+      LOG(WARNING) << "PAPI does not support device " << DLDeviceType2Str(dev.device_type);
       return -1;
   }
   int cidx = PAPI_get_component_index(component_name.c_str());
@@ -91,7 +91,7 @@ int component_for_device(Device dev) {
  * PAPI (Performance Application Programming Interface) collects metrics on a
  * variety of platforms including cpu, cuda and rocm.
  *
- * PAPI is avaliable at https://bitbucket.org/icl/papi/src/master/.
+ * PAPI is avaliable at https://github.com/icl-utk-edu/papi.
  */
 struct PAPIMetricCollectorNode final : public MetricCollectorNode {
   /*! \brief Construct a metric collector that collects a specific set of metrics.
@@ -170,8 +170,9 @@ struct PAPIMetricCollectorNode final : public MetricCollectorNode {
           default:
             break;
         }
-        LOG(WARNING) << "PAPI could not initialize counters for " << DeviceName(device.device_type)
-                     << ": " << component->disabled_reason << "\n"
+        LOG(WARNING) << "PAPI could not initialize counters for "
+                     << DLDeviceType2Str(device.device_type) << ": " << component->disabled_reason
+                     << "\n"
                      << help_message;
         continue;
       }

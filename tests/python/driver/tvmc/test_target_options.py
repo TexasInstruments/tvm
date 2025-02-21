@@ -53,6 +53,40 @@ def test_target_to_argparse_known_codegen():
     assert parsed.target_cmsis_nn_mcpu == "cortex-m3"
 
 
+@tvm.testing.requires_mrvl
+def test_target_to_argparse_for_mrvl_hybrid():
+    parser = argparse.ArgumentParser()
+    generate_target_args(parser)
+    parsed, _ = parser.parse_known_args(
+        [
+            "--target=mrvl, llvm",
+            "--target-mrvl-mattr=wb_pin_ocm=1,quantize=fp16",
+            "--target-mrvl-num_tiles=2",
+            "--target-mrvl-mcpu=cnf10kb",
+        ]
+    )
+
+    assert parsed.target == "mrvl, llvm"
+    assert parsed.target_mrvl_mattr == "wb_pin_ocm=1,quantize=fp16"
+    assert parsed.target_mrvl_num_tiles == 2
+    assert parsed.target_mrvl_mcpu == "cnf10kb"
+
+
+@tvm.testing.requires_mrvl
+def test_default_arg_for_mrvl_hybrid():
+    parser = argparse.ArgumentParser()
+    generate_target_args(parser)
+    parsed, _ = parser.parse_known_args(
+        [
+            "--target=mrvl, llvm",
+        ]
+    )
+    assert parsed.target == "mrvl, llvm"
+    assert parsed.target_mrvl_mcpu == "cn10ka"
+    assert parsed.target_mrvl_num_tiles == 8
+
+
+@tvm.testing.requires_cmsisnn
 def test_mapping_target_args():
     parser = argparse.ArgumentParser()
     generate_target_args(parser)
@@ -96,6 +130,21 @@ def test_include_known_codegen():
     }
 
 
+@tvm.testing.requires_ethosu
+def test_ethosu_compiler_attrs():
+    # It is checked that the represented string and boolean types in the
+    # EthosUCompilerConfigNode structure can be passed via the command line
+    parser = argparse.ArgumentParser()
+    generate_target_args(parser)
+    parsed, _ = parser.parse_known_args(
+        ["--target-ethos-u-accelerator_config=ethos-u55-32", "--target-ethos-u-enable_cascader=1"]
+    )
+    assert reconstruct_target_args(parsed) == {
+        "ethos-u": {"accelerator_config": "ethos-u55-32", "enable_cascader": 1},
+    }
+
+
+@tvm.testing.requires_cmsisnn
 def test_skip_target_from_codegen():
     parser = argparse.ArgumentParser()
     generate_target_args(parser)

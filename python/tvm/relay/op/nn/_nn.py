@@ -307,7 +307,7 @@ def convert_conv2d(attrs, inputs, tinfos, desired_layouts):
             new_attrs["kernel_layout"] = desired_kernel_layout
             return relay.nn.contrib_conv2d_nchwc(data, weight, **new_attrs)
 
-    raise ValueError("Layout %s is not yet supported." % desired_data_layout)
+    raise ValueError(f"Layout {desired_data_layout} is not yet supported.")
 
 
 # conv2d_transpose
@@ -333,6 +333,12 @@ def legalize_conv2d_transpose(attrs, inputs, types):
         The legalized expr
     """
     return topi.nn.conv2d_transpose_legalize(attrs, inputs, types)
+
+
+@reg.register_alter_op_layout("nn.conv2d_transpose")
+def alter_op_layout_conv2d_transpose(attrs, inputs, tinfos, out_type):
+    """Alternate the layout of conv2d_transpose"""
+    return topi.nn.conv2d_transpose_alter_layout(attrs, inputs, tinfos, out_type)
 
 
 @reg.register_convert_op_layout("nn.conv2d_transpose")
@@ -375,7 +381,7 @@ def convert_conv2d_transpose(attrs, inputs, tinfos, desired_layouts):
         new_attrs["kernel_layout"] = "HWIO"
         return relay.nn.conv2d_transpose(data, weight, **new_attrs)
 
-    raise ValueError("Layout %s is not yet supported." % desired_data_layout)
+    raise ValueError(f"Layout {desired_data_layout} is not yet supported.")
 
 
 # conv3d_transpose
@@ -424,7 +430,7 @@ def convert_conv3d_transpose(attrs, inputs, tinfos, desired_layouts):
         new_attrs["kernel_layout"] = "DHWOI"
         return relay.nn.conv3d_transpose(data, weight, **new_attrs)
 
-    raise ValueError("Layout %s is not yet supported" % desired_data_layout)
+    raise ValueError(f"Layout {desired_data_layout} is not yet supported")
 
 
 @reg.register_legalize("nn.conv3d_transpose")
@@ -498,7 +504,7 @@ def convert_conv3d(attrs, inputs, tinfos, desired_layouts):
         new_attrs["kernel_layout"] = "DHWIO"
         return relay.nn.conv3d(data, weight, **new_attrs)
 
-    raise ValueError("Layout %s is not yet supported" % desired_data_layout)
+    raise ValueError(f"Layout {desired_data_layout} is not yet supported")
 
 
 # conv3d_winograd related operators
@@ -792,7 +798,7 @@ reg.register_strategy(
 @reg.register_compute("nn.contrib_conv2d_gemm_weight_transform")
 def compute_contrib_conv2d_gemm_weight_transform(attrs, inputs, out_dtype):
     """Compute definition of contrib_conv2d_gemm_weight_transform"""
-    out = topi.nn.conv2d_gemm_weight_transform(inputs[0], attrs.tile_rows, attrs.tile_cols)
+    out = topi.nn.conv2d_gemm_weight_transform(inputs[0], attrs.tile_N, attrs.tile_K)
     return [out]
 
 
@@ -917,7 +923,7 @@ def convert_deformable_conv2d(attrs, inputs, tinfos, desired_layouts):
     elif desired_data_layout == "NHWC":
         new_attrs["kernel_layout"] = "HWIO"
     else:
-        raise ValueError("Layout %s is not yet supported." % desired_data_layout)
+        raise ValueError(f"Layout {desired_data_layout} is not yet supported.")
 
     return relay.nn.deformable_conv2d(data, offset, weight, **new_attrs)
 
@@ -1457,10 +1463,7 @@ def dense_shape_func(attrs, inputs, _):
     """
     ret = [
         _matmul_shape_func(
-            inputs[0],
-            inputs[1],
-            expr.IntImm("bool", False),
-            expr.IntImm("bool", True),
+            inputs[0], inputs[1], expr.IntImm("bool", False), expr.IntImm("bool", True)
         )
     ]
     return ret

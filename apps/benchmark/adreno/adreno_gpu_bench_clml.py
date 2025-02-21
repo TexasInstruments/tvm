@@ -84,17 +84,6 @@ def get_network(name, batch_size, dtype="float32"):
         net, params = testing.squeezenet.get_workload(
             batch_size=batch_size, version=version, dtype=dtype
         )
-    elif name == "mxnet":
-        # an example for mxnet model
-        from mxnet.gluon.model_zoo.vision import get_model
-
-        block = get_model("resnet18_v1", pretrained=True)
-        net, params = relay.frontend.from_mxnet(block, shape={"data": input_shape}, dtype=dtype)
-        net = net["main"]
-        net = relay.Function(
-            net.params, relay.nn.softmax(net.body), None, net.type_params, net.attrs
-        )
-        net = tvm.IRModule.from_expr(net)
     else:
         raise ValueError("Unsupported network: " + name)
 
@@ -116,6 +105,7 @@ def print_progress(msg):
 def tune_tasks(
     tasks,
     measure_option,
+    tuner="xgb",
     n_trial=1024,
     early_stopping=None,
     log_filename="tuning.log",
@@ -127,7 +117,40 @@ def tune_tasks(
     for i, tsk in enumerate(reversed(tasks)):
         print("Task: ", tsk)
         prefix = "[Task %2d/%2d] " % (i + 1, len(tasks))
-        tuner_obj = XGBTuner(tsk, loss_type="rank")
+
+        # create tuner
+        if tuner == "xgb":
+            tuner_obj = XGBTuner(tsk, loss_type="reg")
+        elif tuner == "xgb_knob":
+            tuner_obj = XGBTuner(tsk, loss_type="reg", feature_type="knob")
+        elif tuner == "xgb_itervar":
+            tuner_obj = XGBTuner(tsk, loss_type="reg", feature_type="itervar")
+        elif tuner == "xgb_curve":
+            tuner_obj = XGBTuner(tsk, loss_type="reg", feature_type="curve")
+        elif tuner == "xgb_rank":
+            tuner_obj = XGBTuner(tsk, loss_type="rank")
+        elif tuner == "xgb_rank_knob":
+            tuner_obj = XGBTuner(tsk, loss_type="rank", feature_type="knob")
+        elif tuner == "xgb_rank_itervar":
+            tuner_obj = XGBTuner(tsk, loss_type="rank", feature_type="itervar")
+        elif tuner == "xgb_rank_curve":
+            tuner_obj = XGBTuner(tsk, loss_type="rank", feature_type="curve")
+        elif tuner == "xgb_rank_binary":
+            tuner_obj = XGBTuner(tsk, loss_type="rank-binary")
+        elif tuner == "xgb_rank_binary_knob":
+            tuner_obj = XGBTuner(tsk, loss_type="rank-binary", feature_type="knob")
+        elif tuner == "xgb_rank_binary_itervar":
+            tuner_obj = XGBTuner(tsk, loss_type="rank-binary", feature_type="itervar")
+        elif tuner == "xgb_rank_binary_curve":
+            tuner_obj = XGBTuner(tsk, loss_type="rank-binary", feature_type="curve")
+        elif tuner == "ga":
+            tuner_obj = GATuner(tsk, pop_size=50)
+        elif tuner == "random":
+            tuner_obj = RandomTuner(tsk)
+        elif tuner == "gridsearch":
+            tuner_obj = GridSearchTuner(tsk)
+        else:
+            raise ValueError("Invalid tuner: " + tuner)
 
         tsk_trial = min(n_trial, len(tsk.config_space))
         tuner_obj.tune(
@@ -190,7 +213,7 @@ def evaluate_network(network, target, target_host, dtype, repeat):
     tmp = tempdir()
 
     filename = "%s.so" % network
-    lib.export_library(tmp.relpath(filename), ndk.create_shared)
+    lib.export_library(tmp.relpath(filename), fcompile=ndk.create_shared)
 
     # upload library and params
     print_progress("%-20s uploading..." % network)

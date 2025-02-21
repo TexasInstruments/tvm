@@ -128,8 +128,7 @@ void CoreMLRuntime::Init(const std::string& symbol, const std::string& _model_pa
   model_ = std::unique_ptr<CoreMLModel>(new CoreMLModel(url));
 }
 
-PackedFunc CoreMLRuntime::GetFunction(const std::string& name,
-                                      const ObjectPtr<Object>& sptr_to_self) {
+PackedFunc CoreMLRuntime::GetFunction(const String& name, const ObjectPtr<Object>& sptr_to_self) {
   // Return member functions during query.
   if (name == "invoke" || name == "run") {
     return PackedFunc([this](TVMArgs args, TVMRetValue* rv) { model_->Invoke(); });
@@ -158,7 +157,7 @@ PackedFunc CoreMLRuntime::GetFunction(const std::string& name,
         ICHECK(args[i].type_code() == kTVMDLTensorHandle ||
                args[i].type_code() == kTVMNDArrayHandle)
             << "Expect NDArray or DLTensor as inputs\n";
-        if (args[i].type_code() == kTVMDLTensorHandle) {
+        if (args[i].type_code() == kTVMDLTensorHandle || args[i].type_code() == kTVMNDArrayHandle) {
           model_->SetInput([input_names[i] UTF8String], args[i]);
         } else {
           LOG(FATAL) << "Not implemented";

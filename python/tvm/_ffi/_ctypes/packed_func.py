@@ -15,13 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 # coding: utf-8
-# pylint: disable=invalid-name, protected-access, too-many-branches, global-statement, unused-import
+# pylint: disable=invalid-name, protected-access, too-many-branches
+# pylint: disable=global-statement, unused-import, using-constant-test
 """Function configuration API."""
 import ctypes
 import traceback
 from numbers import Number, Integral
 
-from ..base import _LIB, get_last_ffi_error, py2cerror, check_call
+from ..base import _LIB, get_last_ffi_error, py2cerror, check_call, raise_last_ffi_error
 from ..base import c_str, string_types
 from ..runtime_ctypes import DataType, TVMByteArray, Device, ObjectRValueRef
 from . import ndarray as _nd
@@ -79,10 +80,11 @@ def convert_to_tvm_func(pyfunc):
         # pylint: disable=broad-except
         try:
             rv = local_pyfunc(*pyargs)
-        except Exception:
+        except Exception as err:
             msg = traceback.format_exc()
             msg = py2cerror(msg)
-            _LIB.TVMAPISetLastError(c_str(msg))
+            _LIB.TVMAPISetLastPythonError(ctypes.py_object(err))
+
             return -1
 
         if rv is not None:
@@ -93,7 +95,7 @@ def convert_to_tvm_func(pyfunc):
             if not isinstance(ret, TVMRetValueHandle):
                 ret = TVMRetValueHandle(ret)
             if _LIB.TVMCFuncSetReturn(ret, values, tcodes, ctypes.c_int(1)) != 0:
-                raise get_last_ffi_error()
+                raise_last_ffi_error()
             _ = temp_args
             _ = rv
         return 0
@@ -105,7 +107,7 @@ def convert_to_tvm_func(pyfunc):
     pyobj = ctypes.py_object(f)
     ctypes.pythonapi.Py_IncRef(pyobj)
     if _LIB.TVMFuncCreateFromCFunc(f, pyobj, TVM_FREE_PYOBJ, ctypes.byref(handle)) != 0:
-        raise get_last_ffi_error()
+        raise_last_ffi_error()
     return _make_packed_func(handle, False)
 
 
@@ -132,6 +134,11 @@ def _make_tvm_args(args, temp_args):
         elif isinstance(arg, _nd._TVM_COMPATS):
             values[i].v_handle = ctypes.c_void_p(arg._tvm_handle)
             type_codes[i] = arg.__class__._tvm_tcode
+        elif isinstance(arg, bool):
+            # A python `bool` is a subclass of `int`, so this check
+            # must occur before `Integral`.
+            values[i].v_bool = arg
+            type_codes[i] = ArgTypeCode.BOOL
         elif isinstance(arg, Integral):
             values[i].v_int64 = arg
             type_codes[i] = ArgTypeCode.INT
@@ -145,7 +152,7 @@ def _make_tvm_args(args, temp_args):
             values[i].v_int64 = _device_to_int64(arg)
             type_codes[i] = ArgTypeCode.DLDEVICE
         elif isinstance(arg, (bytearray, bytes)):
-            # from_buffer only taeks in bytearray.
+            # from_buffer only takes in bytearray.
             if isinstance(arg, bytes):
                 byte_arr = bytearray(arg)
                 temp_args.append(byte_arr)
@@ -193,6 +200,7 @@ class PackedFuncBase(object):
     """Function base."""
 
     __slots__ = ["handle", "is_global"]
+
     # pylint: disable=no-member
     def __init__(self, handle, is_global):
         """Initialize the function with handle
@@ -211,7 +219,7 @@ class PackedFuncBase(object):
     def __del__(self):
         if not self.is_global and _LIB is not None:
             if _LIB.TVMFuncFree(self.handle) != 0:
-                raise get_last_ffi_error()
+                raise_last_ffi_error()
 
     def __call__(self, *args):
         """Call the function with positional arguments
@@ -234,7 +242,7 @@ class PackedFuncBase(object):
             )
             != 0
         ):
-            raise get_last_ffi_error()
+            raise_last_ffi_error()
         _ = temp_args
         _ = args
         return RETURN_SWITCH[ret_tcode.value](ret_val)
@@ -257,7 +265,7 @@ def __init_handle_by_constructor__(fconstructor, args):
         )
         != 0
     ):
-        raise get_last_ffi_error()
+        raise_last_ffi_error()
     _ = temp_args
     _ = args
     assert ret_tcode.value == ArgTypeCode.OBJECT_HANDLE
@@ -332,3 +340,15 @@ def _set_class_object_generic(object_generic_class, func_convert_to_object):
     global _FUNC_CONVERT_TO_OBJECT
     _CLASS_OBJECT_GENERIC = object_generic_class
     _FUNC_CONVERT_TO_OBJECT = func_convert_to_object
+
+
+def _init_pythonapi_inc_def_ref():
+    register_func = _LIB.TVMBackendRegisterEnvCAPI
+    register_func(c_str("Py_IncRef"), ctypes.pythonapi.Py_IncRef)
+    register_func(c_str("Py_DecRef"), ctypes.pythonapi.Py_DecRef)
+    register_func(c_str("PyGILState_Ensure"), ctypes.pythonapi.PyGILState_Ensure)
+    register_func(c_str("PyGILState_Release"), ctypes.pythonapi.PyGILState_Release)
+    register_func(c_str("PyErr_CheckSignals"), ctypes.pythonapi.PyErr_CheckSignals)
+
+
+_init_pythonapi_inc_def_ref()

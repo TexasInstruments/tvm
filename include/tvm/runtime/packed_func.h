@@ -26,7 +26,9 @@
 
 #include <tvm/runtime/c_runtime_api.h>
 #include <tvm/runtime/container/array.h>
+#include <tvm/runtime/container/boxed_primitive.h>
 #include <tvm/runtime/container/map.h>
+#include <tvm/runtime/container/variant.h>
 #include <tvm/runtime/data_type.h>
 #include <tvm/runtime/logging.h>
 #include <tvm/runtime/module.h>
@@ -36,6 +38,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -132,7 +135,7 @@ class PackedFuncSubObj : public PackedFuncObj {
  *  The arguments are passed by packed format.
  *
  *  This is an useful unified interface to call generated functions,
- *  It is the unified function function type of TVM.
+ *  It is the unified function type of TVM.
  *  It corresponds to TVMFunctionHandle in C runtime API.
  */
 class PackedFunc : public ObjectRef {
@@ -409,6 +412,14 @@ class TVMArgs {
    * \return the ith argument.
    */
   inline TVMArgValue operator[](int i) const;
+  /*!
+   * \brief Get the i-th argument and do proper type checking with detailed error messages.
+   * \tparam T The expected type.
+   * \param i The index
+   * \return The corresponding argument value.
+   */
+  template <typename T>
+  inline T At(int i) const;
 };
 
 /*!
@@ -418,9 +429,13 @@ class TVMArgs {
  */
 inline const char* ArgTypeCode2Str(int type_code);
 
+inline std::ostream& operator<<(std::ostream& os, DLDevice dev);  // NOLINT(*)
+
+#define TVM_LOG_INCORRECT_TYPE_CODE(CODE, T) \
+  "expected " << ArgTypeCode2Str(T) << " but got " << ArgTypeCode2Str(CODE)
+
 // macro to check type code.
-#define TVM_CHECK_TYPE_CODE(CODE, T) \
-  ICHECK_EQ(CODE, T) << "expected " << ArgTypeCode2Str(T) << " but got " << ArgTypeCode2Str(CODE)
+#define TVM_CHECK_TYPE_CODE(CODE, T) ICHECK_EQ(CODE, T) << TVM_LOG_INCORRECT_TYPE_CODE(CODE, T)
 
 /*!
  * \brief Type traits for runtime type check during FFI conversion.
@@ -476,6 +491,11 @@ struct ObjectTypeChecker<Array<T>> {
     if (!ptr->IsInstance<ArrayNode>()) {
       return String(ptr->GetTypeKey());
     }
+
+    if constexpr (std::is_same_v<T, ObjectRef>) {
+      return NullOpt;
+    }
+
     const ArrayNode* n = static_cast<const ArrayNode*>(ptr);
     for (size_t i = 0; i < n->size(); i++) {
       const ObjectRef& p = (*n)[i];
@@ -489,6 +509,8 @@ struct ObjectTypeChecker<Array<T>> {
   static bool Check(const Object* ptr) {
     if (ptr == nullptr) return true;
     if (!ptr->IsInstance<ArrayNode>()) return false;
+    if constexpr (std::is_same_v<T, ObjectRef>) return true;
+
     const ArrayNode* n = static_cast<const ArrayNode*>(ptr);
     for (const ObjectRef& p : *n) {
       if (!ObjectTypeChecker<T>::Check(p.get())) {
@@ -499,15 +521,27 @@ struct ObjectTypeChecker<Array<T>> {
   }
   static std::string TypeName() { return "Array[" + ObjectTypeChecker<T>::TypeName() + "]"; }
 };
+
 template <typename K, typename V>
 struct ObjectTypeChecker<Map<K, V>> {
   static Optional<String> CheckAndGetMismatch(const Object* ptr) {
     if (ptr == nullptr) return NullOpt;
     if (!ptr->IsInstance<MapNode>()) return String(ptr->GetTypeKey());
+
+    if constexpr (std::is_same_v<K, ObjectRef> && std::is_same_v<V, ObjectRef>) {
+      return NullOpt;
+    }
+
     const MapNode* n = static_cast<const MapNode*>(ptr);
     for (const auto& kv : *n) {
-      Optional<String> key_type = ObjectTypeChecker<K>::CheckAndGetMismatch(kv.first.get());
-      Optional<String> value_type = ObjectTypeChecker<K>::CheckAndGetMismatch(kv.first.get());
+      Optional<String> key_type = NullOpt;
+      if constexpr (!std::is_same_v<K, ObjectRef>) {
+        key_type = ObjectTypeChecker<K>::CheckAndGetMismatch(kv.first.get());
+      }
+      Optional<String> value_type = NullOpt;
+      if constexpr (!std::is_same_v<V, ObjectRef>) {
+        value_type = ObjectTypeChecker<K>::CheckAndGetMismatch(kv.first.get());
+      }
       if (key_type.defined() || value_type.defined()) {
         std::string key_name =
             key_type.defined() ? std::string(key_type.value()) : ObjectTypeChecker<K>::TypeName();
@@ -521,10 +555,19 @@ struct ObjectTypeChecker<Map<K, V>> {
   static bool Check(const Object* ptr) {
     if (ptr == nullptr) return true;
     if (!ptr->IsInstance<MapNode>()) return false;
+
+    if constexpr (std::is_same_v<K, ObjectRef> && std::is_same_v<V, ObjectRef>) {
+      return true;
+    }
+
     const MapNode* n = static_cast<const MapNode*>(ptr);
     for (const auto& kv : *n) {
-      if (!ObjectTypeChecker<K>::Check(kv.first.get())) return false;
-      if (!ObjectTypeChecker<V>::Check(kv.second.get())) return false;
+      if constexpr (!std::is_same_v<K, ObjectRef>) {
+        if (!ObjectTypeChecker<K>::Check(kv.first.get())) return false;
+      }
+      if constexpr (!std::is_same_v<V, ObjectRef>) {
+        if (!ObjectTypeChecker<V>::Check(kv.second.get())) return false;
+      }
     }
     return true;
   }
@@ -534,40 +577,43 @@ struct ObjectTypeChecker<Map<K, V>> {
   }
 };
 
+template <typename OnlyVariant>
+struct ObjectTypeChecker<Variant<OnlyVariant>> {
+  static Optional<String> CheckAndGetMismatch(const Object* ptr) {
+    return ObjectTypeChecker<OnlyVariant>::CheckAndGetMismatch(ptr);
+  }
+  static bool Check(const Object* ptr) { return ObjectTypeChecker<OnlyVariant>::Check(ptr); }
+  static std::string TypeName() { return "Variant[" + VariantNames() + "]"; }
+  static std::string VariantNames() { return ObjectTypeChecker<OnlyVariant>::TypeName(); }
+};
+
+template <typename FirstVariant, typename... RemainingVariants>
+struct ObjectTypeChecker<Variant<FirstVariant, RemainingVariants...>> {
+  static Optional<String> CheckAndGetMismatch(const Object* ptr) {
+    auto try_first = ObjectTypeChecker<FirstVariant>::CheckAndGetMismatch(ptr);
+    if (!try_first.defined()) {
+      return try_first;
+    }
+
+    return ObjectTypeChecker<Variant<RemainingVariants...>>::CheckAndGetMismatch(ptr);
+  }
+  static bool Check(const Object* ptr) {
+    return ObjectTypeChecker<FirstVariant>::Check(ptr) ||
+           ObjectTypeChecker<Variant<RemainingVariants...>>::Check(ptr);
+  }
+  static std::string TypeName() { return "Variant[" + VariantNames() + "]"; }
+  static std::string VariantNames() {
+    return ObjectTypeChecker<FirstVariant>::TypeName() + ", " +
+           ObjectTypeChecker<Variant<RemainingVariants...>>::VariantNames();
+  }
+};
+
 /*!
  * \brief Internal base class to
  *  handle conversion to POD values.
  */
 class TVMPODValue_ {
  public:
-  operator double() const {
-    // Allow automatic conversion from int to float
-    // This avoids errors when user pass in int from
-    // the frontend while the API expects a float.
-    if (type_code_ == kDLInt) {
-      return static_cast<double>(value_.v_int64);
-    }
-    TVM_CHECK_TYPE_CODE(type_code_, kDLFloat);
-    return value_.v_float64;
-  }
-  operator int64_t() const {
-    TVM_CHECK_TYPE_CODE(type_code_, kDLInt);
-    return value_.v_int64;
-  }
-  operator uint64_t() const {
-    TVM_CHECK_TYPE_CODE(type_code_, kDLInt);
-    return value_.v_int64;
-  }
-  operator int() const {
-    TVM_CHECK_TYPE_CODE(type_code_, kDLInt);
-    ICHECK_LE(value_.v_int64, std::numeric_limits<int>::max());
-    ICHECK_GE(value_.v_int64, std::numeric_limits<int>::min());
-    return static_cast<int>(value_.v_int64);
-  }
-  operator bool() const {
-    TVM_CHECK_TYPE_CODE(type_code_, kDLInt);
-    return value_.v_int64 != 0;
-  }
   operator void*() const {
     if (type_code_ == kTVMNullptr) return nullptr;
     if (type_code_ == kTVMDLTensorHandle) return value_.v_handle;
@@ -617,12 +663,39 @@ class TVMPODValue_ {
   T* ptr() const {
     return static_cast<T*>(value_.v_handle);
   }
-  // ObjectRef handling
-  template <typename TObjectRef,
-            typename = typename std::enable_if<std::is_base_of<ObjectRef, TObjectRef>::value>::type>
-  inline bool IsObjectRef() const;
-  template <typename TObjectRef>
-  inline TObjectRef AsObjectRef() const;
+
+  std::optional<bool> TryAsBool() const {
+    // Helper function to reduce duplication in the variable integer
+    // conversions.  This is publicly exposed, as it can be useful in
+    // specializations of PackedFuncValueConverter.
+    if (type_code_ == kTVMArgBool) {
+      return static_cast<bool>(value_.v_int64);
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<int64_t> TryAsInt() const {
+    // Helper function to reduce duplication in the variable integer
+    // conversions.  This is publicly exposed, as it can be useful in
+    // specializations of PackedFuncValueConverter.
+    if (type_code_ == kDLInt) {
+      return value_.v_int64;
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<double> TryAsFloat() const {
+    // Helper function to reduce duplication in the variable integer
+    // conversions.  This is publicly exposed, as it can be useful in
+    // specializations of PackedFuncValueConverter.
+    if (type_code_ == kDLFloat) {
+      return value_.v_float64;
+    } else {
+      return std::nullopt;
+    }
+  }
 
  protected:
   friend class TVMArgsSetter;
@@ -637,13 +710,90 @@ class TVMPODValue_ {
   int type_code_;
 };
 
+/*! \brief A utility class that adds methods useful for each POD type
+ *
+ * These cannot be provided in the base PODValue_ class, because
+ * TVMArgValue and TVMRetValue have different semantics for kTVMStr
+ * and kTVMBytes.
+ *
+ * kTVMStr:
+ *
+ *     For `TVMArgValue`, the active variant is `v_str`, a `const
+ *     char*`.  For `TVMRetValue`, the active variant is `v_handle`,
+ *     and should be cast from `void*` to `std::string*`.
+ *
+ * kTVMBytes:
+ *
+ *     The active variant is `v_handle`, a `void*`.  For
+ *     `TVMArgValue`, should be cast to `TVMByteArray*`.  For
+ *     `TVMRetValue`, should be cast to `std::string*`.
+ *
+ * When converting into an `ObjectRef`, a string may be used to build
+ * a `tvm::runtime::String`.  Because TVMArgValue and TVMRetValue use
+ * different representations for strings, any utility funciton which
+ * might attempt a conversion to an `ObjectRef` must be performed
+ * within a context that is aware of the derived class.
+ */
+template <typename Derived>
+class TVMPODValue_CRTP_ : public TVMPODValue_ {
+ public:
+  using TVMPODValue_::TVMPODValue_;
+
+  // ObjectRef handling
+  template <typename TObjectRef,
+            typename = typename std::enable_if<std::is_base_of<ObjectRef, TObjectRef>::value>::type>
+  inline bool IsObjectRef() const;
+  template <typename TObjectRef>
+  inline TObjectRef AsObjectRef() const;
+
+  operator double() const {
+    // Allow automatic conversion from int to float
+    // This avoids errors when user pass in int from
+    // the frontend while the API expects a float.
+    if (auto opt = TryAsFloat()) {
+      return opt.value();
+    } else if (auto opt = TryAsInt()) {
+      return opt.value();
+    } else if (auto opt = TryAsBool()) {
+      return opt.value();
+    } else {
+      LOG(FATAL) << TVM_LOG_INCORRECT_TYPE_CODE(type_code_, kDLFloat);
+    }
+  }
+  operator int64_t() const {
+    if (auto opt = TryAsInt()) {
+      return opt.value();
+    } else if (auto opt = TryAsBool()) {
+      return opt.value();
+    } else {
+      LOG(FATAL) << TVM_LOG_INCORRECT_TYPE_CODE(type_code_, kDLInt);
+    }
+  }
+  operator uint64_t() const { return operator int64_t(); }
+  operator int() const {
+    int64_t value = operator int64_t();
+    ICHECK_LE(value, std::numeric_limits<int>::max());
+    ICHECK_GE(value, std::numeric_limits<int>::min());
+    return value;
+  }
+  operator bool() const {
+    if (auto opt = TryAsBool()) {
+      return opt.value();
+    } else if (auto opt = TryAsInt()) {
+      return opt.value();
+    } else {
+      LOG(FATAL) << TVM_LOG_INCORRECT_TYPE_CODE(type_code_, kDLInt);
+    }
+  }
+};
+
 /*!
  * \brief A single argument value to PackedFunc.
  *  Containing both type_code and TVMValue
  *
  *  Provides utilities to do type cast into other types.
  */
-class TVMArgValue : public TVMPODValue_ {
+class TVMArgValue : public TVMPODValue_CRTP_<TVMArgValue> {
  public:
   /*! \brief default constructor */
   TVMArgValue() {}
@@ -652,21 +802,21 @@ class TVMArgValue : public TVMPODValue_ {
    * \param value of the function
    * \param type_code The type code.
    */
-  TVMArgValue(TVMValue value, int type_code) : TVMPODValue_(value, type_code) {}
+  TVMArgValue(TVMValue value, int type_code) : TVMPODValue_CRTP_(value, type_code) {}
   // reuse converter from parent
-  using TVMPODValue_::operator double;
-  using TVMPODValue_::operator int64_t;
-  using TVMPODValue_::operator uint64_t;
-  using TVMPODValue_::operator int;
-  using TVMPODValue_::operator bool;
+  using TVMPODValue_CRTP_::operator double;
+  using TVMPODValue_CRTP_::operator int64_t;
+  using TVMPODValue_CRTP_::operator uint64_t;
+  using TVMPODValue_CRTP_::operator int;
+  using TVMPODValue_CRTP_::operator bool;
   using TVMPODValue_::operator void*;
   using TVMPODValue_::operator DLTensor*;
   using TVMPODValue_::operator NDArray;
   using TVMPODValue_::operator Device;
   using TVMPODValue_::operator Module;
   using TVMPODValue_::operator PackedFunc;
-  using TVMPODValue_::AsObjectRef;
-  using TVMPODValue_::IsObjectRef;
+  using TVMPODValue_CRTP_::AsObjectRef;
+  using TVMPODValue_CRTP_::IsObjectRef;
 
   // conversion operator.
   operator std::string() const {
@@ -678,9 +828,6 @@ class TVMArgValue : public TVMPODValue_ {
     } else if (type_code_ == kTVMStr) {
       return std::string(value_.v_str);
     } else {
-      ICHECK(IsObjectRef<tvm::runtime::String>())
-          << "Could not convert TVM object of type " << runtime::Object::TypeIndex2Key(type_code_)
-          << " to a string.";
       return AsObjectRef<tvm::runtime::String>().operator std::string();
     }
   }
@@ -706,15 +853,15 @@ class TVMArgValue : public TVMPODValue_ {
  *
  * \note For internal development purpose only.
  */
-class TVMMovableArgValue_ : public TVMPODValue_ {
+class TVMMovableArgValue_ : public TVMPODValue_CRTP_<TVMMovableArgValue_> {
  public:
-  TVMMovableArgValue_(TVMValue value, int type_code) : TVMPODValue_(value, type_code) {}
+  TVMMovableArgValue_(TVMValue value, int type_code) : TVMPODValue_CRTP_(value, type_code) {}
   // reuse converter from parent
-  using TVMPODValue_::operator double;
-  using TVMPODValue_::operator int64_t;
-  using TVMPODValue_::operator uint64_t;
-  using TVMPODValue_::operator int;
-  using TVMPODValue_::operator bool;
+  using TVMPODValue_CRTP_::operator double;
+  using TVMPODValue_CRTP_::operator int64_t;
+  using TVMPODValue_CRTP_::operator uint64_t;
+  using TVMPODValue_CRTP_::operator int;
+  using TVMPODValue_CRTP_::operator bool;
   using TVMPODValue_::operator void*;
   using TVMPODValue_::operator DLTensor*;
   using TVMPODValue_::operator NDArray;
@@ -796,7 +943,7 @@ class TVMMovableArgValueWithContext_ {
  *  TVMRetValue holds value and will manage the underlying containers
  *  when it stores a complicated data type.
  */
-class TVMRetValue : public TVMPODValue_ {
+class TVMRetValue : public TVMPODValue_CRTP_<TVMRetValue> {
  public:
   /*! \brief default constructor */
   TVMRetValue() {}
@@ -804,28 +951,28 @@ class TVMRetValue : public TVMPODValue_ {
    * \brief move constructor from another return value.
    * \param other The other return value.
    */
-  TVMRetValue(TVMRetValue&& other) : TVMPODValue_(other.value_, other.type_code_) {
+  TVMRetValue(TVMRetValue&& other) : TVMPODValue_CRTP_(other.value_, other.type_code_) {
     other.value_.v_handle = nullptr;
     other.type_code_ = kTVMNullptr;
   }
   /*! \brief destructor */
   ~TVMRetValue() { this->Clear(); }
   // reuse converter from parent
-  using TVMPODValue_::operator double;
-  using TVMPODValue_::operator int64_t;
-  using TVMPODValue_::operator uint64_t;
-  using TVMPODValue_::operator int;
-  using TVMPODValue_::operator bool;
+  using TVMPODValue_CRTP_::operator double;
+  using TVMPODValue_CRTP_::operator int64_t;
+  using TVMPODValue_CRTP_::operator uint64_t;
+  using TVMPODValue_CRTP_::operator int;
+  using TVMPODValue_CRTP_::operator bool;
   using TVMPODValue_::operator void*;
   using TVMPODValue_::operator DLTensor*;
   using TVMPODValue_::operator Device;
   using TVMPODValue_::operator NDArray;
   using TVMPODValue_::operator Module;
   using TVMPODValue_::operator PackedFunc;
-  using TVMPODValue_::AsObjectRef;
-  using TVMPODValue_::IsObjectRef;
+  using TVMPODValue_CRTP_::AsObjectRef;
+  using TVMPODValue_CRTP_::IsObjectRef;
 
-  TVMRetValue(const TVMRetValue& other) : TVMPODValue_() { this->Assign(other); }
+  TVMRetValue(const TVMRetValue& other) : TVMPODValue_CRTP_() { this->Assign(other); }
   // conversion operators
   operator std::string() const {
     if (type_code_ == kTVMDataType) {
@@ -893,7 +1040,7 @@ class TVMRetValue : public TVMPODValue_ {
   }
   TVMRetValue& operator=(const DataType& other) { return operator=(other.operator DLDataType()); }
   TVMRetValue& operator=(bool value) {
-    this->SwitchToPOD(kDLInt);
+    this->SwitchToPOD(kTVMArgBool);
     value_.v_int64 = value;
     return *this;
   }
@@ -966,7 +1113,8 @@ class TVMRetValue : public TVMPODValue_ {
    */
   static TVMRetValue MoveFromCHost(TVMValue value, int type_code) {
     // Can move POD and everything under the object system.
-    ICHECK(type_code <= kTVMPackedFuncHandle || type_code == kTVMNDArrayHandle);
+    ICHECK(type_code <= kTVMPackedFuncHandle || type_code == kTVMNDArrayHandle ||
+           type_code == kTVMArgBool);
     TVMRetValue ret;
     ret.value_ = value;
     ret.type_code_ = type_code;
@@ -981,9 +1129,9 @@ class TVMRetValue : public TVMPODValue_ {
   }
   // ObjectRef handling
   template <typename TObjectRef,
-            typename = typename std::enable_if<std::is_base_of<ObjectRef, TObjectRef>::value>::type>
+            typename = typename std::enable_if_t<std::is_base_of_v<ObjectRef, TObjectRef>>>
   inline TVMRetValue& operator=(TObjectRef other);
-  template <typename T, typename = typename std::enable_if<std::is_class<T>::value>::type>
+  template <typename T, typename = typename std::enable_if_t<std::is_class_v<T>>>
   inline operator T() const;
 
  private:
@@ -1011,9 +1159,11 @@ class TVMRetValue : public TVMPODValue_ {
         break;
       }
       case kTVMObjectHandle: {
-        // Avoid operator ObjectRef as we already know it is not NDArray/Module
-        SwitchToObject(kTVMObjectHandle,
-                       GetObjectPtr<Object>(static_cast<Object*>(other.value_.v_handle)));
+        // We already known it is not NDArray/Module, but
+        // operator=(ObjectRef) also handles conversions from wrappers
+        // around primitive types.  For NDArray/Module, the duplicate
+        // checks are removed with if constexpr.
+        operator=(other.operator ObjectRef());
         break;
       }
       case kTVMObjectRValueRefArg: {
@@ -1145,6 +1295,37 @@ struct PackedFuncValueConverter {
   }                                                                                         \
   }
 
+#define TVM_MODULE_VTABLE_BEGIN(TypeKey)                                                 \
+  const char* type_key() const final { return TypeKey; }                                 \
+  PackedFunc GetFunction(const String& _name, const ObjectPtr<Object>& _self) override { \
+    using SelfPtr = std::remove_cv_t<decltype(this)>;
+#define TVM_MODULE_VTABLE_END() \
+  return PackedFunc(nullptr);   \
+  }
+#define TVM_MODULE_VTABLE_END_WITH_DEFAULT(MemFunc) \
+  {                                                 \
+    auto f = (MemFunc);                             \
+    return (this->*f)(_name);                       \
+  }                                                 \
+  }  // NOLINT(*)
+#define TVM_MODULE_VTABLE_ENTRY(Name, MemFunc)                                                    \
+  if (_name == Name) {                                                                            \
+    return PackedFunc([_self](TVMArgs args, TVMRetValue* rv) -> void {                            \
+      using Helper = ::tvm::runtime::detail::ModuleVTableEntryHelper<decltype(MemFunc)>;          \
+      SelfPtr self = static_cast<SelfPtr>(_self.get());                                           \
+      CHECK_EQ(args.size(), Helper::LenArgs)                                                      \
+          << "Function `" << self->type_key() << "::" << Name << "` requires " << Helper::LenArgs \
+          << " arguments, but got " << args.size();                                               \
+      Helper::Call(rv, self, MemFunc, args, Helper::IndexSeq{});                                  \
+    });                                                                                           \
+  }
+#define TVM_MODULE_VTABLE_ENTRY_PACKED(Name, MemFunc)                  \
+  if (_name == Name) {                                                 \
+    return PackedFunc([_self](TVMArgs args, TVMRetValue* rv) -> void { \
+      (static_cast<SelfPtr>(_self.get())->*(MemFunc))(args, rv);       \
+    });                                                                \
+  }
+
 /*!
  * \brief Export typed function as a PackedFunc
  *        that can be loaded by LibraryModule.
@@ -1226,6 +1407,8 @@ inline const char* ArgTypeCode2Str(int type_code) {
   switch (type_code) {
     case kDLInt:
       return "int";
+    case kTVMArgBool:
+      return "bool";
     case kDLUInt:
       return "uint";
     case kDLFloat:
@@ -1257,6 +1440,56 @@ inline const char* ArgTypeCode2Str(int type_code) {
     default:
       LOG(FATAL) << "unknown type_code=" << static_cast<int>(type_code);
   }
+  throw;
+}
+
+/*!
+ * \brief The name of DLDeviceType.
+ * \param type The device type.
+ * \return the device name.
+ */
+inline const char* DLDeviceType2Str(int type) {
+  switch (type) {
+    case kDLCPU:
+      return "cpu";
+    case kDLCUDA:
+      return "cuda";
+    case kDLCUDAHost:
+      return "cuda_host";
+    case kDLCUDAManaged:
+      return "cuda_managed";
+    case kDLOpenCL:
+      return "opencl";
+    case kDLSDAccel:
+      return "sdaccel";
+    case kDLAOCL:
+      return "aocl";
+    case kDLVulkan:
+      return "vulkan";
+    case kDLMetal:
+      return "metal";
+    case kDLVPI:
+      return "vpi";
+    case kDLROCM:
+      return "rocm";
+    case kDLROCMHost:
+      return "rocm_host";
+    case kDLExtDev:
+      return "ext_dev";
+    case kDLOneAPI:
+      return "oneapi";
+    case kDLWebGPU:
+      return "webgpu";
+    case kDLHexagon:
+      return "hexagon";
+    case kOpenGL:
+      return "opengl";
+    case kDLMicroDev:
+      return "microdev";
+    default:
+      LOG(FATAL) << "unknown type = " << type;
+  }
+  throw;
 }
 
 namespace detail {
@@ -1280,17 +1513,86 @@ inline void for_each(const F& f, Args&&... args) {  // NOLINT(*)
   for_each_dispatcher<sizeof...(Args) == 0, 0, F>::run(f, std::forward<Args>(args)...);
 }
 
+template <typename T>
+struct ModuleVTableEntryHelper {};
+
+template <typename T, typename R, typename... Args>
+struct ModuleVTableEntryHelper<R (T::*)(Args...) const> {
+  using MemFnType = R (T::*)(Args...) const;
+  using IndexSeq = std::index_sequence_for<Args...>;
+  static constexpr const std::size_t LenArgs = sizeof...(Args);
+
+  template <std::size_t... Is>
+  static TVM_ALWAYS_INLINE void Call(TVMRetValue* rv, T* self, MemFnType f, TVMArgs args,
+                                     std::index_sequence<Is...>) {
+    *rv = (self->*f)(args[Is]...);
+  }
+};
+
+template <typename T, typename R, typename... Args>
+struct ModuleVTableEntryHelper<R (T::*)(Args...)> {
+  using MemFnType = R (T::*)(Args...);
+  using IndexSeq = std::index_sequence_for<Args...>;
+  static constexpr const std::size_t LenArgs = sizeof...(Args);
+
+  template <std::size_t... Is>
+  static TVM_ALWAYS_INLINE void Call(TVMRetValue* rv, T* self, MemFnType f, TVMArgs args,
+                                     std::index_sequence<Is...>) {
+    *rv = (self->*f)(args[Is]...);
+  }
+};
+
+template <typename T, typename... Args>
+struct ModuleVTableEntryHelper<void (T::*)(Args...) const> {
+  using MemFnType = void (T::*)(Args...) const;
+  using IndexSeq = std::index_sequence_for<Args...>;
+  static constexpr const std::size_t LenArgs = sizeof...(Args);
+
+  template <std::size_t... Is>
+  static TVM_ALWAYS_INLINE void Call(TVMRetValue* rv, T* self, MemFnType f, TVMArgs args,
+                                     std::index_sequence<Is...>) {
+    (self->*f)(args[Is]...);
+  }
+};
+
+template <typename T, typename... Args>
+struct ModuleVTableEntryHelper<void (T::*)(Args...)> {
+  using MemFnType = void (T::*)(Args...);
+  using IndexSeq = std::index_sequence_for<Args...>;
+  static constexpr const std::size_t LenArgs = sizeof...(Args);
+
+  template <std::size_t... Is>
+  static TVM_ALWAYS_INLINE void Call(TVMRetValue* rv, T* self, MemFnType f, TVMArgs args,
+                                     std::index_sequence<Is...>) {
+    (self->*f)(args[Is]...);
+  }
+};
+
 namespace parameter_pack {
 
 template <typename... EnumArgs>
 struct EnumeratedParamPack {
-  struct Invoke {
-    template <template <size_t i, typename TArgument> class Functor, typename... ExtraParams>
-    static void F(ExtraParams&&... extra_params) {
+  struct InvokeWithoutArg {
+    template <template <size_t i, typename TArgument> class Functor, typename ExtraParams>
+    static void F(ExtraParams&& extra_params) {
       using TExpander = int[];
       (void)TExpander{
           0,
-          (Functor<EnumArgs::i, typename EnumArgs::T>::F(extra_params...), 0)...,
+          (Functor<EnumArgs::i, typename EnumArgs::T>::F(std::forward<ExtraParams>(extra_params)),
+           0)...,
+      };
+    }
+  };
+  struct InvokeWithArg {
+    template <template <size_t i, typename TArgument> class Functor, typename ExtraParams,
+              typename... Params>
+    static void F(ExtraParams&& extra_params, Params&&... params) {
+      using TExpander = int[];
+      (void)TExpander{
+          0,
+          (Functor<EnumArgs::i, typename EnumArgs::T>::F(std::forward<ExtraParams>(extra_params),
+                                                         std::forward<Params>(params)),
+           0)...,
       };
     }
   };
@@ -1310,22 +1612,27 @@ struct EnumerateImpl {
 
   template <std::size_t... id>
   struct Zipper<std::integer_sequence<std::size_t, id...>> {
-    using T = EnumeratedParamPack<Item<id, Args>...>;
+    using WithoutArg = typename EnumeratedParamPack<Item<id, Args>...>::InvokeWithoutArg;
+    using WithArg = typename EnumeratedParamPack<Item<id, Args>...>::InvokeWithArg;
   };
 
  public:
-  using T = typename Zipper<std::index_sequence_for<Args...>>::T;
+  using WithoutArg = typename Zipper<std::index_sequence_for<Args...>>::WithoutArg;
+  using WithArg = typename Zipper<std::index_sequence_for<Args...>>::WithArg;
 };
 
 template <typename... Args>
-using Enumerate = typename EnumerateImpl<Args...>::T;
+using EnumerateWithoutArg = typename EnumerateImpl<Args...>::WithoutArg;
+
+template <typename... Args>
+using EnumerateWithArg = typename EnumerateImpl<Args...>::WithArg;
 
 template <typename... Args>
 struct ParamPack {
-  template <template <size_t i, typename TArgument> class Functor, typename... ExtraParams>
-  static void InvokeWithoutArg(ExtraParams&&... extra_params) {
-    Enumerate<Args...>::Invoke::template F<Functor, ExtraParams...>(
-        std::forward<ExtraParams>(extra_params)...);
+  template <template <size_t i, typename TArgument> class Functor, typename ExtraParams>
+  static void InvokeWithoutArg(ExtraParams&& extra_params) {
+    EnumerateWithoutArg<Args...>::template F<Functor, ExtraParams>(
+        std::forward<ExtraParams>(extra_params));
   }
 };
 
@@ -1523,6 +1830,10 @@ class TVMArgsSetter {
     values_[i].v_int64 = static_cast<int64_t>(value);
     type_codes_[i] = kDLInt;
   }
+  TVM_ALWAYS_INLINE void operator()(size_t i, bool value) const {
+    values_[i].v_int64 = value;
+    type_codes_[i] = kTVMArgBool;
+  }
   TVM_ALWAYS_INLINE void operator()(size_t i, uint64_t value) const {
     values_[i].v_int64 = static_cast<int64_t>(value);
     ICHECK_LE(value, static_cast<uint64_t>(std::numeric_limits<int64_t>::max()));
@@ -1620,6 +1931,20 @@ inline TVMRetValue PackedFunc::operator()(Args&&... args) const {
   (static_cast<PackedFuncObj*>(data_.get()))
       ->CallPacked(TVMArgs(values, type_codes, kNumArgs), &rv);
   return rv;
+}
+
+template <size_t i, typename T>
+struct TVMArgsSetterApply {
+  static TVM_ALWAYS_INLINE void F(TVMArgsSetter* setter, T&& value) {
+    (*setter)(i, std::forward<T>(value));
+  }
+};
+
+template <typename... Args>
+void TVM_ALWAYS_INLINE PackArgs(TVMValue* values, int* type_codes, Args&&... args) {
+  TVMArgsSetter setter(values, type_codes);
+  detail::parameter_pack::EnumerateWithArg<Args...>::template F<TVMArgsSetterApply>(
+      &setter, std::forward<Args>(args)...);
 }
 
 namespace detail {
@@ -1753,6 +2078,19 @@ TVM_ALWAYS_INLINE R TypedPackedFunc<R(Args...)>::operator()(Args... args) const 
   return detail::typed_packed_call_dispatcher<R>::run(packed_, std::forward<Args>(args)...);
 }
 
+template <typename T>
+inline T TVMArgs::At(int i) const {
+  TVMArgValue arg = operator[](i);
+  try {
+    return arg.operator T();
+  } catch (const dmlc::Error& e) {
+    LOG(FATAL) << "Argument " << i << " cannot be converted to type \""
+               << tvm::runtime::detail::type2str::Type2Str<T>::v() << "\". Its type is \""
+               << tvm::runtime::ArgTypeCode2Str(arg.type_code()) << "\".";
+  }
+  throw;
+}
+
 // ObjectRef related conversion handling
 // Object can have three possible type codes:
 //      kTVMNDArrayHandle, kTVMModuleHandle, kTVMObjectHandle
@@ -1761,38 +2099,110 @@ TVM_ALWAYS_INLINE R TypedPackedFunc<R(Args...)>::operator()(Args... args) const 
 template <typename T>
 inline void TVMArgsSetter::SetObject(size_t i, T&& value) const {
   using ContainerType = typename std::remove_reference<T>::type::ContainerType;
-  if (value.defined()) {
-    Object* ptr = value.data_.data_;
-    if (std::is_base_of<NDArray::ContainerType, ContainerType>::value ||
-        (std::is_base_of<ContainerType, NDArray::ContainerType>::value &&
-         ptr->IsInstance<NDArray::ContainerType>())) {
-      values_[i].v_handle = NDArray::FFIGetHandle(value);
-      type_codes_[i] = kTVMNDArrayHandle;
-    } else if (std::is_base_of<Module::ContainerType, ContainerType>::value ||
-               (std::is_base_of<ContainerType, Module::ContainerType>::value &&
-                ptr->IsInstance<Module::ContainerType>())) {
-      values_[i].v_handle = ptr;
-      type_codes_[i] = kTVMModuleHandle;
-    } else if (std::is_base_of<PackedFunc::ContainerType, ContainerType>::value ||
-               (std::is_base_of<ContainerType, PackedFunc::ContainerType>::value &&
-                ptr->IsInstance<PackedFunc::ContainerType>())) {
-      values_[i].v_handle = ptr;
-      type_codes_[i] = kTVMPackedFuncHandle;
-    } else if (std::is_rvalue_reference<decltype(value)>::value) {
-      values_[i].v_handle = const_cast<Object**>(&(value.data_.data_));
-      type_codes_[i] = kTVMObjectRValueRefArg;
-    } else {
-      values_[i].v_handle = value.data_.data_;
-      type_codes_[i] = kTVMObjectHandle;
-    }
-  } else {
+  if (!value.defined()) {
     type_codes_[i] = kTVMNullptr;
     values_[i].v_handle = nullptr;
+    return;
+  }
+
+  Object* ptr = value.data_.data_;
+  if constexpr (std::is_base_of_v<NDArray::ContainerType, ContainerType> ||
+                std::is_base_of_v<ContainerType, NDArray::ContainerType>) {
+    if (std::is_base_of_v<NDArray::ContainerType, ContainerType> ||
+        ptr->IsInstance<NDArray::ContainerType>()) {
+      values_[i].v_handle = NDArray::FFIGetHandle(value);
+      type_codes_[i] = kTVMNDArrayHandle;
+      return;
+    }
+  }
+
+  if constexpr (std::is_base_of_v<Module::ContainerType, ContainerType> ||
+                std::is_base_of_v<ContainerType, Module::ContainerType>) {
+    if (std::is_base_of_v<Module::ContainerType, ContainerType> ||
+        ptr->IsInstance<Module::ContainerType>()) {
+      values_[i].v_handle = ptr;
+      type_codes_[i] = kTVMModuleHandle;
+      return;
+    }
+  }
+
+  if constexpr (std::is_base_of_v<PackedFunc::ContainerType, ContainerType> ||
+                std::is_base_of_v<ContainerType, PackedFunc::ContainerType>) {
+    if (std::is_base_of_v<PackedFunc::ContainerType, ContainerType> ||
+        ptr->IsInstance<PackedFunc::ContainerType>()) {
+      values_[i].v_handle = ptr;
+      type_codes_[i] = kTVMPackedFuncHandle;
+      return;
+    }
+  }
+
+  // Like with BoxInt, unwrap any BoxBool instances.  See the BoxInt
+  // explanation for more detail.
+  if constexpr (std::is_base_of_v<Bool::ContainerType, ContainerType> ||
+                std::is_base_of_v<ContainerType, Bool::ContainerType>) {
+    if (std::is_base_of_v<Bool::ContainerType, ContainerType> ||
+        ptr->IsInstance<Bool::ContainerType>()) {
+      values_[i].v_int64 = static_cast<Bool::ContainerType*>(ptr)->value;
+      type_codes_[i] = kTVMArgBool;
+      return;
+    }
+  }
+
+  // If a boxed integer is being returned, always unbox it to the
+  // primitive type.  This must be checked at the PackedFunc level to
+  // ensure that a boxed primitive argument is round-tripped correctly
+  // when the boxing is no longer required.
+  //
+  // For example, consider a PackedFunc with signature `ObjectRef
+  // func(Array<ObjectRef>)`, and returns the first element of that
+  // array.  When passing a Python array `[5, 17.5, "hello"]`, the
+  // items are converted to `[Box<i64>(5), Box<double>(17.5),
+  // String("hello")]` in order to provide an `Array<ObjectRef>`.
+  //
+  // If we had no additional conversions, the caller would receive the
+  // return value as a `Box<i64>(5)`, which would be unexpected and
+  // require additional unwrapping.  We could perform this check
+  // inside the PackedFunc, but that would require a large amount of
+  // duplicated checked, and would require explicit handling of
+  // `TVMRetValue`.  Instead, this conversion is checked in the FFI
+  // return value, to ensure that boxing/unboxing is applied
+  // consistently.
+  if constexpr (std::is_base_of_v<Int::ContainerType, ContainerType> ||
+                std::is_base_of_v<ContainerType, Int::ContainerType>) {
+    if (std::is_base_of_v<Int::ContainerType, ContainerType> ||
+        ptr->IsInstance<Int::ContainerType>()) {
+      values_[i].v_int64 = static_cast<Int::ContainerType*>(ptr)->value;
+      type_codes_[i] = kTVMArgInt;
+      return;
+    }
+  }
+
+  // Like with BoxInt, unwrap any BoxFloat instances.  See the BoxInt
+  // explanation for more detail.
+  if constexpr (std::is_base_of_v<Float::ContainerType, ContainerType> ||
+                std::is_base_of_v<ContainerType, Float::ContainerType>) {
+    if (std::is_base_of_v<Float::ContainerType, ContainerType> ||
+        ptr->IsInstance<Float::ContainerType>()) {
+      values_[i].v_float64 = static_cast<Float::ContainerType*>(ptr)->value;
+      type_codes_[i] = kTVMArgFloat;
+      return;
+    }
+  }
+
+  // Final fallback, if the ObjectRef has no special cases that must
+  // be expressed within the TVMRetValue.
+  if constexpr (std::is_rvalue_reference_v<decltype(value)>) {
+    values_[i].v_handle = const_cast<Object**>(&(value.data_.data_));
+    type_codes_[i] = kTVMObjectRValueRefArg;
+  } else {
+    values_[i].v_handle = value.data_.data_;
+    type_codes_[i] = kTVMObjectHandle;
   }
 }
 
+template <typename Derived>
 template <typename TObjectRef, typename>
-inline bool TVMPODValue_::IsObjectRef() const {
+inline bool TVMPODValue_CRTP_<Derived>::IsObjectRef() const {
   using ContainerType = typename TObjectRef::ContainerType;
   // NOTE: the following code can be optimized by constant folding.
   if (std::is_base_of<NDArray::ContainerType, ContainerType>::value) {
@@ -1822,8 +2232,9 @@ inline bool TVMPODValue_::IsObjectRef() const {
           ObjectTypeChecker<TObjectRef>::Check(static_cast<Object*>(value_.v_handle)));
 }
 
+template <typename Derived>
 template <typename TObjectRef>
-inline TObjectRef TVMPODValue_::AsObjectRef() const {
+inline TObjectRef TVMPODValue_CRTP_<Derived>::AsObjectRef() const {
   static_assert(std::is_base_of<ObjectRef, TObjectRef>::value,
                 "Conversion only works for ObjectRef");
   using ContainerType = typename TObjectRef::ContainerType;
@@ -1833,8 +2244,10 @@ inline TObjectRef TVMPODValue_::AsObjectRef() const {
         << "Expect a not null value of " << ContainerType::_type_key;
     return TObjectRef(ObjectPtr<Object>(nullptr));
   }
-  // NOTE: the following code can be optimized by constant folding.
-  if (std::is_base_of<NDArray::ContainerType, ContainerType>::value) {
+
+  // NOTE: The following code uses "if constexpr" wherever possible to
+  // minimize the number of runtime checks.
+  if constexpr (std::is_base_of_v<NDArray::ContainerType, ContainerType>) {
     // Casting to a sub-class of NDArray
     TVM_CHECK_TYPE_CODE(type_code_, kTVMNDArrayHandle);
     ObjectPtr<Object> data =
@@ -1843,7 +2256,8 @@ inline TObjectRef TVMPODValue_::AsObjectRef() const {
         << "Expected " << ContainerType::_type_key << " but got " << data->GetTypeKey();
     return TObjectRef(data);
   }
-  if (std::is_base_of<Module::ContainerType, ContainerType>::value) {
+
+  if constexpr (std::is_base_of_v<Module::ContainerType, ContainerType>) {
     // Casting to a sub-class of Module
     TVM_CHECK_TYPE_CODE(type_code_, kTVMModuleHandle);
     ObjectPtr<Object> data = GetObjectPtr<Object>(static_cast<Object*>(value_.v_handle));
@@ -1851,7 +2265,8 @@ inline TObjectRef TVMPODValue_::AsObjectRef() const {
         << "Expected " << ContainerType::_type_key << " but got " << data->GetTypeKey();
     return TObjectRef(data);
   }
-  if (std::is_base_of<PackedFunc::ContainerType, ContainerType>::value) {
+
+  if constexpr (std::is_base_of_v<PackedFunc::ContainerType, ContainerType>) {
     // Casting to a sub-class of PackedFunc
     TVM_CHECK_TYPE_CODE(type_code_, kTVMPackedFuncHandle);
     ObjectPtr<Object> data = GetObjectPtr<Object>(static_cast<Object*>(value_.v_handle));
@@ -1859,6 +2274,7 @@ inline TObjectRef TVMPODValue_::AsObjectRef() const {
         << "Expected " << ContainerType::_type_key << " but got " << data->GetTypeKey();
     return TObjectRef(data);
   }
+
   if (type_code_ == kTVMObjectHandle) {
     // normal object type check.
     Object* ptr = static_cast<Object*>(value_.v_handle);
@@ -1872,51 +2288,152 @@ inline TObjectRef TVMPODValue_::AsObjectRef() const {
     ICHECK(!checked_type.defined()) << "Expected " << ObjectTypeChecker<TObjectRef>::TypeName()
                                     << ", but got " << checked_type.value();
     return TObjectRef(GetObjectPtr<Object>(ptr));
-  } else if (std::is_base_of<ContainerType, NDArray::ContainerType>::value &&
-             type_code_ == kTVMNDArrayHandle) {
-    // Casting to a base class that NDArray can sub-class
-    ObjectPtr<Object> data =
-        NDArray::FFIDataFromHandle(static_cast<TVMArrayHandle>(value_.v_handle));
-    return TObjectRef(data);
-  } else if (std::is_base_of<ContainerType, Module::ContainerType>::value &&
-             type_code_ == kTVMModuleHandle) {
-    // Casting to a base class that Module can sub-class
-    return TObjectRef(GetObjectPtr<Object>(static_cast<Object*>(value_.v_handle)));
-  } else if (std::is_base_of<ContainerType, PackedFunc::ContainerType>::value &&
-             type_code_ == kTVMPackedFuncHandle) {
-    // Casting to a base class that PackedFunc can sub-class
-    return TObjectRef(GetObjectPtr<Object>(static_cast<Object*>(value_.v_handle)));
-  } else {
-    TVM_CHECK_TYPE_CODE(type_code_, kTVMObjectHandle);
-    return TObjectRef(ObjectPtr<Object>(nullptr));
   }
+
+  if constexpr (std::is_base_of_v<ContainerType, NDArray::ContainerType>) {
+    if (type_code_ == kTVMNDArrayHandle) {
+      // Casting to a base class that NDArray can sub-class
+      ObjectPtr<Object> data =
+          NDArray::FFIDataFromHandle(static_cast<TVMArrayHandle>(value_.v_handle));
+      return TObjectRef(data);
+    }
+  }
+
+  if constexpr (std::is_base_of_v<ContainerType, Module::ContainerType>) {
+    if (type_code_ == kTVMModuleHandle) {
+      // Casting to a base class that Module can sub-class
+      return TObjectRef(GetObjectPtr<Object>(static_cast<Object*>(value_.v_handle)));
+    }
+  }
+
+  if constexpr (std::is_base_of_v<ContainerType, PackedFunc::ContainerType>) {
+    if (type_code_ == kTVMPackedFuncHandle) {
+      // Casting to a base class that PackedFunc can sub-class
+      return TObjectRef(GetObjectPtr<Object>(static_cast<Object*>(value_.v_handle)));
+    }
+  }
+
+  if constexpr (std::is_base_of_v<TObjectRef, Int>) {
+    if (type_code_ == kTVMArgInt) {
+      return Int(value_.v_int64);
+    }
+  }
+
+  if constexpr (std::is_base_of_v<TObjectRef, Float>) {
+    if (type_code_ == kTVMArgFloat) {
+      return Float(value_.v_float64);
+    }
+  }
+
+  if constexpr (std::is_base_of_v<TObjectRef, Bool>) {
+    if (type_code_ == kTVMArgBool) {
+      return Bool(value_.v_int64);
+    }
+  }
+
+  if constexpr (std::is_base_of_v<TObjectRef, String>) {
+    if (type_code_ == kTVMStr || type_code_ == kTVMBytes) {
+      // This step is the reason why `AsObjectRef` cannot be provided
+      // in the base `TVMPODValue_` class.  Because `TVMArgValue` and
+      // `TVMRetValue` have different implementations of `operator
+      // std::string`, with different interpretations of `kTVMStr` and
+      // `kTVMBytes`, we must delegate to those implementations.
+      //
+      // This could be done with a pure virtual method in
+      // `TVMPODValue_`, but that would require a vtable lookup during
+      // FFI conversions, imposing a runtime overhead.
+      return String(static_cast<const Derived*>(this)->operator std::string());
+    }
+  }
+
+  TVM_CHECK_TYPE_CODE(type_code_, kTVMObjectHandle);
+  return TObjectRef(ObjectPtr<Object>(nullptr));
 }
 
 template <typename TObjectRef, typename>
 inline TVMRetValue& TVMRetValue::operator=(TObjectRef other) {
   using ContainerType = typename TObjectRef::ContainerType;
   const Object* ptr = other.get();
-  if (ptr != nullptr) {
-    if (std::is_base_of<NDArray::ContainerType, ContainerType>::value ||
-        (std::is_base_of<ContainerType, NDArray::ContainerType>::value &&
-         ptr->IsInstance<NDArray::ContainerType>())) {
-      return operator=(NDArray(std::move(other.data_)));
+
+  if (ptr) {
+    // Check for special cases of ObjectRef that have explicit
+    // representation within the TVMRetValue structure.
+    // (e.g. Unboxing of `runtime::Int` into a primitive integer
+    // with type code kTVMArgInt.)  The checks below are written to
+    // handle three distinct cases.
+    //
+    // 1. If TObjectRef is a subclass of TSpecialCase, the special
+    //    case applies, and can be handled without a runtime check.
+    //    No runtime checks should be performed.
+    //
+    // 2. If TSpecialCase is a subclass of TObjectRef, the special
+    //    case might apply, and requires a runtime check.
+    //
+    // 3. If neither TObjectRef nor TSpecialCase is a subclass of
+    //    the other, then the special case does not apply.  No
+    //    runtime checks should be performed.
+    //
+    // Use of `if constexpr` ensures that the C++ subclass checks
+    // are applied when compiling TVM, and runtime overhead are only
+    // present when they may be applicable.
+
+    if constexpr (std::is_base_of_v<ContainerType, NDArray::ContainerType> ||
+                  std::is_base_of_v<NDArray::ContainerType, ContainerType>) {
+      if (std::is_base_of_v<NDArray::ContainerType, ContainerType> ||
+          ptr->IsInstance<NDArray::ContainerType>()) {
+        return operator=(NDArray(std::move(other.data_)));
+      }
     }
-    if (std::is_base_of<Module::ContainerType, ContainerType>::value ||
-        (std::is_base_of<ContainerType, Module::ContainerType>::value &&
-         ptr->IsInstance<Module::ContainerType>())) {
-      return operator=(Module(std::move(other.data_)));
+
+    if constexpr (std::is_base_of_v<ContainerType, Module::ContainerType> ||
+                  std::is_base_of_v<Module::ContainerType, ContainerType>) {
+      if (std::is_base_of_v<Module::ContainerType, ContainerType> ||
+          ptr->IsInstance<Module::ContainerType>()) {
+        return operator=(Module(std::move(other.data_)));
+      }
     }
-    if (std::is_base_of<PackedFunc::ContainerType, ContainerType>::value ||
-        (std::is_base_of<ContainerType, PackedFunc::ContainerType>::value &&
-         ptr->IsInstance<PackedFunc::ContainerType>())) {
-      return operator=(PackedFunc(std::move(other.data_)));
+
+    if constexpr (std::is_base_of_v<ContainerType, PackedFunc::ContainerType> ||
+                  std::is_base_of_v<PackedFunc::ContainerType, ContainerType>) {
+      if (std::is_base_of_v<PackedFunc::ContainerType, ContainerType> ||
+          ptr->IsInstance<PackedFunc::ContainerType>()) {
+        return operator=(PackedFunc(std::move(other.data_)));
+      }
     }
+
+    if constexpr (std::is_base_of_v<Bool, TObjectRef> || std::is_base_of_v<TObjectRef, Bool>) {
+      if (std::is_base_of_v<Bool, TObjectRef> || ptr->IsInstance<Bool::ContainerType>()) {
+        bool value = static_cast<const Bool::ContainerType*>(ptr)->value;
+        return operator=(value);
+      }
+    }
+
+    if constexpr (std::is_base_of_v<Int, TObjectRef> || std::is_base_of_v<TObjectRef, Int>) {
+      if (std::is_base_of_v<Int, TObjectRef> || ptr->IsInstance<Int::ContainerType>()) {
+        int64_t value = static_cast<const Int::ContainerType*>(ptr)->value;
+        return operator=(value);
+      }
+    }
+
+    if constexpr (std::is_base_of_v<Float, TObjectRef> || std::is_base_of_v<TObjectRef, Float>) {
+      if (std::is_base_of_v<Float, TObjectRef> || ptr->IsInstance<Float::ContainerType>()) {
+        double value = static_cast<const Float::ContainerType*>(ptr)->value;
+        return operator=(value);
+      }
+    }
+
+    // If the object being stored is not one of the special cases,
+    // it is stored as an ObjectRef.
     SwitchToObject(kTVMObjectHandle, std::move(other.data_));
+
   } else {
+    // No object is present, set to an explicitly null handle.  When
+    // returning to a Python callee, this will be converted to
+    // `None`.
     SwitchToPOD(kTVMNullptr);
     value_.v_handle = nullptr;
   }
+
   return *this;
 }
 
@@ -1942,27 +2459,162 @@ inline TVMRetValue::operator T() const {
   return PackedFuncValueConverter<T>::From(*this);
 }
 
-inline PackedFunc Module::GetFunction(const std::string& name, bool query_imports) {
+inline PackedFunc Module::GetFunction(const String& name, bool query_imports) {
   return (*this)->GetFunction(name, query_imports);
 }
 
 // specializations of PackedFuncValueConverter
 template <>
 struct PackedFuncValueConverter<::tvm::runtime::String> {
-  static String From(const TVMArgValue& val) {
-    if (val.IsObjectRef<tvm::runtime::String>()) {
-      return val.AsObjectRef<tvm::runtime::String>();
+  template <typename PODSubclass>
+  static String From(const PODSubclass& val) {
+    if (val.template IsObjectRef<tvm::runtime::String>()) {
+      return val.template AsObjectRef<tvm::runtime::String>();
     } else {
       return tvm::runtime::String(val.operator std::string());
     }
   }
+};
 
-  static String From(const TVMRetValue& val) {
-    if (val.IsObjectRef<tvm::runtime::String>()) {
-      return val.AsObjectRef<tvm::runtime::String>();
-    } else {
-      return tvm::runtime::String(val.operator std::string());
+template <typename T>
+struct PackedFuncValueConverter<Array<T>> {
+  static Array<T> From(const TVMArgValue& val) {
+    auto untyped_array = val.AsObjectRef<Array<ObjectRef>>();
+
+    if constexpr (std::is_same_v<T, ObjectRef>) {
+      return untyped_array;
     }
+
+    // Attempt to convert each item of the array into the desired
+    // type.  If the items do not require a conversion, no copies are
+    // made.
+    return untyped_array.Map([](ObjectRef item) {
+      // Recursively apply any conversions that have been registered
+      // with TVM's FFI.
+      //
+      // For example, a function that accepts `Array<PrimExpr>` may
+      // be called from python with argument `[1,2]`.  By the time
+      // `PackedFuncValueConverter::From` is called, the python list
+      // has been converted to `Array<ObjectRef>`, with contents
+      // converted into `runtime::Int`.  Converting the `ObjectRef`
+      // to `TVMArgValue` unboxes the `runtime::Int` back into a
+      // primitive with type code `kTVMArgInt`.  This primitive can
+      // then be converted to a PrimExpr using
+      // `PackedFuncValueConverter<PrimExpr>::From`.
+      //
+      // The use of two conversions, first from python `int` to
+      // `runtime::Int` and then from `runtime::Int` to `PrimExpr`,
+      // is a result of the split between `libtvm_runtime.so` and
+      // `libtvm.so`.  The FFI must function correctly in both
+      // cases, and so conversions applied by default in the Python
+      // FFI implementation may only produce types that are
+      // available in both libraries.  In the C++ FFI implementation
+      // (i.e. this file), libtvm.so may apply additional
+      // conversions that are not present in libtvm_runtime.so.
+      TVMValue value;
+      int type_code;
+      TVMArgsSetter setter(&value, &type_code);
+      setter(0, item);
+      TVMArgValue arg(value, type_code);
+      return PackedFuncValueConverter<T>::From(arg);
+    });
+  }
+  static Array<T> From(const TVMRetValue& val) {
+    auto untyped_array = val.AsObjectRef<Array<ObjectRef>>();
+
+    if constexpr (std::is_same_v<T, ObjectRef>) {
+      return untyped_array;
+    }
+
+    return untyped_array.Map([](ObjectRef item) {
+      TVMRetValue item_val;
+      item_val = std::move(item);
+      return PackedFuncValueConverter<T>::From(item_val);
+    });
+  }
+};
+
+template <typename T, typename U>
+struct PackedFuncValueConverter<Map<T, U>> {
+  static Map<T, U> From(const TVMArgValue& val) {
+    auto untyped_map = val.AsObjectRef<Map<ObjectRef, ObjectRef>>();
+
+    if constexpr (std::is_same_v<T, ObjectRef> && std::is_same_v<U, ObjectRef>) {
+      return Downcast<Map<T, U>>(untyped_map);
+    }
+
+    if (ObjectTypeChecker<Map<T, U>>::Check(untyped_map.get())) {
+      // Early bail-out for common case where no type conversions are
+      // required.
+      return Downcast<Map<T, U>>(untyped_map);
+    }
+
+    Map<T, U> output;
+    for (const auto& kv : untyped_map) {
+      T new_key = [&]() {
+        if constexpr (std::is_same_v<T, ObjectRef>) {
+          return kv.first;
+        } else {
+          TVMValue pod_value;
+          int type_code;
+          TVMArgsSetter setter(&pod_value, &type_code);
+          setter(0, kv.first);
+          TVMArgValue pod_arg(pod_value, type_code);
+          return PackedFuncValueConverter<T>::From(pod_arg);
+        }
+      }();
+      U new_value = [&]() {
+        if constexpr (std::is_same_v<U, ObjectRef>) {
+          return kv.second;
+        } else {
+          TVMValue pod_value;
+          int type_code;
+          TVMArgsSetter setter(&pod_value, &type_code);
+          setter(0, kv.second);
+          TVMArgValue key_arg(pod_value, type_code);
+          return PackedFuncValueConverter<U>::From(key_arg);
+        }
+      }();
+      output.Set(new_key, new_value);
+    }
+    return output;
+  }
+  static Map<T, U> From(const TVMRetValue& val) {
+    auto untyped_map = val.AsObjectRef<Map<ObjectRef, ObjectRef>>();
+
+    if constexpr (std::is_same_v<T, ObjectRef> && std::is_same_v<U, ObjectRef>) {
+      return Downcast<Map<T, U>>(untyped_map);
+    }
+
+    if (ObjectTypeChecker<Map<T, U>>::Check(untyped_map.get())) {
+      // Early bail-out for common case where no type conversions are
+      // required.
+      return Downcast<Map<T, U>>(untyped_map);
+    }
+
+    Map<T, U> output;
+    for (const auto& kv : untyped_map) {
+      T new_key = [&]() {
+        if constexpr (std::is_same_v<T, ObjectRef>) {
+          return kv.first;
+        } else {
+          TVMRetValue pod;
+          pod = kv.first;
+          return PackedFuncValueConverter<T>::From(pod);
+        }
+      }();
+      U new_value = [&]() {
+        if constexpr (std::is_same_v<U, ObjectRef>) {
+          return kv.second;
+        } else {
+          TVMRetValue pod;
+          pod = kv.second;
+          return PackedFuncValueConverter<U>::From(pod);
+        }
+      }();
+      output.Set(new_key, new_value);
+    }
+    return output;
   }
 };
 
@@ -1975,6 +2627,56 @@ struct PackedFuncValueConverter<Optional<T>> {
   static Optional<T> From(const TVMRetValue& val) {
     if (val.type_code() == kTVMNullptr) return Optional<T>(nullptr);
     return PackedFuncValueConverter<T>::From(val);
+  }
+};
+
+template <typename... VariantTypes>
+struct PackedFuncValueConverter<Variant<VariantTypes...>> {
+  using VType = Variant<VariantTypes...>;
+
+  // Can't just take `const TVMPODValue&` as an argument, because
+  // `TVMArgValue` and `TVMRetValue` have different implementations
+  // for `operator std::string()`.
+  template <typename PODSubclass>
+  static VType From(const PODSubclass& val) {
+    if (auto opt = TryAsObjectRef<VariantTypes...>(val)) {
+      return opt.value();
+    }
+
+    if (auto opt = TryValueConverter<VariantTypes...>(val)) {
+      return opt.value();
+    }
+
+    LOG(FATAL) << "Expected one of "
+               << static_cast<const std::stringstream&>(
+                      (std::stringstream() << ... << VariantTypes::ContainerType::_type_key))
+                      .str()
+               << " but got " << ArgTypeCode2Str(val.type_code());
+  }
+
+  template <typename VarFirst, typename... VarRest, typename PODSubclass>
+  static Optional<VType> TryAsObjectRef(const PODSubclass& val) {
+    if (val.template IsObjectRef<VarFirst>()) {
+      return VType(val.template AsObjectRef<VarFirst>());
+    } else if constexpr (sizeof...(VarRest)) {
+      return TryAsObjectRef<VarRest...>(val);
+    } else {
+      return NullOpt;
+    }
+  }
+
+  template <typename VarFirst, typename... VarRest, typename PODSubclass>
+  static Optional<VType> TryValueConverter(const PODSubclass& val) {
+    try {
+      return VType(PackedFuncValueConverter<VarFirst>::From(val));
+    } catch (const Error&) {
+    }
+
+    if constexpr (sizeof...(VarRest)) {
+      return TryValueConverter<VarRest...>(val);
+    } else {
+      return NullOpt;
+    }
   }
 };
 
@@ -2000,6 +2702,6 @@ inline TVMArgValue::operator DLDataType() const {
 
 inline TVMArgValue::operator DataType() const { return DataType(operator DLDataType()); }
 
-}  // namespace runtime
-}  // namespace tvm
+}  // namespace runtime // NOLINT(*)
+}  // namespace tvm // NOLINT(*)
 #endif  // TVM_RUNTIME_PACKED_FUNC_H_

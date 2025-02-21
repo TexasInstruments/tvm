@@ -157,6 +157,69 @@ def test_ethosu_conv2d_double(
     infra.compare_tvm_with_tflite(conv2d_double, [ifm_shape], accel_type)
 
 
+@pytest.mark.parametrize("accel_type", ACCEL_TYPES)
+@pytest.mark.parametrize(
+    "op_pairs", [("conv2d", "conv2d"), ("depthwise", "depthwise"), ("conv2d", "depthwise")]
+)
+def test_tflite_shared_pad(
+    accel_type,
+    op_pairs,
+):
+    np.random.seed(0)
+
+    ifm_shape = (1, 55, 32, 3)
+    kernel_shape = (3, 3)
+    strides = (3, 2)
+    dilation = (1, 1)
+    activation_function = "RELU"
+    op_padding = "SAME"
+    sep_padding = (0, 0, 1, 1)
+
+    @tf.function
+    def tf_function(x):
+        def make_depthwise_or_conv2d(pair_idx, x):
+            # The input strides to the TensorFlow API needs to be of shape 1x4
+            tf_strides = [1, strides[0], strides[1], 1]
+            if op_pairs[pair_idx] == "depthwise":
+                weight_shape = [kernel_shape[0], kernel_shape[1], ifm_shape[3], 1]
+                weight = tf.constant(np.random.uniform(size=weight_shape), dtype=tf.float32)
+                op = tf.nn.depthwise_conv2d(
+                    x, weight, strides=tf_strides, padding=op_padding, dilations=dilation
+                )
+            else:
+                weight_shape = [kernel_shape[0], kernel_shape[1], ifm_shape[3], 3]
+                weight = tf.constant(np.random.uniform(size=weight_shape), dtype=tf.float32)
+                op = tf.nn.conv2d(
+                    x,
+                    weight,
+                    strides=tf_strides,
+                    padding=op_padding,
+                    dilations=dilation,
+                )
+            if activation_function == "RELU":
+                op = tf.nn.relu(op)
+            return op
+
+        x = tf.pad(
+            x,
+            [
+                [0, 0],
+                [sep_padding[0], sep_padding[2]],
+                [sep_padding[1], sep_padding[3]],
+                [0, 0],
+            ],
+            "CONSTANT",
+        )
+
+        x1 = make_depthwise_or_conv2d(0, x)
+        x2 = make_depthwise_or_conv2d(1, x)
+
+        x3 = tf.math.add(x1, x2)
+        return x3
+
+    infra.compare_tvm_with_tflite(tf_function, [ifm_shape], accel_type)
+
+
 @pytest.mark.parametrize("weight_min, weight_max", [(0.0, 1e-11), (-1e10, 1e10)])
 def test_out_of_range_scaling(weight_min, weight_max):
     np.random.seed(0)
@@ -281,6 +344,29 @@ def test_tflite_separate_pad(
     infra.compare_tvm_with_tflite(pad2d, [ifm_shape], "ethos-u55-256")
 
 
+@pytest.mark.parametrize("ifm_shape", [(1, 55, 55, 3), (1, 23, 32, 7)])
+@pytest.mark.parametrize("channel_padding", [(0, 1), (1, 1), (5, 2)])
+@pytest.mark.parametrize("const_value", [0, 5, 125, -5])
+def test_tflite_separate_channel_pad(
+    ifm_shape,
+    channel_padding,
+    const_value,
+):
+    np.random.seed(0)
+
+    @tf.function
+    def concat_func(x):
+        x = tf.pad(
+            x,
+            [[0, 0], [0, 0], [0, 0], [channel_padding[0], channel_padding[1]]],
+            "CONSTANT",
+            const_value,
+        )
+        return x
+
+    infra.compare_tvm_with_tflite(concat_func, [ifm_shape], "ethos-u55-256", enable_cascader=False)
+
+
 @pytest.mark.parametrize(
     "accel_type",
     ACCEL_TYPES,
@@ -313,6 +399,56 @@ def test_ethosu_pooling(
         return op
 
     infra.compare_tvm_with_tflite(pooling, [ifm_shape], accel_type)
+
+
+@pytest.mark.parametrize(
+    "accel_type",
+    ACCEL_TYPES,
+)
+@pytest.mark.parametrize("pooling_type", ["MAX", "AVG"])
+@pytest.mark.parametrize(
+    "ifm_shape, pool_shape, strides, activation_function, padding",
+    [
+        ([1, 4, 4, 3], [4, 4], [4, 4], "NONE", "SAME"),
+        ([1, 4, 4, 3], [4, 4], [4, 4], "RELU", "VALID"),
+        ([1, 25, 5, 64], [25, 5], [25, 5], "NONE", "VALID"),
+        ([1, 25, 5, 64], [25, 5], [25, 5], "RELU", "SAME"),
+    ],
+)
+def test_ethosu_pooling_same_ifm_and_kernel_shape(
+    accel_type, pooling_type, ifm_shape, pool_shape, strides, activation_function, padding
+):
+    np.random.seed(0)
+
+    @tf.function
+    def pooling(x):
+        if pooling_type == "MAX":
+            op = tf.nn.max_pool(x, pool_shape, strides, padding)
+        elif pooling_type == "AVG":
+            op = tf.nn.avg_pool(x, pool_shape, strides, padding)
+        if activation_function == "RELU":
+            op = tf.nn.relu(op)
+        return op
+
+    infra.compare_tvm_with_tflite(pooling, [ifm_shape], accel_type)
+
+
+@pytest.mark.parametrize(
+    "accel_type",
+    ["ethos-u55-256", "ethos-u65-256"],
+)
+@pytest.mark.parametrize("ifm_shape", [[1, 148, 29], [4, 148, 29], [1, 12], [8, 12]])
+def test_ethosu_softmax(
+    accel_type,
+    ifm_shape,
+):
+    np.random.seed(0)
+
+    @tf.function
+    def softmax(x):
+        return tf.nn.softmax(x)
+
+    infra.compare_tvm_with_tflite(softmax, [ifm_shape], accel_type, ranges=[(-1, 1)])
 
 
 @pytest.mark.parametrize("accel_type", ACCEL_TYPES)
@@ -391,31 +527,29 @@ def test_binary_add_with_non_4d_shapes(
     )
 
 
-@pytest.mark.skip(reason="See https://github.com/apache/tvm/issues/12634")
 @pytest.mark.parametrize(
     "accel_type",
     ACCEL_TYPES,
 )
 @pytest.mark.parametrize(
-    "ifm_shape, axis, keep_dims, use_same_quantization",
+    "ifm_shape, axis, keep_dims, use_same_quantization, dtype",
     [
-        # mean to depthwise + multiply
-        [(1, 8, 16, 16), (1, 2), True, False],
-        [(1, 3, 4), (0, 1), True, False],
-        [(1, 65, 2, 1), (1, 2), True, False],  # special case when h > 64
         # mean to average pool
-        [(1, 8, 16, 16), (2,), False, True],
-        [(3, 3, 4), (0,), True, True],
-        [(8, 5), (0,), False, True],
+        [(1, 8, 16, 16), (2,), False, True, "int8"],
+        [(1, 8, 16, 16), (2,), False, True, "uint8"],
+        [(3, 3, 4), (0,), True, True, "int8"],
+        [(8, 5), (0,), False, True, "int8"],
         # mean to depthwise
-        [(1, 8, 16, 16), (2,), True, False],
-        [(1, 8, 16, 16), (2, 1), False, False],
-        [(8, 4), (0,), False, False],
+        [(1, 8, 16, 16), (2,), True, False, "int8"],
+        [(1, 8, 16, 16), (2,), True, False, "uint8"],
+        [(1, 8, 16, 16), (2, 1), False, False, "int8"],
+        [(8, 4), (0,), False, False, "int8"],
+        [(1, 65, 2, 1), (1, 2), True, False, "int8"],  # special case when h > 64
+        [(1, 65, 2, 1), (1, 2), True, False, "uint8"],  # special case when h > 64
     ],
 )
-def test_mean(accel_type, ifm_shape, axis, keep_dims, use_same_quantization):
+def test_mean(accel_type, ifm_shape, axis, keep_dims, use_same_quantization, dtype):
     np.random.seed(0)
-    dtype = "int8"
 
     def create_mod_from_tflite():
         class Model(tf.Module):
@@ -462,12 +596,14 @@ def test_mean(accel_type, ifm_shape, axis, keep_dims, use_same_quantization):
             input_zero_point=relay.const(0, dtype="int32"),
             output_scale=relay.const(1.0, dtype="float32"),
             output_zero_point=relay.const(0, dtype="int32"),
+            out_dtype=dtype,
         )
 
         func = relay.Function(relay.analysis.free_vars(requantize), requantize)
         mod = tvm.IRModule.from_expr(func)
 
-        input_data = {"input": np.random.randint(low=-127, high=128, size=ifm_shape, dtype=dtype)}
+        low, high = (0, 256) if dtype == "uint8" else (-127, 128)
+        input_data = {"input": np.random.randint(low=low, high=high, size=ifm_shape, dtype=dtype)}
         output_data = generate_ref_data(mod, input_data)
         return mod, input_data, output_data
 
@@ -518,6 +654,63 @@ def test_ethosu_sum(accel_type, ifm_shape, axis, keepdims, relu):
         accel_type,
         enable_cascader=is_u55_accel_type(accel_type),
     )
+
+
+# Case to check reduce_sum operation with different input types.
+@pytest.mark.parametrize("dtype", ["int8", "int32"])
+def test_add_reduce_sum(dtype):
+    ifm_shape = (1, 2, 2, 4)
+    accel_type = "ethos-u55-256"
+    np.random.seed(0)
+
+    def create_model():
+        ifm = relay.var("ifm", shape=ifm_shape, dtype=dtype)
+        ifm2 = relay.var("ifm2", shape=ifm_shape, dtype=dtype)
+        ifm_scale = 0.0 if dtype == "int32" else 1.0
+        op = infra.make_ethosu_binary_elementwise(
+            ifm,
+            ifm2,
+            ifm_shape[3],
+            ifm_shape[3],
+            "ADD",
+            dtype,
+            ifm_scale=ifm_scale,
+            ifm2_scale=ifm_scale,
+        )
+        op = infra.make_ethosu_pooling(
+            ifm=op,
+            pooling_type="SUM",
+            pool_shape=(1, 1),
+            ofm_channels=1,
+            ofm_dtype="int32",
+            strides=(1, 1),
+            padding=(0, 0, 0, 0),
+            rounding_mode="NATURAL",
+        )
+        return tvm.IRModule.from_expr(relay.Function([ifm, ifm2], op))
+
+    def generate_output_data(input_data):
+        lhs = input_data["ifm"]
+        rhs = input_data["ifm2"]
+        # reduce_sum output type is int32.
+        output_dtype = "int32"
+        add = lhs + rhs
+        return [np.sum(add, axis=3).astype(output_dtype)]
+
+    cpu_mod = create_model()
+
+    # Generate reference data
+    in_min, in_max = -10, 19
+    lhs = np.random.randint(in_min, in_max, size=ifm_shape, dtype=dtype)
+    rhs = np.random.randint(in_min, in_max, size=ifm_shape, dtype=dtype)
+    input_data = {
+        "ifm": lhs,
+        "ifm2": rhs,
+    }
+    output_data = {"output": generate_output_data(input_data)[0]}
+    ethosu_mod = infra.create_ethosu_partition(cpu_mod)
+
+    infra.compare_ethosu_with_reference(ethosu_mod, input_data, output_data, accel_type)
 
 
 @pytest.mark.parametrize("accel_type", ACCEL_TYPES)
@@ -977,6 +1170,40 @@ def test_tflite_concat(shapes, axis, accel_type):
     infra.compare_tvm_with_tflite(concat_func, shapes, accel_type, enable_cascader=False)
 
 
+def test_tflite_unstack_concat():
+    np.random.seed(0)
+    shapes = [(2, 4, 16)]
+    axis = 1
+    accel_type = "ethos-u55-256"
+
+    @tf.function
+    def concat_func(input):
+        inputs = tf.unstack(input)
+        inputs.reverse()
+        op = tf.concat(inputs, axis)
+        return op
+
+    infra.compare_tvm_with_tflite(concat_func, shapes, accel_type, enable_cascader=False)
+
+
+def test_tflite_concat_with_reused_args():
+    np.random.seed(0)
+    shapes = [(1, 1, 24, 1), (1, 1, 24, 1), (1, 1, 10, 1), (1, 1, 68, 1)]
+    axis = 2
+    accel_type = "ethos-u55-256"
+
+    @tf.function
+    def concat_func(*inputs):
+        op = tf.add(inputs[0], inputs[1])
+        op2 = tf.concat((inputs[0], inputs[2], op), axis)
+        op = tf.concat((inputs[0], inputs[3], op), axis)
+        op = tf.nn.max_pool2d(op, (1, 1), (1, 2), "SAME")
+        op = tf.add(op, op2)
+        return op
+
+    infra.compare_tvm_with_tflite(concat_func, shapes, accel_type, enable_cascader=False)
+
+
 @pytest.mark.parametrize("accel_type", ACCEL_TYPES)
 def test_tflite_sigmoid(accel_type):
     np.random.seed(0)
@@ -1022,6 +1249,7 @@ def test_tflite_split(accel_type, ifm_shape, num_or_size_splits, axis):
     [
         [(1, 8, 8, 3), 1.0, 0, 1.0, 0],
         [(1, 20, 30, 3), 1.345, 34, 0.32, -23],
+        [(1, 1, 4, 8), 0.0078125, 0, 0.00997, -30],
     ],
 )
 def test_ethosu_requantize(accel_type, ifm_shape, ifm_scale, ifm_zp, ofm_scale, ofm_zp):
@@ -1354,6 +1582,30 @@ def test_tflite_fully_connected(
 
 
 @pytest.mark.parametrize("accel_type", ["ethos-u55-256", "ethos-u65-256"])
+@pytest.mark.parametrize("ifm_shape", [(1, 16), (4, 8)])
+@pytest.mark.parametrize("ofm_channels", [8, 32])
+@pytest.mark.parametrize("activation_function", ["NONE", "RELU"])
+def test_tflite_matmul(
+    accel_type,
+    ifm_shape,
+    ofm_channels,
+    activation_function,
+):
+    np.random.seed(0)
+
+    @tf.function
+    def matmul(x, y):
+        x = tf.matmul(x, y, transpose_b=True)
+        if activation_function == "RELU":
+            x = tf.nn.relu(x)
+        return x
+
+    infra.compare_tvm_with_tflite(
+        matmul, [ifm_shape, [ofm_channels, ifm_shape[-1]]], accel_type, enable_cascader=False
+    )
+
+
+@pytest.mark.parametrize("accel_type", ["ethos-u55-256", "ethos-u65-256"])
 def test_tflite_subtract_sigmoid(accel_type):
     np.random.seed(0)
     ifm_shape = [1, 6, 8, 4]
@@ -1369,6 +1621,102 @@ def test_tflite_subtract_sigmoid(accel_type):
         [ifm_shape, ifm_shape],
         accel_type,
         enable_cascader=is_u55_accel_type(accel_type),
+    )
+
+
+@pytest.mark.parametrize("accel_type", ["ethos-u55-256", "ethos-u65-256"])
+@pytest.mark.parametrize(
+    "ifm_shape,ofm_channels,fract_size,tolerance",
+    [[(1, 16), 8, 15, 0.001], [(2, 8), 16, 14, 0.001], [(4, 8), 16, 12, 0.001]],
+)
+def test_ethosu_matmul_fixed_point(accel_type, ifm_shape, ofm_channels, fract_size, tolerance):
+    np.random.seed(0)
+    dtype = "int16"
+    weights_shape = (ofm_channels, ifm_shape[1])
+
+    def create_model():
+        ifm = relay.var("ifm", shape=ifm_shape, dtype=dtype)
+        ifm2 = relay.var("ifm2", shape=weights_shape, dtype=dtype)
+        ifm_fixed_point = relay.cast(ifm, "int32")
+        ifm2_fixed_point = relay.cast(ifm2, "int32")
+        ifm_fixed_point = relay.fixed_point_multiply(ifm_fixed_point, 2**31 - 1, 0)
+        ifm2_fixed_point = relay.fixed_point_multiply(ifm2_fixed_point, 2**31 - 1, 0)
+        dense = relay.nn.dense(ifm_fixed_point, ifm2_fixed_point)
+        dense = relay.fixed_point_multiply(dense, 1, 16)
+        dense = relay.cast(dense, dtype)
+        return tvm.IRModule.from_expr(relay.Function([ifm, ifm2], dense))
+
+    def convert_to_fixed_point(arr, fract_size):
+        fract_fact = 0b1 << fract_size
+        return np.array(arr * fract_fact, dtype=np.int16)
+
+    cpu_mod = create_model()
+    ethosu_mod = partition_for_ethosu(cpu_mod)
+
+    input_data = {
+        "ifm": np.random.uniform(-0.5, 0.5, size=ifm_shape),
+        "ifm2": np.random.uniform(-0.5, 0.5, size=weights_shape),
+    }
+    input_data = {
+        "ifm": convert_to_fixed_point(input_data["ifm"], fract_size),
+        "ifm2": convert_to_fixed_point(input_data["ifm2"], fract_size),
+    }
+    output_data = generate_ref_data(cpu_mod, input_data)
+    output_data = {"output": output_data["output"].astype("int16")}
+    tolerance = convert_to_fixed_point(tolerance, fract_size)
+
+    infra.compare_ethosu_with_reference(
+        ethosu_mod,
+        input_data,
+        output_data,
+        accel_type,
+        enable_cascader=False,
+        output_tolerance=tolerance,
+    )
+
+
+@pytest.mark.parametrize("accel_type", ["ethos-u55-256", "ethos-u65-256"])
+@pytest.mark.parametrize(
+    "ifm_shape,fract_size,tolerance",
+    [[(1, 2, 8, 4), 15, 0.001], [(1, 8), 12, 0.001], [(1, 1, 4, 8), 10, 0.002]],
+)
+def test_ethosu_tanh_fixed_point(accel_type, ifm_shape, fract_size, tolerance):
+    np.random.seed(0)
+    dtype = "int16"
+
+    def create_model():
+        ifm = relay.var("ifm", shape=ifm_shape, dtype=dtype)
+        ifm_fixed_point = relay.cast(ifm, "int32")
+        ifm_fixed_point = relay.fixed_point_multiply(ifm_fixed_point, 2**31 - 1, 0)
+        tanh = relay.tanh(ifm_fixed_point)
+        tanh = relay.fixed_point_multiply(tanh, 1, 31 - fract_size)
+        tanh = relay.cast(tanh, dtype)
+        return tvm.IRModule.from_expr(relay.Function([ifm], tanh))
+
+    def generate_ref(input_data):
+        return np.tanh(input_data)
+
+    def convert_to_fixed_point(arr, fract_size):
+        fract_fact = 0b1 << fract_size
+        return np.array(arr * fract_fact, dtype=np.int16)
+
+    cpu_mod = create_model()
+    ethosu_mod = partition_for_ethosu(cpu_mod)
+
+    input_data = {"ifm": np.random.uniform(-1, 1, size=ifm_shape)}
+    output_data = generate_ref(input_data["ifm"])
+
+    input_data = {"ifm": convert_to_fixed_point(input_data["ifm"], fract_size)}
+    output_data = {"output": convert_to_fixed_point(output_data, fract_size)}
+    tolerance = convert_to_fixed_point(tolerance, fract_size)
+
+    infra.compare_ethosu_with_reference(
+        ethosu_mod,
+        input_data,
+        output_data,
+        accel_type,
+        enable_cascader=is_u55_accel_type(accel_type),
+        output_tolerance=tolerance,
     )
 
 

@@ -64,6 +64,7 @@ class ConcreteScheduleNode : public ScheduleNode {
  public:
   ScheduleState state() const final { return state_; }
   Optional<Trace> trace() const override { return NullOpt; }
+  Optional<GlobalVar> func_working_on() const final { return func_working_on_; }
   void WorkOn(const String& func_name) final;
   Schedule Copy() override;
   void Seed(support::LinearCongruentialEngine::TRandState seed) final;
@@ -86,10 +87,14 @@ class ConcreteScheduleNode : public ScheduleNode {
 
  public:
   /******** Schedule: Sampling ********/
-  ExprRV SampleCategorical(const Array<Integer>& candidates, const Array<FloatImm>& probs,
-                           Optional<Integer> decision = NullOpt) override;
+  ExprRV SampleCategorical(const Array<runtime::Int>& candidates,
+                           const Array<runtime::Float>& probs,
+                           Optional<runtime::Int> decision = NullOpt) override;
   Array<ExprRV> SamplePerfectTile(const LoopRV& loop_rv, int n, int max_innermost_factor,
                                   Optional<Array<Integer>> decision = NullOpt) override;
+  Array<ExprRV> SamplePartitionedTile(const LoopRV& loop_rv, int n, int partition_pos,
+                                      int innerpart_factor,
+                                      Optional<Array<Integer>> decision = NullOpt) override;
   LoopRV SampleComputeLocation(const BlockRV& block_rv,
                                Optional<Integer> decision = NullOpt) override;
   /******** Schedule: Get blocks & loops ********/
@@ -104,7 +109,9 @@ class ConcreteScheduleNode : public ScheduleNode {
   LoopRV Fuse(const Array<LoopRV>& loop_rvs, bool preserve_unit_iters) override;
   LoopRV Merge(const Array<LoopRV>& loop_rvs) override;
   Array<LoopRV> Split(const LoopRV& loop_rv, const Array<Optional<ExprRV>>& factors,
-                      bool preserve_unit_iters) override;
+                      bool preserve_unit_iters, bool disable_predication) override;
+  Array<LoopRV> LoopPartition(const LoopRV& loop_rv, const Array<Optional<ExprRV>>& factors,
+                              bool preserve_unit_iters) override;
   void Reorder(const Array<LoopRV>& ordered_loop_rvs) override;
   void ReorderBlockIterVar(const BlockRV& block_rv, const Array<Integer> new_order) override;
   LoopRV AddUnitLoop(const BlockRV& block_rv) override;
@@ -152,6 +159,7 @@ class ConcreteScheduleNode : public ScheduleNode {
   void UnsafeSetDType(const BlockRV& block_rv, int buffer_index, const String& dtype) override;
   /******** Schedule: Blockize & Tensorize ********/
   BlockRV Blockize(const LoopRV& loop_rv, bool preserve_unit_iters) override;
+  BlockRV Blockize(const Array<BlockRV>& blocks, bool preserve_unit_iters) override;
   void Tensorize(const BlockRV& block_rv, const String& intrin, bool preserve_unit_iters) override;
   void Tensorize(const LoopRV& loop_rv, const String& intrin, bool preserve_unit_iters) override;
   /******** Schedule: Annotation ********/
@@ -173,6 +181,8 @@ class ConcreteScheduleNode : public ScheduleNode {
   void RollingBuffer(const BlockRV& block_rv, int write_buffer_index) override;
   /******** Schedule: Misc ********/
   void EnterPostproc() override {}
+  void UnsafeHideBufferAccess(const BlockRV& block_rv, const String& buf_type,
+                              const Array<IntImm>& buf_index_array) override;
 
  protected:
   /******** Utility functions ********/

@@ -28,6 +28,7 @@
 #include <tvm/node/node.h>
 #include <tvm/runtime/data_type.h>
 
+#include <functional>
 #include <string>
 
 namespace tvm {
@@ -103,6 +104,12 @@ class Var : public PrimExpr {
    * \param span The location of this object in the source code.
    */
   TVM_DLL explicit Var(String name_hint, Type type_annotation, Span span = Span());
+  /*!
+   * \brief Make a new copy of var with same type, but a different nam
+   * \param name The new name to be used.
+   * \return the new Var copy
+   */
+  TVM_DLL Var copy_with_name(const String& name) const;
   /*!
    * \brief Make a new copy of var with same type, append suffix
    * \param suffix The suffix to be appended.
@@ -264,7 +271,7 @@ class IterVarNode : public Object {
   IterVarType iter_type;
   /*!
    * \brief additional tag on the iteration variable,
-   *  set this if this is binded already to a known thread tag.
+   *  set this if this is bound already to a known thread tag.
    */
   String thread_tag;
   /*!
@@ -346,4 +353,33 @@ inline const char* IterVarType2String(IterVarType t) {
 }
 }  // namespace tir
 }  // namespace tvm
+
+/* \brief Allow tir.Var as key in STL tables
+ *
+ * For most TIR expressions, it would be ambiguous whether the
+ * expression should follow reference equality or structural equality.
+ * This is not the case for variables, which do not contain nested
+ * internal structure, and are frequently used as keys in lookup
+ * tables.
+ *
+ * Providing `std::hash` and `std::equal_to` specializations for
+ * `tir::Var` allows it to be used as a key in STL tables.  For
+ * `PrimExpr`, the user must specify the type of equality used
+ * (e.g. `std::unordered_set<T, StructuralHash, StructuralEqual>` or
+ * `std::unordered_set<T, ObjectPtrHash, ObjectPtrEqual>`).
+ */
+template <>
+struct std::hash<tvm::tir::Var> {
+  std::size_t operator()(const tvm::tir::Var& var) const {
+    return tvm::runtime::ObjectPtrHash()(var);
+  }
+};
+
+template <>
+struct std::equal_to<tvm::tir::Var> {
+  bool operator()(const tvm::tir::Var& var_a, const tvm::tir::Var& var_b) const {
+    return tvm::runtime::ObjectPtrEqual()(var_a, var_b);
+  }
+};
+
 #endif  // TVM_TIR_VAR_H_

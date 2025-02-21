@@ -48,6 +48,8 @@ namespace relay {
 /*! \brief The meta table maps from type key to a sequence of objects. */
 using MetaTable = Map<String, Array<ObjectRef>>;
 
+using tvm::runtime::NDArray;
+using tvm::runtime::String2DLDataType;
 using tvm::transform::CreateModulePass;
 using tvm::transform::PassContext;
 
@@ -1366,8 +1368,8 @@ class Parser {
       }
       // TODO(@jroesch): not sure about this being the right way to handle nulls.
       case TokenType::kIdentifier: {
-        if (auto text = next->data.as<tvm::StringObj>()) {
-          std::string id = GetRef<String>(text);
+        if (auto text = next->data.as<tvm::String>()) {
+          std::string id = text.value();
           if (id == "nullptr") {
             Match(TokenType::kIdentifier);
             return ObjectRef();

@@ -319,6 +319,7 @@ struct EthosuIdentityAttrs : public tvm::AttrsNode<EthosuIdentityAttrs> {
   double ofm_scale;
   int ofm_zero_point;
   String activation;
+  String rounding_mode;
 
   TVM_DECLARE_ATTRS(EthosuIdentityAttrs, "relay.attrs.EthosuIdentityAttrs") {
     TVM_ATTR_FIELD(ifm_scale).describe("The quantization scale for the Input Feature Map tensor.");
@@ -335,6 +336,13 @@ struct EthosuIdentityAttrs : public tvm::AttrsNode<EthosuIdentityAttrs> {
             "'SIGMOID' - sigmoid activation function. "
             "'LUT' - use a look-up table to perform the activation function.")
         .set_default("NONE");
+    TVM_ATTR_FIELD(rounding_mode)
+        .describe(
+            "The rounding mode to apply to the Output Feature Map tensor. "
+            "'TFL' - Tensorflow Lite rounding scheme. "
+            "'TRUNCATE' - Truncate towards zero."
+            "'NATURAL' - Round to nearest value, with x.5 rounded up towards +infinity.")
+        .set_default("TFL");
   }
 };
 
@@ -349,6 +357,7 @@ struct EthosuPoolingAttrs : public tvm::AttrsNode<EthosuPoolingAttrs> {
   int ofm_zero_point;
   Array<IndexExpr> pool_shape;
   IndexExpr ofm_channels;
+  String ofm_dtype;
   Array<IndexExpr> strides;
   Array<IndexExpr> padding;
   String activation;
@@ -376,6 +385,10 @@ struct EthosuPoolingAttrs : public tvm::AttrsNode<EthosuPoolingAttrs> {
     TVM_ATTR_FIELD(ofm_channels)
         .describe(" The number of the Output Feature Map channels.")
         .set_default(NullValue<IndexExpr>());
+    TVM_ATTR_FIELD(ofm_dtype).describe(
+        "The Output Feature Map tensor data type. "
+        "'AVG' or 'MAX' pooling - can be 'int8', 'uint8', or 'int16'. "
+        "'SUM' pooling - can be 'int32'.");
     TVM_ATTR_FIELD(strides)
         .set_default(Array<IndexExpr>({1, 1}))
         .describe("The 2 dimensional strides as (stride_height, stride_width).");

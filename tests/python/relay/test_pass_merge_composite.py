@@ -18,7 +18,7 @@
 import pytest
 import tvm
 from tvm import relay, tir
-from tvm.relay.dataflow_pattern import TupleGetItemPattern, is_op, wildcard
+from tvm.relay.dataflow_pattern import TuplePattern, TupleGetItemPattern, is_op, wildcard
 from tvm.relay.testing import run_opt_pass
 
 
@@ -175,9 +175,7 @@ def check_result(pattern_table, graph, expected_graph, import_prelude=False):
         str(result)
     )
     expected = run_opt_pass(expected_graph, relay.transform.InferType())
-    assert tvm.ir.structural_equal(
-        result, expected, map_free_vars=True
-    ), "Graph mismatch: output vs. expected\n{0}\n=====\n{1}".format(str(result), str(expected))
+    tvm.ir.assert_structural_equal(result, expected, map_free_vars=True)
 
 
 def test_simple_merge():
@@ -977,6 +975,51 @@ def test_type_check():
         ("conv_bias_relu", make_conv_bias_relu_pattern(), _check_type_true),
     ]
     check_result(pattern_table_true, before(), expected_true())
+
+
+def test_einsum_reshape_pattern():
+    """Test MergeComposite does not cause error with einsum operator."""
+
+    def make_einsum_reshape_pattern():
+        x = wildcard()
+        x = is_op("reshape")(x) | x
+        y = wildcard()
+        y = is_op("reshape")(y) | y
+        z = is_op("einsum")(TuplePattern([x, y]))
+        r = is_op("reshape")(z) | z
+        return r
+
+    pattern_table = [
+        (
+            "einsum_reshape",
+            make_einsum_reshape_pattern(),
+        )
+    ]
+
+    def before():
+        a = relay.var("a", shape=(10, 10))
+        b = relay.var("b", shape=(10, 10))
+        c = relay.reshape(a, [20, 5])
+        d = relay.reshape(b, [20, 5])
+        r = relay.einsum([c, d], "...ab,...cb->...ac")
+        return relay.Function([a, b], r)
+
+    def expected():
+        a = relay.var("a", shape=(10, 10))
+        b = relay.var("b", shape=(10, 10))
+        c = relay.reshape(a, [20, 5])
+        d = relay.reshape(b, [20, 5])
+        r = relay.einsum([c, d], "...ab,...cb->...ac")
+        func = relay.Function([a, b], r)
+        func = func.with_attr("Composite", "einsum_reshape")
+        func = func.with_attr("PartitionedFromPattern", "reshape_reshape_Tuple_einsum_")
+
+        input0 = relay.var("a", shape=(10, 10))
+        input1 = relay.var("b", shape=(10, 10))
+        output = func(input0, input1)
+        return relay.Function([input0, input1], output)
+
+    check_result(pattern_table, before(), expected())
 
 
 if __name__ == "__main__":

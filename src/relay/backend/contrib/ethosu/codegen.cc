@@ -47,6 +47,8 @@ namespace relay {
 namespace contrib {
 namespace ethosu {
 
+using FTVMTIRToRuntime = tvm::runtime::TypedPackedFunc<runtime::Module(IRModule, Target)>;
+
 /*!
  * \brief This mutator outlines functions that are marked with a named
  * "Compiler" attribute. Functions that do not match this condition remain
@@ -191,7 +193,7 @@ class RemoveRedundantIdentities : public MixedModeMutator {
       }
 
       if (const auto* parent_callnode = current_arg.as<CallNode>()) {
-        if (const auto* parent_op = parent_callnode->op.as<OpNode>()) {
+        if (auto parent_op = parent_callnode->op.as<OpNode>()) {
           Call parent_call = GetRef<Call>(parent_callnode);
           if (parent_op->name == "contrib.ethosu.identity" && IdentityDoesNothing(parent_call) &&
               CheckIdentityBetweenTransformOperations(call, parent_call)) {
@@ -305,8 +307,7 @@ runtime::Module TIRToRuntime(IRModule mod, Target target) {
   Array<CompilationArtifact> compile_artifacts;
   for (const auto& kv : mod->functions) {
     const tir::PrimFunc& prim_func = Downcast<tir::PrimFunc>(kv.second);
-    Optional<Map<Integer, runtime::NDArray>> params =
-        prim_func->GetAttr<Map<Integer, runtime::NDArray>>("ethos-u.constants");
+    auto params = prim_func->GetAttr<Map<ObjectRef, runtime::NDArray>>("ethos-u.constants");
     ICHECK(params) << "microNPU params should be present";
     auto primfunc_to_artifact_pf =
         tvm::runtime::Registry::Get("relay.ext.ethos-u.primfunc_to_artifact");
@@ -320,7 +321,7 @@ runtime::Module TIRToRuntime(IRModule mod, Target target) {
 
 TVM_REGISTER_TARGET_KIND("ethos-u", kDLCPU)
     .set_attr<Bool>("use_device_api", Bool(true))
-    .set_attr<FTVMRelayToTIR>(tvm::attr::kRelayToTIR, RelayToTIR())
+    .set_attr<relay::transform::FTVMRelayToTIR>(tvm::attr::kRelayToTIR, RelayToTIR())
     .set_attr<FTVMTIRToRuntime>("TIRToRuntime", TIRToRuntime);
 
 }  // namespace ethosu

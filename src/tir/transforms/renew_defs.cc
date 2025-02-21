@@ -50,6 +50,18 @@ class RenewDefMutator : public StmtExprMutator {
     for (const auto& param : func->params) {
       params.push_back(generator.ReDefineVar(param));
     }
+    for (const auto& param : func->params) {
+      if (param->dtype.is_handle()) {
+        const Buffer& buffer = func->buffer_map.at(param);
+        for (const PrimExpr& e : buffer->shape) {
+          if (const auto* v = e.as<VarNode>()) {
+            if (generator.remap_.count(GetRef<Var>(v)) == 0) {
+              generator.ReDefineVar(GetRef<Var>(v));
+            }
+          }
+        }
+      }
+    }
     // Redefine buffers in order
     // TODO(Siyuan Feng): checking var is used after define
     Map<tir::Var, Buffer> buffer_map;
@@ -64,11 +76,7 @@ class RenewDefMutator : public StmtExprMutator {
     // Visit body
     Stmt body = generator(func->body);
     // Recreate function
-    auto n = make_object<PrimFuncNode>(*func.get());
-    n->params = std::move(params);
-    n->buffer_map = std::move(buffer_map);
-    n->body = std::move(body);
-    return PrimFunc(n);
+    return PrimFunc(params, body, func->ret_type, buffer_map, func->attrs, func->span);
   }
 
  private:
@@ -108,9 +116,11 @@ class RenewDefMutator : public StmtExprMutator {
         std::bind(&RenewDefMutator::VisitMatchBuffer, this, std::placeholders::_1));
 
     // Step 3. Visit body
-    Stmt stmt = StmtExprMutator::VisitStmt_(op);
-    op = stmt.as<BlockNode>();
-    ICHECK(op);
+    Optional<Stmt> init = NullOpt;
+    if (op->init.defined()) {
+      init = this->VisitStmt(op->init.value());
+    }
+    Stmt body = this->VisitStmt(op->body);
 
     // Step 4. Revisit access region
     Array<BufferRegion> reads =
@@ -125,6 +135,8 @@ class RenewDefMutator : public StmtExprMutator {
     n->match_buffers = std::move(match_buffers);
     n->reads = std::move(reads);
     n->writes = std::move(writes);
+    n->body = std::move(body);
+    n->init = std::move(init);
 
     return Stmt(n);
   }
@@ -181,8 +193,8 @@ class RenewDefMutator : public StmtExprMutator {
       auto it = remap_.find(expr);
       if (it != remap_.end()) {
         return Downcast<PrimExpr>((*it).second);
-      } else if (const VarNode* var = expr.as<VarNode>()) {
-        return this->ReDefineVar(GetRef<Var>(var));
+      } else if (auto var = expr.as<Var>()) {
+        return this->ReDefineVar(var.value());
       } else {
         return ExprMutator::VisitExpr(expr);
       }

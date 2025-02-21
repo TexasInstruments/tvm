@@ -58,8 +58,8 @@ std::variant<MemCpyDetails, std::string> IdentifyMemCpyImpl(const For& loop,
   }
 
   BufferStore store;
-  if (auto* ptr = stmt.as<BufferStoreNode>()) {
-    store = GetRef<BufferStore>(ptr);
+  if (auto opt = stmt.as<BufferStore>()) {
+    store = opt.value();
   } else {
     return static_cast<const std::stringstream&>(
                std::stringstream()
@@ -68,8 +68,8 @@ std::variant<MemCpyDetails, std::string> IdentifyMemCpyImpl(const For& loop,
   }
 
   BufferLoad load;
-  if (auto* ptr = store->value.as<BufferLoadNode>()) {
-    load = GetRef<BufferLoad>(ptr);
+  if (auto opt = store->value.as<BufferLoad>()) {
+    load = opt.value();
   } else {
     return static_cast<const std::stringstream&>(
                std::stringstream()
@@ -293,7 +293,7 @@ TVM_REGISTER_GLOBAL("tir.analysis._identify_memcpy").set_body_typed([](const Stm
     using IRVisitorWithAnalyzer::VisitStmt_;
     void VisitStmt_(const ForNode* op) override {
       For loop = GetRef<For>(op);
-      auto result = IdentifyMemCpyImpl(loop, &analyzer_);
+      auto result = IdentifyMemCpyImpl(loop, &(Visitor::analyzer_));
       if (auto* ptr = std::get_if<MemCpyDetails>(&result)) {
         output->push_back(Array{ptr->source, ptr->dest});
       } else if (auto* ptr = std::get_if<std::string>(&result)) {

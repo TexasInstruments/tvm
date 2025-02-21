@@ -67,12 +67,12 @@ def get_conv2d_in_channels(data_shape, data_layout):
     data_shape = get_const_tuple(data_shape)
     if len(data_shape) == 4:
         idx = data_layout.find("C")
-        assert idx >= 0, "Invalid conv2d data layout {}".format(data_layout)
+        assert idx >= 0, f"Invalid conv2d data layout {data_layout}"
         return data_shape[idx]
     if re.match(r"NCHW\d*c", data_layout):
         # NCHW[8]c
         return data_shape[1] * data_shape[4]
-    raise ValueError("Unknown conv2d data layout {}".format(data_layout))
+    raise ValueError(f"Unknown conv2d data layout {data_layout}")
 
 
 def get_conv2d_out_channels(kernel_shape, kernel_layout):
@@ -80,13 +80,13 @@ def get_conv2d_out_channels(kernel_shape, kernel_layout):
     kernel_shape = get_const_tuple(kernel_shape)
     if len(kernel_shape) == 4:
         idx = kernel_layout.find("O")
-        assert idx >= 0, "Invalid conv2d kernel layout {}".format(kernel_layout)
+        assert idx >= 0, f"Invalid conv2d kernel layout {kernel_layout}"
         return kernel_shape[idx]
     if re.match(r"OIHW\d*i\d*o", kernel_layout):
         return kernel_shape[0] * kernel_shape[5]
     if re.match(r"OIHW\d*o", kernel_layout):
         return kernel_shape[0] * kernel_shape[4]
-    raise ValueError("Unknown conv2d kernel layout {}".format(kernel_layout))
+    raise ValueError(f"Unknown conv2d kernel layout {kernel_layout}")
 
 
 def is_depthwise_conv2d(data_shape, data_layout, kernel_shape, kernel_layout, groups):
@@ -302,7 +302,7 @@ def conv2d_strategy(attrs, inputs, out_type, target):
                 name="conv2d_hwcn.generic",
             )
         else:
-            raise RuntimeError("Unsupported conv2d layout {}".format(layout))
+            raise RuntimeError(f"Unsupported conv2d layout {layout}")
     elif is_depthwise_conv2d(data.shape, layout, kernel.shape, kernel_layout, groups):
         if layout == "NCHW":
             assert kernel_layout == "OIHW"
@@ -320,7 +320,7 @@ def conv2d_strategy(attrs, inputs, out_type, target):
                 name="depthwise_conv2d_nhwc.generic",
             )
         else:
-            raise RuntimeError("Unsupported depthwise_conv2d layout {}".format(layout))
+            raise RuntimeError(f"Unsupported depthwise_conv2d layout {layout}")
     else:  # group_conv2d
         if layout == "NCHW":
             assert kernel_layout == "OIHW"
@@ -337,7 +337,7 @@ def conv2d_strategy(attrs, inputs, out_type, target):
                 name="group_conv2d_nhwc.generic",
             )
         else:
-            raise RuntimeError("Unsupported group_conv2d layout {}".format(layout))
+            raise RuntimeError(f"Unsupported group_conv2d layout {layout}")
     return strategy
 
 
@@ -466,7 +466,7 @@ def deformable_conv2d_strategy(attrs, inputs, out_type, target):
             name="deformable_conv2d_nhwc.generic",
         )
     else:
-        raise RuntimeError("Layout %s is not supported in deformable conv2d" % layout)
+        raise RuntimeError(f"Layout {layout} is not supported in deformable conv2d")
     return strategy
 
 
@@ -519,7 +519,7 @@ def conv2d_transpose_strategy(attrs, inputs, out_type, target):
 
 
 # conv3d_transpose
-def wrap_compute_conv3d_transpose(topi_compute):
+def wrap_compute_conv3d_transpose(topi_compute, has_groups=False):
     """wrap conv3d_transpose topi compute"""
 
     def compute_conv3d_transpose(attrs, inputs, out_dtype):
@@ -529,7 +529,10 @@ def wrap_compute_conv3d_transpose(topi_compute):
         output_padding = get_const_tuple(attrs.output_padding)
         out_dtype = attrs.out_dtype
         out_dtype = inputs[0].dtype if out_dtype in ("same", "") else out_dtype
-        out = topi_compute(inputs[0], inputs[1], strides, padding, out_dtype, output_padding)
+        args = [inputs[0], inputs[1], strides, padding, out_dtype, output_padding]
+        if has_groups:
+            args.append(attrs.group)
+        out = topi_compute(*args)
         return [out]
 
     return compute_conv3d_transpose
@@ -544,13 +547,20 @@ def conv3d_transpose_strategy(attrs, inputs, out_type, target):
     groups = attrs.groups
     assert layout == "NCDHW", "only support ncdhw for now"
     assert dilation == (1, 1, 1), "not support dilate now"
-    assert groups == 1, "only support groups == 1 for now"
+
     strategy = _op.OpStrategy()
-    strategy.add_implementation(
-        wrap_compute_conv3d_transpose(topi.nn.conv3d_transpose_ncdhw),
-        wrap_topi_schedule(topi.generic.schedule_conv3d_transpose_ncdhw),
-        name="conv3d_transpose_ncdhw.generic",
-    )
+    if groups == 1:
+        strategy.add_implementation(
+            wrap_compute_conv3d_transpose(topi.nn.conv3d_transpose_ncdhw),
+            wrap_topi_schedule(topi.generic.schedule_conv3d_transpose_ncdhw),
+            name="conv3d_transpose_ncdhw.generic",
+        )
+    else:
+        strategy.add_implementation(
+            wrap_compute_conv3d_transpose(topi.nn.group_conv3d_transpose_ncdhw, has_groups=True),
+            wrap_topi_schedule(topi.generic.schedule_group_conv3d_transpose_ncdhw),
+            name="group_conv3d_transpose_ncdhw.generic",
+        )
     return strategy
 
 
@@ -609,7 +619,7 @@ def conv3d_strategy(attrs, inputs, out_type, target):
             name="conv3d_ndhwc.generic",
         )
     else:
-        raise ValueError("Not support this layout {} yet".format(layout))
+        raise ValueError(f"Not support this layout {layout} yet")
     return strategy
 
 
@@ -666,7 +676,7 @@ def conv1d_strategy(attrs, inputs, out_type, target):
             name="conv1d_nwc.generic",
         )
     else:
-        raise ValueError("Unsupported conv1d layout {}".format(layout))
+        raise ValueError(f"Unsupported conv1d layout {layout}")
     return strategy
 
 
@@ -709,12 +719,12 @@ def group_conv1d_strategy(attrs, inputs, out_type, target):
             name="group_conv1d_nwc.generic",
         )
     else:
-        raise ValueError("Unsupported conv1d layout {}".format(layout))
+        raise ValueError(f"Unsupported conv1d layout {layout}")
     return strategy
 
 
 # conv1d_transpose
-def wrap_compute_conv1d_transpose(topi_compute):
+def wrap_compute_conv1d_transpose(topi_compute, has_groups=False):
     """wrap conv1d_transpose topi compute"""
 
     def _compute_conv1d_tranpsoe(attrs, inputs, out_type):
@@ -723,7 +733,11 @@ def wrap_compute_conv1d_transpose(topi_compute):
         out_dtype = attrs.out_dtype
         out_dtype = inputs[0].dtype if out_dtype in ("same", "") else out_dtype
         output_padding = get_const_tuple(attrs.output_padding)
-        out = topi_compute(inputs[0], inputs[1], strides, padding, out_dtype, output_padding)
+        args = [inputs[0], inputs[1], strides, padding, out_dtype, output_padding]
+        if has_groups:
+            args.append(attrs.groups)
+
+        out = topi_compute(*args)
         return [out]
 
     return _compute_conv1d_tranpsoe
@@ -739,12 +753,18 @@ def conv1d_transpose_strategy(attrs, inputs, out_type, target):
     groups = attrs.groups
     assert layout == "NCW", "conv1d_transpose ncw only supported"
     assert dilation == (1,), "conv1d_transpose dilation is not supported"
-    assert groups == 1, "conv1d_transpose groups == 1 only supported"
-    strategy.add_implementation(
-        wrap_compute_conv1d_transpose(topi.nn.conv1d_transpose_ncw),
-        wrap_topi_schedule(topi.generic.schedule_conv1d_transpose_ncw),
-        name="conv1d_transpose_ncw.generic",
-    )
+    if groups == 1:
+        strategy.add_implementation(
+            wrap_compute_conv1d_transpose(topi.nn.conv1d_transpose_ncw),
+            wrap_topi_schedule(topi.generic.schedule_conv1d_transpose_ncw),
+            name="conv1d_transpose_ncw.generic",
+        )
+    else:  # group_conv1d_transpose
+        strategy.add_implementation(
+            wrap_compute_conv1d_transpose(topi.nn.group_conv1d_transpose_ncw, has_groups=True),
+            wrap_topi_schedule(topi.generic.schedule_group_conv1d_transpose_ncw),
+            name="group_conv1d_transpose_ncw.generic",
+        )
     return strategy
 
 
@@ -797,7 +817,7 @@ def dilation2d_strategy(attrs, inputs, out_type, target):
             name="dilation2d_nhwc.generic",
         )
     else:
-        raise RuntimeError("Unsupported dilation2d layout {}".format(layout))
+        raise RuntimeError(f"Unsupported dilation2d layout {layout}")
     return strategy
 
 
@@ -816,9 +836,7 @@ def copy_if_identical(tensor_a, tensor_b):
 
 # matmul
 def wrap_compute_matmul(
-    topi_compute,
-    need_auto_scheduler_layout=False,
-    need_meta_schedule_layout=False,
+    topi_compute, need_auto_scheduler_layout=False, need_meta_schedule_layout=False
 ):
     """wrap matmul topi compute"""
 
@@ -826,14 +844,7 @@ def wrap_compute_matmul(
         """Compute definition of matmul"""
         out_dtype = attrs.out_dtype
         out_dtype = inputs[0].dtype if out_dtype == "" else out_dtype
-        args = [
-            inputs[0],
-            inputs[1],
-            None,
-            out_dtype,
-            attrs.transpose_a,
-            attrs.transpose_b,
-        ]
+        args = [inputs[0], inputs[1], None, out_dtype, attrs.transpose_a, attrs.transpose_b]
         if need_auto_scheduler_layout:
             args.append(get_auto_scheduler_rewritten_layout(attrs))
         elif need_meta_schedule_layout:
@@ -860,9 +871,7 @@ def matmul_strategy(attrs, inputs, out_type, target):
 
 # dense
 def wrap_compute_dense(
-    topi_compute,
-    need_auto_scheduler_layout=False,
-    need_meta_schedule_layout=False,
+    topi_compute, need_auto_scheduler_layout=False, need_meta_schedule_layout=False
 ):
     """wrap dense topi compute"""
 
@@ -1196,7 +1205,10 @@ def wrap_compute_multibox_transform_loc(topi_compute):
         clip = bool(get_const_int(attrs.clip))
         threshold = get_const_float(attrs.threshold)
         variances = get_float_tuple(attrs.variances)
-        return topi_compute(inputs[0], inputs[1], inputs[2], clip, threshold, variances)
+        keep_background = bool(get_const_int(attrs.keep_background))
+        return topi_compute(
+            inputs[0], inputs[1], inputs[2], clip, threshold, variances, keep_background
+        )
 
     return _compute_multibox_transform_loc
 
@@ -1310,12 +1322,7 @@ def wrap_compute_all_class_nms(topi_compute):
         score_threshold = inputs[4]
         output_format = attrs.output_format
         return topi_compute(
-            inputs[0],
-            inputs[1],
-            max_output_size,
-            iou_threshold,
-            score_threshold,
-            output_format,
+            inputs[0], inputs[1], max_output_size, iou_threshold, score_threshold, output_format
         )
 
     return _compute_nms
@@ -1329,6 +1336,35 @@ def all_class_nms_strategy(attrs, inputs, out_type, target):
         wrap_compute_all_class_nms(topi.vision.all_class_non_max_suppression),
         wrap_topi_schedule(topi.generic.schedule_nms),
         name="all_class_nms.generic",
+    )
+    return strategy
+
+
+def wrap_compute_regular_nms(topi_compute):
+    """wrap regular nms topi compute"""
+
+    def _compute_nms(attrs, inputs, out_type):
+        return topi_compute(
+            inputs[0],
+            inputs[1],
+            attrs.max_detections_per_class,
+            attrs.max_detections,
+            attrs.num_classes,
+            attrs.iou_threshold,
+            attrs.score_threshold,
+        )
+
+    return _compute_nms
+
+
+@override_native_generic_func("regular_non_max_suppression_strategy")
+def regular_nms_strategy(attrs, inputs, out_type, target):
+    """regular nms generic strategy"""
+    strategy = _op.OpStrategy()
+    strategy.add_implementation(
+        wrap_compute_regular_nms(topi.vision.regular_non_max_suppression),
+        wrap_topi_schedule(topi.generic.schedule_nms),
+        name="regular_nms.generic",
     )
     return strategy
 
@@ -1481,11 +1517,7 @@ def wrap_compute_dft(topi_compute):
     """Wrap DFT compute"""
 
     def _compute_dft(attrs, inputs, _):
-        return topi_compute(
-            inputs[0],
-            inputs[1],
-            attrs.inverse,
-        )
+        return topi_compute(inputs[0], inputs[1], attrs.inverse)
 
     return _compute_dft
 
@@ -1507,13 +1539,7 @@ def wrap_compute_trilu(topi_compute):
     """Wrap trilu compute"""
 
     def _compute_trilu(attrs, inputs, output_type):
-        return [
-            topi_compute(
-                inputs[0],
-                inputs[1],
-                attrs.upper,
-            )
-        ]
+        return [topi_compute(inputs[0], inputs[1], attrs.upper)]
 
     return _compute_trilu
 
@@ -1688,7 +1714,7 @@ def bitserial_conv2d_strategy(attrs, inputs, out_type, target):
             name="bitserial_conv2d_nhwc.generic",
         )
     else:
-        raise ValueError("Data layout {} not supported.".format(layout))
+        raise ValueError(f"Data layout {layout} not supported.")
     return strategy
 
 
@@ -2058,15 +2084,7 @@ def wrap_compute_conv2d_backward_weight(topi_compute):
         layout = attrs.data_layout
         out_dtype = inputs[0].dtype if out_dtype in ("same", "") else out_dtype
         out = topi_compute(
-            inputs[0],
-            inputs[1],
-            kernel_size,
-            padding,
-            strides,
-            dilation,
-            groups,
-            layout,
-            out_dtype,
+            inputs[0], inputs[1], kernel_size, padding, strides, dilation, groups, layout, out_dtype
         )
         return [out]
 
@@ -2099,13 +2117,6 @@ def wrap_compute_layout_transform(topi_compute, schedule_rule="None"):
     """Wrap layout transform compute"""
 
     def _compute_layout_transform(attrs, inputs, output_type):
-        return [
-            topi_compute(
-                inputs[0],
-                attrs.src_layout,
-                attrs.dst_layout,
-                schedule_rule,
-            )
-        ]
+        return [topi_compute(inputs[0], attrs.src_layout, attrs.dst_layout, schedule_rule)]
 
     return _compute_layout_transform

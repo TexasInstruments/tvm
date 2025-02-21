@@ -17,7 +17,7 @@
 
 import ctypes
 import traceback
-from cpython cimport Py_INCREF, Py_DECREF
+from cpython cimport Py_INCREF, Py_DECREF, PyGILState_Ensure, PyGILState_Release
 from numbers import Number, Integral
 from ..base import string_types, py2cerror
 from ..runtime_ctypes import DataType, Device, TVMByteArray, ObjectRValueRef
@@ -45,7 +45,7 @@ cdef int tvm_callback(TVMValue* args,
             tcode == kTVMModuleHandle or
             tcode == kTVMNDArrayHandle or
             tcode == kTVMObjectRefArg or
-            tcode > kTVMExtBegin):
+            tcode >= kTVMExtBegin):
             CHECK_CALL(TVMCbArgToReturn(&value, &tcode))
 
         if tcode != kTVMDLTensorHandle:
@@ -54,10 +54,11 @@ cdef int tvm_callback(TVMValue* args,
             pyargs.append(c_make_array(value.v_handle, True, False))
     try:
         rv = local_pyfunc(*pyargs)
-    except Exception:
+    except Exception as err:
         msg = traceback.format_exc()
         msg = py2cerror(msg)
-        TVMAPISetLastError(c_str(msg))
+        TVMAPISetLastPythonError(<void*>err)
+
         return -1
     if rv is not None:
         if isinstance(rv, tuple):
@@ -117,6 +118,11 @@ cdef inline int make_arg(object arg,
         ptr = arg._tvm_handle
         value[0].v_handle = (<void*>ptr)
         tcode[0] = arg.__class__._tvm_tcode
+    elif isinstance(arg, bool):
+        # A python `bool` is a subclass of `int`, so this check
+        # must occur before `Integral`.
+        value[0].v_int64 = arg
+        tcode[0] = kTVMArgBool
     elif isinstance(arg, Integral):
         value[0].v_int64 = arg
         tcode[0] = kInt
@@ -208,6 +214,8 @@ cdef inline object make_ret(TVMValue value, int tcode):
         return make_ret_object(value.v_handle)
     elif tcode == kTVMNullptr:
         return None
+    elif tcode == kTVMArgBool:
+        return bool(value.v_int64)
     elif tcode == kInt:
         return value.v_int64
     elif tcode == kFloat:

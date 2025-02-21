@@ -412,6 +412,12 @@ TVM_DLL const Op& tvm_check_return();
 TVM_DLL const Op& tvm_thread_context();
 
 /*!
+ * \brief Mark a condition to be thread invariant.
+ *  This means the condition must be the same for all threads.
+ */
+TVM_DLL const Op& tvm_thread_invariant();
+
+/*!
  * \brief Lowered version of call packed, the space of value and
  *  type codes are explicitly allocated.
  *
@@ -645,13 +651,27 @@ TVM_DLL const Op& ptx_mma_sp();
 TVM_DLL const Op& ptx_ldmatrix();
 
 /*!
- * \brief tvm intrinsics for ptx async copy from global to shared memory
+ * \brief tvm intrinsics for ptx async copy from global to shared memory using cp.async
  *
- * void ptx_cp_async(Var shared_ptr, Expr shared_offset, Var global_ptr, Expr global_offset, size_t
- * bytes);
- *
+ * void ptx_cp_async(Var shared_ptr,
+ *                   Expr shared_offset,
+ *                   Var global_ptr,
+ *                   Expr global_offset,
+ *                   size_t bytes);
  */
 TVM_DLL const Op& ptx_cp_async();
+
+/*!
+ * \brief tvm intrinsics for ptx async copy from global to shared memory using cp.async.bulk
+ *
+ * void ptx_cp_async(Var shared_ptr,
+ *                   Expr shared_offset,
+ *                   Var global_ptr,
+ *                   Expr global_offset,
+ *                   size_t bytes,
+ *                   int barrier_id);
+ */
+TVM_DLL const Op& ptx_cp_async_bulk();
 
 /*!
  * \brief tvm intrinsics for ptx async copy commit and wait.
@@ -662,6 +682,54 @@ TVM_DLL const Op& ptx_cp_async();
  */
 TVM_DLL const Op& ptx_commit_group();
 TVM_DLL const Op& ptx_wait_group();
+
+/*!
+ * \brief tvm intrinsics for ptx async copy barrier using cp.async.mbarrier.arrive
+ *
+ * ptx_cp_async_barrier(int barrier_id)
+ *
+ */
+TVM_DLL const Op& ptx_cp_async_barrier();
+
+/*!
+ * \brief tvm intrinsics for ptx barrier initialization of thread count using mbarrier.init
+ *
+ * ptx_init_barrier_thread_count(int barrier_id, int thread_count)
+ *
+ */
+TVM_DLL const Op& ptx_init_barrier_thread_count();
+
+/*!
+ * \brief tvm intrinsics for ptx barrier arrival using mbarrier.arrive
+ *
+ * ptx_arrive_barrier(int barrier_id)
+ *
+ */
+TVM_DLL const Op& ptx_arrive_barrier();
+
+/*!
+ * \brief tvm intrinsic for ptx barrier arrival with expect tx using mbarrier.arrive.expect_tx
+ *
+ * ptx_arrive_barrier_expect_tx(int barrier_id, int byte_count)
+ *
+ */
+TVM_DLL const Op& ptx_arrive_barrier_expect_tx();
+
+/*!
+ * \brief tvm intrinsics for ptx barrier wait using mbarrier.try_wait
+ *
+ * ptx_wait_barrier(int barrier_id)
+ *
+ */
+TVM_DLL const Op& ptx_wait_barrier();
+
+/*!
+ * \brief tvm intrinsics to create N barriers
+ *
+ * ptx_wait_barrier(int barrier_count)
+ *
+ */
+TVM_DLL const Op& create_barriers();
 
 /*!
  * \brief tvm intrinsic for storing the result of PTX MMA into a destination pointer.
@@ -678,7 +746,7 @@ TVM_DLL const Op& ptx_wait_group();
 TVM_DLL const Op& mma_store();
 
 /*!
- * \brief tvm intrinsic for zero-initalizing an MMA accumulation registor.
+ * \brief tvm intrinsic for zero-initializing an MMA accumulation register.
  *        For example, if each thread in a warp of size 32 has 8 elements from the A matrix in
  *        m16xn8xk16 MMA in its registers, this intrinsic can be used to zero-initialize its
  *        4 accumulation registers.
@@ -689,6 +757,48 @@ TVM_DLL const Op& mma_store();
  * void mma_fill(IntImm local_size, Var local_ptr, Expr offset);
  */
 TVM_DLL const Op& mma_fill();
+
+// Metal SimdGroup matrix intrinsics
+
+/*!
+ * \brief tvm intrinsic for initializing and simdgroup with given value.
+ * \note only 8x8 shape is supported by Metal Spec and TVM, but we still keep shape as params,
+ *       keeping the similar interface with Metal Spec.
+ *
+ * void make_filled_simdgroup_matrix(Var d, PrimExpr index, PrimExpr value,
+ *                                   int col = 8, int row = 8);
+ */
+TVM_DLL const Op& make_filled_simdgroup_matrix();
+
+/*!
+ * \brief tvm intrinsic for loading data from device memory or threadgroup memory to simdgroup.
+ * \note only 8x8 shape is supported by Metal Spec and TVM, but we still keep shape as params,
+ *       keeping the similar interface with Metal Spec.
+ *
+ * void simdgroup_load(Var d, PrimExpr index, PrimExpr ptr, PrimExpr stride,
+                       int col = 8, int row = 8, bool transpose_matrix = false);
+ */
+TVM_DLL const Op& simdgroup_load();
+
+/*!
+ * \brief tvm intrinsic for storing data from simdgroup to device memory or threadgroup memory.
+ * \note only 8x8 shape is supported by Metal Spec and TVM, but we still keep shape as params,
+ *       keeping the similar interface with Metal Spec.
+ *
+ * void simdgroup_store(Var d, PrimExpr index, PrimExpr ptr, PrimExpr stride,
+ *                      int col = 8, int row = 8, bool transpose_matrix = false);
+ */
+TVM_DLL const Op& simdgroup_store();
+
+/*!
+ * \brief tvm intrinsic for multiply and accumulate two matrices in simdgroup
+ * \note only 8x8 shape is supported by Metal Spec and TVM, but we still keep shape as params,
+ *       keeping the similar interface with Metal Spec.
+ *
+ * void simdgroup_mma(Var d, PrimExpr index_d, Var a, PrimExpr index_a,
+ *                    Var b, PrimExpr index_b, Var c, PrimExpr index_c);
+ */
+TVM_DLL const Op& simdgroup_multiply_accumulate();
 
 // TODO(tvm-team) replace the usage of the vector operations by Shuffle.
 /*!
@@ -705,6 +815,11 @@ TVM_DLL const Op& vectorlow();
  * \brief Concat two vectors.
  */
 TVM_DLL const Op& vectorcombine();
+
+/*!
+ * \brief Dot product of two int8x4 vectors and add an optional accumulator
+ */
+TVM_DLL const Op& dp4a();
 
 /*!
  * \brief atomic add instruction, corresponding e.g. to atomicAdd in CUDA
@@ -796,6 +911,64 @@ TVM_DLL const Op& start_profile_intrinsic();
  * \brief Profiling intrinsic
  */
 TVM_DLL const Op& end_profile_intrinsic();
+
+/*!
+ * \brief Get a item from any list and return it.
+ *
+ *  Any anylist_getitem(Handle anylist,
+ *                      int index)
+ *     return anylist[index];
+ *  }
+ *
+ * \note This intrinsic is only applicable when appearing
+ *       in call_packed and anylist_setitem_call_packed.
+ */
+TVM_DLL const Op& anylist_getitem();
+
+/*!
+ * \brief Reset and clear a item in any list.
+ *
+ *  void anylist_resetitem(Handle anylist,
+ *                         int index)
+ *    anylist[index] = nullptr;
+ *  }
+ *
+ * \note This intrinsic is only applicable when appearing
+ *       in call_packed and anylist_setitem_call_packed.
+ */
+TVM_DLL const Op& anylist_resetitem();
+
+/*!
+ * \brief Set an item into any list by running packed function call.
+ *
+ *  void anylist_setitem_call_packed(Handle anylist,
+ *                                   int index,
+ *                                   name, *args)
+ *
+ *    anylist[index] = call_packed(name, *args)
+ *  }
+ *  \note This intrinsic can be used in combination with anylist_getitem.
+ */
+TVM_DLL const Op& anylist_setitem_call_packed();
+
+/*!
+ * \brief Same as anylist_setitem_call_packed but use C calling convention.
+ */
+TVM_DLL const Op& anylist_setitem_call_cpacked();
+
+/*!
+ * \brief Get the target's vscale value. It will be lowered to llvm.vscale intrinsic
+ * (https://llvm.org/docs/LangRef.html#llvm-vscale-intrinsic)
+ */
+TVM_DLL const Op& vscale();
+
+/*!
+ * \brief Calculate a predicate mask given an upper bound (limit) and a current value (base).
+ *
+ * It will be lowered to the llvm.get.active.lane.mask intrinsic.
+ * (https://llvm.org/docs/LangRef.html#llvm-get-active-lane-mask-intrinsics)
+ */
+TVM_DLL const Op& get_active_lane_mask();
 
 /*! \brief The kind of structure field info used in intrinsic */
 enum TVMStructFieldKind : int {

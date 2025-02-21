@@ -29,7 +29,10 @@ from .conv3d_ncdhw_python import conv3d_ncdhw_python
 from .conv3d_ndhwc_python import conv3d_ndhwc_python
 from .conv3d_transpose_ncdhw_python import conv3d_transpose_ncdhw_python
 from .conv2d_transpose_python import conv2d_transpose_nchw_python, conv2d_transpose_nhwc_python
-from .conv1d_transpose_ncw_python import conv1d_transpose_ncw_python
+from .conv1d_transpose_ncw_python import (
+    conv1d_transpose_ncw_python,
+    group_conv1d_transpose_ncw_python,
+)
 from .correlation_nchw_python import correlation_nchw_python
 from .deformable_conv2d_python import deformable_conv2d_nchw_python, deformable_conv2d_nhwc_python
 from .depthwise_conv2d_python import (
@@ -46,6 +49,7 @@ from .roi_pool_python import roi_pool_nchw_python
 from .instance_norm_python import instance_norm_python
 from .layer_norm_python import layer_norm_python
 from .group_norm_python import group_norm_python
+from .rms_norm_python import rms_norm_python
 from .lrn_python import lrn_python
 from .l2_normalize_python import l2_normalize_python
 from .gather_python import gather_python
@@ -80,3 +84,4 @@ from .dense import dense
 from .searchsorted import searchsorted_ref
 from .conv2d_backcward_weight_python import conv2d_backward_weight_python
 from .lstm_python import lstm_python
+from .attention_python import attention_python

@@ -121,8 +121,7 @@ URL_MAP = {
     "https://github.com/JonathanCMitchell/mobilenet_v2_keras/releases/download/v1.1/mobilenet_v2_weights_tf_dim_ordering_tf_kernels_0.5_224.h5": f"{BASE}/2022-10-05/mobilenet_v2_weights_tf_dim_ordering_tf_kernels_0.5_224.h5",
     "https://github.com/onnx/models/raw/bd206494e8b6a27b25e5cf7199dbcdbfe9d05d1c/vision/classification/mnist/model/mnist-1.onnx": f"{BASE}/onnx/mnist-1.onnx",
     "https://github.com/onnx/models/raw/bd206494e8b6a27b25e5cf7199dbcdbfe9d05d1c/vision/classification/resnet/model/resnet50-v2-7.onnx": f"{BASE}/onnx/models/raw/bd206494e8b6a27b25e5cf7199dbcdbfe9d05d1c/vision/classification/resnet/model/resnet50-v2-7.onnx",
-    "https://github.com/onnx/models/raw/main/vision/classification/mobilenet/model/mobilenetv2-7.onnx": f"{BASE}/onnx/models/raw/main/vision/classification/mobilenet/model/mobilenetv2-7.onnx",
-    "https://github.com/onnx/models/raw/main/vision/classification/resnet/model/resnet50-v2-7.onnx": f"{BASE}/2022-10-05/resnet50-v2-7.onnx",
+    "https://github.com/onnx/models/raw/131c99da401c757207a40189385410e238ed0934/vision/classification/mobilenet/model/mobilenetv2-7.onnx": f"{BASE}/onnx/models/raw/131c99da401c757207a40189385410e238ed0934/vision/classification/mobilenet/model/mobilenetv2-7.onnx",
     "https://github.com/pjreddie/darknet/blob/master/cfg/alexnet.cfg?raw=true": f"{BASE}/pjreddie/darknet/blob/master/cfg/alexnet.cfg"
     + quote("?raw=true"),
     "https://github.com/pjreddie/darknet/blob/master/cfg/extraction.cfg?raw=true": f"{BASE}/pjreddie/darknet/blob/master/cfg/extraction.cfg"
@@ -212,6 +211,8 @@ URL_MAP = {
     "https://github.com/tlc-pack/web-data/raw/main/testdata/microTVM/data/image_classification_int8_0.npy": f"{BASE}/tlc-pack/web-data/raw/main/testdata/microTVM/data/image_classification_int8_0.npy",
     "https://github.com/tlc-pack/web-data/raw/main/testdata/microTVM/data/vww_sample_person.jpg": f"{BASE}/tlc-pack/web-data/testdata/microTVM/data/vww_sample_person.jpg",
     "https://github.com/tlc-pack/web-data/raw/main/testdata/microTVM/data/vww_sample_not_person.jpg": f"{BASE}/tlc-pack/web-data/testdata/microTVM/data/vww_sample_not_person.jpg",
+    "https://github.com/tensorflow/tflite-micro/raw/de8f61a074460e1fa5227d875c95aa303be01240/tensorflow/lite/micro/models/keyword_scrambled.tflite": f"{BASE}/models/tflite/keyword_scrambled_8bit.tflite",
+    "https://github.com/Grovety/ModelZoo/raw/52fb82156ae8c8e3f62c7d7caf6867b25261dda4/models/object_detection/ssd_mobilenet_v1/tflite_int8/tflite_graph_with_regular_nms.pb": f"{BASE}/ssd_mobilenet_v1/tflite_int8/tflite_graph_with_regular_nms.pb",
 }
 
 

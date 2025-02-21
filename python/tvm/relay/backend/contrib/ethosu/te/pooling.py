@@ -23,7 +23,7 @@ from tvm import te
 from tvm.contrib.ethosu.cascader import TESubgraph, EthosuPart, Propagator, register_matcher
 
 from .dma import dma_ofm_compute, dma_ifm_compute
-from .common import get_layout_transform_matrices
+from .common import get_layout_transform_matrices, get_lut_expr
 
 
 def pooling_compute(
@@ -36,6 +36,7 @@ def pooling_compute(
     ofm_zero_point: int,
     pool_shape: Tuple[int, int],
     ofm_channels: int,
+    ofm_dtype: str,
     strides: Tuple[int, int],
     padding: Tuple[int, int, int, int],
     activation: str,
@@ -68,6 +69,10 @@ def pooling_compute(
         The 2 dimensional pool shape as (pool_shape_height, pool_shape_width).
     ofm_channels : int
         The number of the Output Feature Map channels
+    ofm_dtype : str
+        The Output Feature Map tensor data type.
+            "AVG" or "MAX" pooling - can be "int8", "uint8", or "int16".
+            "SUM" pooling - can be "int32".
     strides : Tuple[int, int]
         The 2 dimensional strides as (stride_height, stride_width).
     padding : Tuple[int, int, int, int]
@@ -124,7 +129,6 @@ def pooling_compute(
     rh = te.reduce_axis((0, pool_shape_h), name="ry")
     rw = te.reduce_axis((0, pool_shape_w), name="rx")
     rc = te.reduce_axis((0, 1 if pooling_type != "SUM" else ifm_channels), name="rc")
-    ofm_dtype = ifm.dtype if pooling_type != "SUM" else "int32"
 
     pooling_attrs = {
         "op": "ethosu_pooling",
@@ -143,7 +147,7 @@ def pooling_compute(
     has_lut = activation in ("TANH", "LUT", "SIGMOID")
 
     # This is a trick to insert the LUT tensor into the TE graph if LUT is present
-    lut_expr = (lut[0] + lut[255]).astype(ifm.dtype) if has_lut else 0
+    lut_expr = get_lut_expr(lut, ifm.dtype) if has_lut else 0
 
     # Add the LUT tensor to the attributes to be able to later tell which tensor is the LUT
     if has_lut:

@@ -27,6 +27,7 @@
 #include <tvm/ir/adt.h>
 #include <tvm/ir/expr.h>
 #include <tvm/ir/function.h>
+#include <tvm/ir/global_info.h>
 #include <tvm/ir/source_map.h>
 #include <tvm/ir/type.h>
 #include <tvm/runtime/container/array.h>
@@ -63,6 +64,8 @@ class IRModuleNode : public Object {
   SourceMap source_map;
   /* \brief Additional attributes storing meta-data about the module. */
   DictAttrs attrs;
+  /*! \brief Globally static object that are referred by the IR itself */
+  Map<String, Array<GlobalInfo>> global_infos;
   /*!
    * \brief A map from string names to global variables that
    * ensures global uniqueness.
@@ -116,6 +119,12 @@ class IRModuleNode : public Object {
   }
 
   /*!
+   * \brief Get the metadata attributes.
+   * \returns The additional meta-data attributes
+   */
+  DictAttrs GetAttrs() const { return attrs; }
+
+  /*!
    * \brief Check whether the module has an non-zero integer attr.
    *
    * This function can be used to check whether an optional
@@ -145,6 +154,7 @@ class IRModuleNode : public Object {
     v->Visit("global_type_var_map_", &global_type_var_map_);
     v->Visit("source_map", &source_map);
     v->Visit("attrs", &attrs);
+    v->Visit("global_infos", &global_infos);
   }
 
   TVM_DLL bool SEqualReduce(const IRModuleNode* other, SEqualReducer equal) const;
@@ -205,6 +215,13 @@ class IRModuleNode : public Object {
   TVM_DLL void UpdateTypeDef(const GlobalTypeVar& var, const TypeData& type);
 
   /*!
+   * \brief Update an array of global infos in the global environment.
+   * \param name The name of the global info.
+   * \param info The new array of global infos.
+   */
+  TVM_DLL void UpdateGlobalInfo(const String& name, const Array<GlobalInfo>& info);
+
+  /*!
    * \brief Remove a function from the global environment.
    * \param var The name of the global function to update.
    */
@@ -232,7 +249,8 @@ class IRModuleNode : public Object {
   TVM_DLL GlobalVar GetGlobalVar(const String& str) const;
 
   /*!
-   * \brief Collect all global vars defined in this module.
+   * \brief Collect all global vars defined in this module, ordered by
+   *        the global variable name.
    * \returns An array of global vars
    */
   TVM_DLL Array<GlobalVar> GetGlobalVars() const;
@@ -353,12 +371,14 @@ class IRModule : public ObjectRef {
    * \param type_definitions Type definitions in the module.
    * \param import_set Set of imported files in the module.
    * \param map The module source map.
-   * \param attrs The module attributes.
+   * \param attrs The module meta-data attributes.
+   * \param global_infos Global infos in the module.
    */
   TVM_DLL explicit IRModule(Map<GlobalVar, BaseFunc> functions,
                             Map<GlobalTypeVar, TypeData> type_definitions = {},
                             std::unordered_set<String> import_set = {}, SourceMap map = {},
-                            DictAttrs attrs = {});
+                            DictAttrs attrs = DictAttrs(),
+                            Map<String, Array<GlobalInfo>> global_infos = {});
 
   /*! \brief default constructor */
   IRModule() : IRModule(Map<GlobalVar, BaseFunc>({})) {}
@@ -502,6 +522,35 @@ constexpr const char* kConstants = "constants";
  * Type: Array<runtime::Module>
  */
 constexpr const char* kExternalMods = "external_mods";
+
+/*!
+ * \brief A prefix for generating C symbols  system lib creation.
+ *
+ * This prefix guides passes that creates global_symbol for internal functions
+ * that may have c linkage (e.g. TIR functions and some BYOC functions). It also affects
+ * the symbol of the fat bin blob during module export.
+ *
+ * This attribute is used to avoid symbol conflict when we
+ * generate and combine multiple system libs that get linked into one.
+ *
+ * Rationale: mechanisms like BYOC rely on the common global symbol
+ * and each external compiler also has its own mechanism of mangling.
+ * As a result, we cannot rely on other mechanisms on setting a global_symbol and then renaming,
+ * because the external compiler already agreed on the name.
+ *
+ * system_lib_prefix provides a way to hint at the passes to allow names to
+ * avoid name conflict at the beginning.
+ *
+ * Note that users can still directly specify global symbols that may conflict.
+ * It is up to the downstream toolchain to manage those external-facing functions.
+ *
+ * This does not affect non-C linkage functions it is less of an issue because
+ * they will be embedded into fatbin that in different symbols,
+ * The system lib loader can pick the right prefix for a given prefix.
+ *
+ * Having this attribute implies system lib generation linkage.
+ */
+constexpr const char* kSystemLibPrefix = "system_lib_prefix";
 
 /*!
  * \brief All the named runtime::NDArrays accumulated during compilation by external codegen.

@@ -15,8 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 import os
+import platform
 
 import numpy as np
+import pytest
+
 import tvm
 import tvm.testing
 import tvm.topi.testing
@@ -635,6 +638,12 @@ def test_any_conv2d():
         data_layout="NHWC",
         kernel_layout="HWIO",
     )
+
+    if platform.machine() == "aarch64":
+        pytest.skip(
+            reason="Dynamic height and width not supported in arm_cpu. See https://github.com/apache/tvm/issues/16536"
+        )
+
     verify_any_conv2d(
         (relay.Any(), 64, relay.Any(), relay.Any()),
         (64, 64, 3, 3),
@@ -980,6 +989,12 @@ class TestAnyDense:
         static_weight_shape,
         ref_out_shape,
     ):
+
+        if platform.machine() == "aarch64":
+            pytest.skip(
+                reason="Dynamic height and width not supported in arm_cpu. See https://github.com/apache/tvm/issues/16536"
+            )
+
         mod = tvm.IRModule()
         dtype = "float32"
         data = relay.var("data", shape=data_shape, dtype=dtype)
@@ -2146,6 +2161,29 @@ def test_scatter_nd():
     updates = np.array([2, 3, 0])
     out = np.array([[0, 0], [2, 3]])
     verify_scatter_nd(data, indices, updates, out)
+
+
+@tvm.testing.uses_gpu
+def test_scatter_nd_any_updates():
+    def verify_scatter_nd_any_updates(data_np, indices_np, updates_np, ref_res):
+        indices_shape = (2, relay.Any())
+        updates_shape = (2, relay.Any())
+        data = relay.var("data", shape=data_np.shape, dtype=str(data_np.dtype))
+        indices = relay.var("indices", relay.TensorType(indices_shape, str(indices_np.dtype)))
+        updates = relay.var("updates", relay.TensorType(updates_shape, str(updates_np.dtype)))
+
+        out = relay.op.scatter_nd(data, indices, updates, "add")
+
+        mod = tvm.IRModule()
+        mod["main"] = relay.Function([data, indices, updates], out)
+
+        check_result([data_np, indices_np, updates_np], mod, [ref_res], only_vm=True)
+
+    data = np.zeros((3, 3)).astype("int64")
+    indices = np.array([[1, 1], [0, 1]])
+    updates = np.array([[2, 2], [1, 1]])
+    out = np.array([[0, 0, 0], [0, 0, 0], [2, 2, 1]])
+    verify_scatter_nd_any_updates(data, indices, updates, out)
 
 
 @tvm.testing.uses_gpu

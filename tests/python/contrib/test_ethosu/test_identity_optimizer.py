@@ -45,16 +45,6 @@ def _optimize(func, optimize=True):
     return entry if isinstance(func, relay.Function) else entry.body
 
 
-def _assert_structural_equal(a, b):
-    """Check structural equality of two Relay expressions."""
-    reason = (
-        "Actual and expected relay functions are not equal. "
-        "IdentityOptimizer is not correctly removing redundant "
-        "identity operations."
-    )
-    assert tvm.ir.structural_equal(a, b), reason
-
-
 def test_simple_reshape_identity_removal():
     """Check identity is removed when there is a reshape in
     the graph and a compute operation follows."""
@@ -70,7 +60,7 @@ def test_simple_reshape_identity_removal():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(get_expected=True), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_simple_strided_slice_identity_removal():
@@ -78,33 +68,37 @@ def test_simple_strided_slice_identity_removal():
     in the graph and a compute operation follows."""
 
     def get_graph(get_expected=False):
-        x = relay.var("x", shape=(1, 2, 2, 4), dtype="int8")
-        x = infra.make_ethosu_pooling(x, "MAX", (1, 1), 4, (1, 1), (0, 0))
+        dtype = "int8"
+
+        x = relay.var("x", shape=(1, 2, 2, 4), dtype=dtype)
+        x = infra.make_ethosu_pooling(x, "MAX", (1, 1), 4, dtype, (1, 1), (0, 0))
         x = relay.strided_slice(x, begin=[0, 0, 0, 0], end=[1, 2, 2, 2])
         if not get_expected:
             x = infra.make_ethosu_identity(x)
-        x = infra.make_ethosu_pooling(x, "MAX", (1, 1), 2, (1, 1), (0, 0))
+        x = infra.make_ethosu_pooling(x, "MAX", (1, 1), 2, dtype, (1, 1), (0, 0))
         return relay.Function(relay.analysis.free_vars(x), x)
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(get_expected=True), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_no_identity():
     """Check the graph is not affected when there is no identity in the graph."""
 
     def get_graph():
-        x = relay.var("x", shape=(1, 2, 2, 4), dtype="int8")
+        dtype = "int8"
+
+        x = relay.var("x", shape=(1, 2, 2, 4), dtype=dtype)
         x = infra.make_ethosu_conv2d(x, 4, 4, (1, 1), (0, 0), (1, 1), (1, 1))
-        x = infra.make_ethosu_pooling(x, "MAX", (1, 1), 4, (1, 1), (0, 0))
+        x = infra.make_ethosu_pooling(x, "MAX", (1, 1), 4, dtype, (1, 1), (0, 0))
         x = infra.make_ethosu_depthwise_conv2d(x, 4, (1, 1), (0, 0), (1, 1), (1, 1))
         x = infra.make_ethosu_unary_elementwise(x, 4, "ABS")
         return relay.Function(relay.analysis.free_vars(x), x)
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_reshape_last():
@@ -119,7 +113,7 @@ def test_reshape_last():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_requantize_identity_no_removal():
@@ -136,7 +130,7 @@ def test_requantize_identity_no_removal():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_activation_identity_no_removal():
@@ -151,7 +145,7 @@ def test_activation_identity_no_removal():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_multiple_output_identity():
@@ -168,7 +162,7 @@ def test_multiple_output_identity():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(get_expected=True), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_many_output_identity():
@@ -191,7 +185,7 @@ def test_many_output_identity():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(get_expected=True), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_identity_before_concatenate_no_removal():
@@ -211,7 +205,7 @@ def test_identity_before_concatenate_no_removal():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_identity_removal_with_multiple_transform_ops():
@@ -231,7 +225,7 @@ def test_identity_removal_with_multiple_transform_ops():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(get_expected=True), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_identity_removal_on_binary_elementwise():
@@ -248,7 +242,7 @@ def test_identity_removal_on_binary_elementwise():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(get_expected=True), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_identity_single_removal_on_binary_elementwise():
@@ -266,7 +260,7 @@ def test_identity_single_removal_on_binary_elementwise():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(get_expected=True), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_multiple_transform_ops_with_reduction_in_dimensionality():
@@ -285,7 +279,7 @@ def test_multiple_transform_ops_with_reduction_in_dimensionality():
 
     actual = _optimize(get_graph())
     expected = _optimize(get_graph(), optimize=False)
-    _assert_structural_equal(actual, expected)
+    tvm.ir.assert_structural_equal(actual, expected)
 
 
 def test_identity_optimizer_runs_in_compilation_pipeline():

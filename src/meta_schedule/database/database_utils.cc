@@ -39,8 +39,14 @@ void JSONDumps(ObjectRef json_obj, std::ostringstream& os) {
     } else {
       os << int_imm->value;
     }
+  } else if (const auto* runtime_bool = json_obj.as<runtime::Bool::ContainerType>()) {
+    os << (runtime_bool->value ? "true" : "false");
+  } else if (const auto* runtime_int = json_obj.as<runtime::Int::ContainerType>()) {
+    os << runtime_int->value;
   } else if (const auto* float_imm = json_obj.as<FloatImmNode>()) {
     os << std::setprecision(20) << float_imm->value;
+  } else if (const auto* runtime_float = json_obj.as<runtime::Float::ContainerType>()) {
+    os << std::setprecision(20) << runtime_float->value;
   } else if (const auto* str = json_obj.as<runtime::StringObj>()) {
     os << '"' << support::StrEscape(str->data, str->size) << '"';
   } else if (const auto* array = json_obj.as<runtime::ArrayNode>()) {
@@ -58,8 +64,8 @@ void JSONDumps(ObjectRef json_obj, std::ostringstream& os) {
     std::vector<std::pair<String, ObjectRef>> key_values;
     key_values.reserve(n);
     for (const auto& kv : *dict) {
-      if (const auto* k = kv.first.as<StringObj>()) {
-        key_values.emplace_back(GetRef<String>(k), kv.second);
+      if (auto key = kv.first.as<String>()) {
+        key_values.emplace_back(key.value(), kv.second);
       } else {
         LOG(FATAL) << "TypeError: Only string keys are supported in JSON dumps, but got: "
                    << kv.first->GetTypeKey();
@@ -165,7 +171,7 @@ class JSONTokenizer {
     std::string to_parse(st, cur_);
     if (!is_float) {
       try {
-        *token = Token{TokenType::kInteger, IntImm(DataType::Int(64), std::stoll(to_parse))};
+        *token = Token{TokenType::kInteger, runtime::Int(std::stoll(to_parse))};
       } catch (const std::invalid_argument& e) {
         LOG(WARNING) << "ValueError: Invalid argument to std::stoll: " << to_parse
                      << ". Details: " << e.what() << ". Switching to std::stod now.";
@@ -178,7 +184,7 @@ class JSONTokenizer {
     }
     if (is_float) {
       try {
-        *token = Token{TokenType::kFloat, FloatImm(DataType::Float(64), std::stod(to_parse))};
+        *token = Token{TokenType::kFloat, runtime::Float(std::stod(to_parse))};
       } catch (const std::invalid_argument& e) {
         LOG(INFO) << "ValueError: Invalid argument to std::stod: " << to_parse
                   << ". Details: " << e.what();

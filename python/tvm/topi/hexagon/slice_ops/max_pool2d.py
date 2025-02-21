@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=invalid-name, unused-variable, unused-argument, too-many-locals
+# pylint: disable=invalid-name, unused-variable, unused-argument, too-many-locals, condition-evals-to-constant
 
 """ Compute and schedule for max_pool2d slice op
 
@@ -157,7 +157,7 @@ def STIR_schedule_nhwc_8h2w32c2w_nhwc_8h8w32c(
     #
     # 3) Ideally, the innermost loop variable will iterate only over the output
     #    tensor's fastest-changing indices and nothing else.  But in our case,
-    #    our two innermost loops correspond to the the max operator's reduction axes.
+    #    our two innermost loops correspond to the max operator's reduction axes.
     #
     # Finding a good way to satisfy all of these requirements at the same time is
     # left for future work.

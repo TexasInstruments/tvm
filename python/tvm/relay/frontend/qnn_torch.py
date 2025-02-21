@@ -25,7 +25,7 @@ from tvm.relay import op as _op
 from tvm.relay.frontend.common import infer_shape
 
 from .common import logger
-from .pytorch_utils import is_version_greater_than, getattr_attr_name
+from .pytorch_utils import is_version_greater_than
 
 
 class QNNParam(object):
@@ -46,16 +46,7 @@ class ConvPackedParam(QNNParam):
     """
 
     def __init__(
-        self,
-        weight_np,
-        bias,
-        scale,
-        zero_point,
-        stride,
-        padding,
-        dilation,
-        groups,
-        output_padding,
+        self, weight_np, bias, scale, zero_point, stride, padding, dilation, groups, output_padding
     ):
         super().__init__(weight_np, bias, scale, zero_point)
         self.stride = stride
@@ -95,15 +86,7 @@ def make_conv_packed_param(qweight, bias, packed_params):
     groups = packed_params.groups()
     output_padding = packed_params.output_padding()
     return ConvPackedParam(
-        weight_np,
-        bias,
-        scale,
-        zero_point,
-        stride,
-        padding,
-        dilation,
-        groups,
-        output_padding,
+        weight_np, bias, scale, zero_point, stride, padding, dilation, groups, output_padding
     )
 
 
@@ -381,7 +364,7 @@ def _add_output_quant_params_to_scalar_op(node, graph, input_scale, input_zero_p
             input_scale, input_zero_point, scalar
         )
     else:
-        raise NotImplementedError("unsupported scalar op: %s" % operator)
+        raise NotImplementedError(f"unsupported scalar op: {operator}")
 
     # create new constant nodes and add them to graph
     out_scale_node = graph.create("prim::Constant")
@@ -557,19 +540,12 @@ def inline_input_quant_params_for_fx(graph, params, param_debug_name_map):
     # pylint: disable=c-extension-no-member
     import torch
 
-    def get_full_attr_name(current):
-        current_attr = getattr_attr_name(current)
-        inputs = list(current.inputs())
-        if len(inputs) == 1 and inputs[0].node().kind() == "prim::GetAttr":
-            return get_full_attr_name(inputs[0].node()) + "." + current_attr
-        return current_attr
-
     for node in graph.findAllNodes("prim::GetAttr", recurse=True):
         out_name = node.output().debugName()
 
         if "_scale" in out_name or "_zero_point" in out_name:
-            full_attr = param_debug_name_map[get_full_attr_name(node)]
-            assert full_attr in params, "%s not found in param dict." % full_attr
+            full_attr = param_debug_name_map[out_name]
+            assert full_attr in params, f"{full_attr} not found in param dict."
             param_np = params[full_attr].numpy()
             new_const_node = graph.create("prim::Constant")
             new_const_node.insertBefore(node)

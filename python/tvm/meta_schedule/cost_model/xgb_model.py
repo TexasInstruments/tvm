@@ -21,6 +21,8 @@ from collections import OrderedDict
 from itertools import chain as itertools_chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
+from typing_extensions import Literal
+
 import numpy as np  # type: ignore
 
 from ...contrib.tar import tar, untar
@@ -202,6 +204,8 @@ class PackSum:
 class XGBConfig(NamedTuple):
     """XGBoost model configuration
 
+    Reference: https://xgboost.readthedocs.io/en/stable/parameter.html
+
     Parameters
     ----------
     max_depth : int
@@ -217,6 +221,8 @@ class XGBConfig(NamedTuple):
     nthread : Optional[int],
         The number of threads to use.
         Default is None, which means to use physical number of cores.
+    tree_method : Literal["auto", "exact", "approx", "hist", "gpu_hist"]
+        The tree construction algorithm used in XGBoost.
     """
 
     max_depth: int = 10
@@ -225,8 +231,11 @@ class XGBConfig(NamedTuple):
     eta: float = 0.2
     seed: int = 43
     nthread: Optional[int] = None
+    tree_method: Literal["auto", "exact", "approx", "hist", "gpu_hist"] = "auto"
 
     def to_dict(self):
+        """Convert to dict"""
+
         return {
             "max_depth": self.max_depth,
             "gamma": self.gamma,
@@ -234,6 +243,7 @@ class XGBConfig(NamedTuple):
             "eta": self.eta,
             "seed": self.seed,
             "nthread": self.nthread,
+            "tree_method": self.tree_method,
         }
 
 
@@ -334,6 +344,7 @@ class XGBModel(PyCostModel):
         average_peak_n: int = 32,
         adaptive_training: bool = True,
         num_tuning_cores: Optional[int] = None,
+        tree_method: Optional[Literal["auto", "exact", "approx", "hist", "gpu_hist"]] = None,
     ):
         super().__init__()
         if not isinstance(extractor, FeatureExtractor):
@@ -347,6 +358,9 @@ class XGBModel(PyCostModel):
                 config = config._replace(nthread=cpu_count(logical=False))
             else:
                 config = config._replace(nthread=num_tuning_cores)
+
+        if tree_method is not None:
+            config._replace(tree_method=tree_method)
 
         self.config = config
         # behavior of randomness
@@ -479,7 +493,14 @@ class XGBModel(PyCostModel):
             return float(np.median([float(s) for s in x.run_secs]))
 
         new_features = [_feature(x) for x in self.extractor.extract_from(context, candidates)]
-        new_mean_costs = np.array([_mean_cost(x) for x in results]).astype("float32")
+        new_mean_costs = [_mean_cost(x) for x in results]
+
+        # Filter instances with no features
+        new_mean_costs = [c for i, c in enumerate(new_mean_costs) if len(new_features[i]) != 0]
+        new_mean_costs_np = np.array(new_mean_costs).astype("float32")
+        new_features = [f for f in new_features if len(f) != 0]
+        if not new_features:
+            return
 
         # Steps 3. Run validation
         if group is not None and self.booster is not None:
@@ -489,7 +510,7 @@ class XGBModel(PyCostModel):
                     f"{key}: {score:.6f}"
                     for key, score in self._validate(
                         xs=new_features,
-                        ys=group.min_cost / new_mean_costs,
+                        ys=group.min_cost / new_mean_costs_np,
                     )
                 ),
             )
@@ -499,10 +520,10 @@ class XGBModel(PyCostModel):
             group = FeatureGroup(
                 group_hash=new_group_hash,
                 features=new_features,
-                costs=new_mean_costs,
+                costs=new_mean_costs_np,
             )
         else:
-            group.append(new_features, new_mean_costs)
+            group.append(new_features, new_mean_costs_np)
         self.data[new_group_hash] = group
         self.data_size += len(new_features)
 
@@ -734,7 +755,12 @@ def _get_custom_call_back(
                     raise ValueError("wrong metric value", value)
 
             import xgboost as xgb
-            from xgboost import rabit  # type: ignore
+
+            # make it compatible with xgboost<1.7
+            try:
+                from xgboost import rabit as collective  # type: ignore
+            except ImportError:
+                from xgboost import collective  # type: ignore
 
             try:
                 from xgboost.training import aggcv  # type: ignore
@@ -820,7 +846,7 @@ def _get_custom_call_back(
             elif epoch - best_iteration >= self.early_stopping_rounds:
                 best_msg = self.state["best_msg"]
 
-                if self.verbose_eval and rabit.get_rank() == 0:
+                if self.verbose_eval and collective.get_rank() == 0:
                     logger.debug("XGB stopped. Best iteration: %s ", best_msg)
                 # instead of raising EarlyStopException, returning True to end the training
                 return True

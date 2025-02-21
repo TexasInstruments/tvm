@@ -164,7 +164,7 @@ class PrimFunc : public BaseFunc {
    */
   TVM_DLL PrimFunc(Array<tir::Var> params, Stmt body, Type ret_type = VoidType(),
                    Map<tir::Var, Buffer> buffer_map = Map<tir::Var, Buffer>(),
-                   DictAttrs attrs = NullValue<DictAttrs>(), Span span = Span());
+                   DictAttrs attrs = DictAttrs(), Span span = Span());
 
   TVM_DEFINE_OBJECT_REF_METHODS(PrimFunc, BaseFunc, PrimFuncNode);
   TVM_DEFINE_OBJECT_REF_COW_METHOD(PrimFuncNode);
@@ -264,7 +264,7 @@ class TensorIntrin : public ObjectRef {
  *              B[vi, vj] = A[vi, vj]
  * \endcode
  */
-PrimFunc Specialize(PrimFunc func, const Map<Var, ObjectRef>& param_map);
+PrimFunc Specialize(PrimFunc func, const Map<Var, Variant<Buffer, PrimExpr>>& param_map);
 
 /*!
  * \brief PrimFunc specific attribute names.
@@ -351,6 +351,13 @@ constexpr const char* kIsGlobalFunc = "tir.is_global_func";
  * Type: Integer
  */
 constexpr const char* kIsHostFunc = "tir.is_host_func";
+
+/*!
+ * \brief Mark the function as scheduled, so the default schedule will pass will skip it.
+ *
+ * Type: Integer
+ */
+constexpr const char* kIsScheduled = "tir.is_scheduled";
 
 }  // namespace attr
 }  // namespace tir
