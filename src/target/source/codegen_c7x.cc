@@ -1427,15 +1427,17 @@ void CodeGenC7x::VisitExpr_(const LetNode* op, std::ostream& os) {  // NOLINT(*)
 
 // verbatim from CodegenC
 void CodeGenC7x::VisitExpr_(const RampNode* op, std::ostream& os) {  // NOLINT(*)
-  // constraint of current logic
-  ICHECK_EQ(op->base.dtype(), DataType::Int(32));
-  os << "((int" << op->lanes << ")(";
-  for (int i = 0; i < op->lanes; i++) {
+  // NOTE: C have comma expression so cannot use (int2)(v0, v1)
+  // instead should use int2(v0, v1)
+  PrintType(op->dtype, os);
+  int lanes = op->dtype.lanes();
+  os << "(";
+  for (int i = 0; i < lanes; i++) {
     os << "(" << PrintExpr(op->base) << ")"
        << "+(" << PrintExpr(op->stride) << "*" << i << ")";
-    if (i != op->lanes - 1) os << ", ";
+    if (i != lanes - 1) os << ", ";
   }
-  os << "))";
+  os << ")";
 }
 
 // verbatim from CodegenC

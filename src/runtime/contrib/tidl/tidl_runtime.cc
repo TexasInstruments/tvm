@@ -181,8 +181,9 @@ class TIDLJ7Module : public runtime::ModuleNode {
    *    to run on TIDL.  Note that node with "tidl_tvm_" prefix should be handled by
    *    TIDLJ7C7xModule, not this one (TIDLJ7Module).
    */
-  PackedFunc GetFunction(const std::string& name,
+  PackedFunc GetFunction(const String& in_name,
                          const ObjectPtr<Object>& sptr_to_self) final {
+    std::string name = in_name;
     if (name.find("tidl_") == std::string::npos ||
         name.find("tidl_tvm_") != std::string::npos) {
       return PackedFunc(nullptr);
@@ -488,8 +489,8 @@ class TIDLJ7Module : public runtime::ModuleNode {
     return ModulePropertyMask::kBinarySerializable | ModulePropertyMask::kRunnable;
   }
 
-  void SaveToFile(const std::string& file_name,
-                  const std::string& format) final {
+  void SaveToFile(const String& file_name,
+                  const String& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
     CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
     std::string bin;
@@ -608,8 +609,9 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
    *  when TVM runtime wants to execute a node with "tidl_tvm_" tag.
    * \param name C7x TVM graph name which contains "tidl_tvm_" prefix
    */
-  PackedFunc GetFunction(const std::string& name,
+  PackedFunc GetFunction(const String& in_name,
                          const ObjectPtr<Object>& sptr_to_self) final {
+    std::string name = in_name;
     if (name.find("tidl_tvm_") == std::string::npos) {
       return PackedFunc(nullptr);
     }
@@ -704,8 +706,8 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
     return ModulePropertyMask::kBinarySerializable | ModulePropertyMask::kRunnable;
   }
 
-  void SaveToFile(const std::string& file_name,
-                  const std::string& format) final {
+  void SaveToFile(const String& file_name,
+                  const String& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
     CHECK_EQ(fmt, type_key()) << "Can only save to format=" << type_key();
     std::string bin;
