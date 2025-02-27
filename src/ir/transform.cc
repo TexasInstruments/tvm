@@ -491,6 +491,8 @@ IRModule SequentialNode::operator()(IRModule mod, const PassContext& pass_ctx) c
     for (const auto& it : pass_info->required) {
       mod = GetPass(it)(std::move(mod), pass_ctx);
     }
+    if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN"))
+      LOG_INFO << "--> " << pass_info->name.c_str();
 
     // This handles passes that does not use Relax tuning API (untraceable passes).
     // We make untraceable passes trackable when pass context has a trace (trace mode).
@@ -525,6 +527,11 @@ IRModule SequentialNode::operator()(IRModule mod, const PassContext& pass_ctx) c
 
     } else {
       mod = pass(std::move(mod), pass_ctx);
+    }
+
+    if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN")) {
+      auto printIRpass = PrintIR("after "+pass_info->name, false);
+      printIRpass(mod, pass_ctx);
     }
   }
   return mod;

@@ -304,3 +304,7 @@ if not CONDA_BUILD and not INPLACE_BUILD:
     for path in LIB_LIST:
         _, libname = os.path.split(path)
         _remove_path(f"tvm/{libname}")
+
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/src"))
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/include"))
+    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/3rdparty"))

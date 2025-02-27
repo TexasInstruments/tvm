@@ -24,7 +24,9 @@ def default_schedule(outs, auto_inline):
     """Default schedule for llvm."""
     target = tvm.target.Target.current(allow_none=False)
     outs = [outs] if isinstance(outs, te.tensor.Tensor) else outs
-    if target.kind.name not in ("llvm", "c"):
+    # Begin TI
+    if target.kind.name not in ("llvm", "c", "c7x"):
+    # End TI
         raise RuntimeError(f"schedule not registered for '{target}'")
     s = te.create_schedule([x.op for x in outs])
     if auto_inline:
