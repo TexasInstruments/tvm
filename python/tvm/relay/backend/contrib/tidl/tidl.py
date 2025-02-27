@@ -553,7 +553,7 @@ def flatten_tuple_params(mod, compiler):
                         new_args.extend(arg.fields)
                     else:
                         new_args.append(arg)
-                call.args = new_args
+                call = relay.expr.Call(call.op, new_args, call.attrs, span=call.span)
             return super().visit_call(call)
 
     # Apply the first transformation to all the designated subgraphs

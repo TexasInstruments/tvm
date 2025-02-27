@@ -692,7 +692,7 @@ def SETransform(f, mod, ctx):
             closes = [c.close_call() for c in candidates]
             op = tvm.tir.For(op.loop_var, op.min, op.extent, op.kind,
                              body, op.thread_binding, op.annotations)
-            return tvm.tir.SeqStmt(opens + [op] + closes)
+            return op if (not candidates) else tvm.tir.SeqStmt(opens + [op] + closes)
 
     #--------------
     def _guard_nullified(op):
