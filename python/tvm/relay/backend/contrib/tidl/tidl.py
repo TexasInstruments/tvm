@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""TIDL backend compiler"""
+"""TI Offload backend compiler"""
 
 import os
 import sys
@@ -255,7 +255,7 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names, tidl_sub
     in_out_nodes : InOutNodes
         Structure that stores names (encoded indices) of input nodes and output nodes
         All names are prefixed with tidl_subgraph name, so that we can differentiate them from
-        different subgraphs, e.g. when specified in output_feature_16bit_names_list in TIDLCompiler
+        different subgraphs, e.g. when specified in output_feature_16bit_names_list in TIOffloadCompiler
     """
 
     in_out_nodes = InOutNodes()    # instantiate structure
@@ -1625,6 +1625,7 @@ class TIDLImport:
             par_file = os.path.join(self.artifacts_folder,
                                     'tidl_subgraph'+str(subgraph_id)+'_params.bin')
 
+            # TIDL optimization
             import_lib_optimize = tvm.get_global_func("TIDL_relayOptimizeNet")
             if import_lib_optimize() != 0:
                 print('TIDL import optimization failed')
@@ -1933,12 +1934,12 @@ class TIDLAnnotation:
         return (scale > 1 and (scale & (scale -1)) == 0)
 
 
-class TIDLCompiler:
-    """TIDL compiler module.
+class TIOffloadCompiler:
+    """TI offload compiler module.
 
-    This module tries to compile a given Relay IR graph to deploy on devices with TIDL.
-    If compilation for TIDL succeeds, artifacts for heterogeneous compute with TIDL
-    will be generated.
+    This module tries to compile a given Relay IR graph to deploy on C7x devices with TIDL.
+    If compilation succeeds, artifacts for heterogeneous compute on C7x, optionally with TIDL
+    offload, will be generated.
 
     Parameters
     ----------
@@ -1947,8 +1948,9 @@ class TIDLCompiler:
     version : string
         The Processor-SDK version for the platform.
     **kwargs : keyword arguments to pass what's needed for Relay IR graph conversion
-        max_num_subgraphs : int
-            Max number of subgraphs to run on TIDL
+        max_num_tidl_subgraphs : int
+            Max number of subgraphs to run on TIDL. Use 0 for no TIDL offload (only C7x generation)
+            Offload up to \<num\> TIDL subgraphs, default is 16
         tidl_tools_path : string
             Folder to TIDL tools
         artifacts_folder : string
@@ -1957,15 +1959,13 @@ class TIDLCompiler:
             Bits for import TIDL tensor and weights, default is 8
         debug_level : int
             0, 1, 2, 3, 4 for various debug info, default is 0
-        max_num_subgraphs: int
-            Offload up to \<num\> tidl subgraphs, default is 16
         deny_list : string
             Force-annotate Relay operators as unsupported, comma-separated string, default is ""
         accuracy_level: int
             0 for simple calibration, 1 for advanced bias calibration, 9 for user defined,
             default is 1
         c7x_codegen : int
-            Generating C7x code for TIDL-unsupported layers.  0 for disable, 1 for enable, default is 0
+            Generate C7x code for TIDL-unsupported layers.  0 for disable, 1 for enable, default is 0
         advanced_options: dict
             a dictionary to overwrite default calibration options, default is {}
             advanced_options keys / values:
@@ -2038,7 +2038,7 @@ class TIDLCompiler:
             self.artifacts_folder = None
             self.debug_level = None
             self.tensor_bits = 8
-            self.max_num_subgraphs = 16
+            self.max_num_tidl_subgraphs = 16
             self.deny_list = []
             self.accuracy_level = 1
             self.c7x_codegen = 1
@@ -2056,7 +2056,7 @@ class TIDLCompiler:
             # Unified names as TFLite runtime and ONNX runtime
             #   see ti_dl/utils/tidlModelImport/tidl_{tfLiteRtImport_delegate, onnxRtImport_EP}.cpp
             for key in ('tidl_tools_path', 'artifacts_folder', 'tensor_bits', 'debug_level',
-                        'max_num_subgraphs', 'deny_list', 'accuracy_level',
+                        'max_num_tidl_subgraphs', 'deny_list', 'accuracy_level',
                         'c7x_codegen', 'advanced_options',
                        ):
                 if key in kwargs:
@@ -2127,8 +2127,12 @@ class TIDLCompiler:
             Status of TIDL compilation:
                 1  - compilation success
                 -1 - compilation failure
-                0  - no compilation due to missing TIDL tools
+                0  - no compilation due to missing TIDL tools or user specified no TIDL offload
         """
+
+        #
+        # When self.max_num_tidl_subgraphs is 0, this means the caller wants *NO* TIDL offload
+        #
 
         tidl_od_meta_arch_type = -1
         tidl_od_num_graph_outputs = 1
@@ -2136,7 +2140,8 @@ class TIDLCompiler:
         tidl_od_postproc_inputs = []
         import_lib = None
 
-        if (self.od_options): 
+        # TIDL-specific handling of object detection specifics. Skip if user doesn't want TIDL offload
+        if (self.max_num_tidl_subgraphs > 0 and self.od_options):
             # with open(os.path.join(self.temp_folder, "relay_graph.input.txt"), "w") as relay_txt:
             #     print(mod_orig.astext(show_meta_data=False), file=relay_txt)
             tidl_od_meta_layers_names_list = self.od_options['object_detection:meta_layers_names_list']
@@ -2182,6 +2187,7 @@ class TIDLCompiler:
         # (Backward compatible) if single calibration image/data/dict, convert to list
         if not isinstance(graph_input_list, list):
             graph_input_list = [ graph_input_list ]
+        # Ensure calibration image parameter names are same names as parameters in model
         mod_params_names = [ var.name_hint for var in mod_orig['main'].params ]
         for name_val_dict in graph_input_list:
             for name in name_val_dict.keys():
@@ -2201,23 +2207,24 @@ class TIDLCompiler:
             for d in dirs:
                 os.rmdir(os.path.join(root, d))
 
-        # Open TIDL import library
-        if os.path.exists(self.tidl_import_lib):
-            if import_lib == None:
-                import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
-            tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
-            is_nchw = data_layout == "NCHW"
-            quant_style = 3 if (self.quantization_scale_type == 1) else 2
-            hires = 1 if (self.high_resolution_optimization == 1) else 0
-            tidl_relay_init(is_nchw, self.tensor_bits, quant_style, hires,
-                            self.pre_batchnorm_fold, self.ti_internal_nc_flag)
-        else:
-            import_lib = None # Continue with graph annotation and partition for CI testing
+        # Open TIDL import library. Skip if user doesn't want TIDL offload
+        if self.max_num_tidl_subgraphs > 0:
+            if os.path.exists(self.tidl_import_lib):
+                if import_lib == None:
+                    import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
+                tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
+                is_nchw = data_layout == "NCHW"
+                quant_style = 3 if (self.quantization_scale_type == 1) else 2
+                hires = 1 if (self.high_resolution_optimization == 1) else 0
+                tidl_relay_init(is_nchw, self.tensor_bits, quant_style, hires,
+                                self.pre_batchnorm_fold, self.ti_internal_nc_flag)
+            else:
+                import_lib = None # Continue with graph annotation and partition for CI testing
 
-        # Register TIDL annotation functions
-        tidl_annotation = TIDLAnnotation(self.tidl_platform, self.version, import_lib, 
-                                         self.deny_list)
-        tidl_annotation.register_allowed_ops()
+            # Register TIDL annotation functions
+            tidl_annotation = TIDLAnnotation(self.tidl_platform, self.version, import_lib,
+                                             self.deny_list)
+            tidl_annotation.register_allowed_ops()
 
         with open(os.path.join(self.temp_folder, "relay_graph.orig.txt"), "w") as relay_txt:
             print(mod_orig.astext(show_meta_data=False), file=relay_txt)
@@ -2234,27 +2241,32 @@ class TIDLCompiler:
             return mod_orig, 0
 
         #============= Graph annotation ==============
-        mod = tidl_annotation.merge_sequential_ops(mod)
-        mod = relay.transform.AnnotateTarget(self.tidl_target)(mod)
-        with open(os.path.join(self.temp_folder, "relay_graph.annotated.txt"), "w") as relay_txt:
-            print(mod.astext(show_meta_data=False), file=relay_txt)
+        # TIDL annotation and TIDL graph partitioning.
+        # Skip when not performing TIDL offload (max_num_tidl_subgraphs == 0)
+        if self.max_num_tidl_subgraphs > 0:
+            mod = tidl_annotation.merge_sequential_ops(mod)
+            mod = relay.transform.AnnotateTarget(self.tidl_target)(mod)
+            with open(os.path.join(self.temp_folder, "relay_graph.annotated.txt"), "w") as relay_txt:
+                print(mod.astext(show_meta_data=False), file=relay_txt)
 
-        #============= Graph partition ==============
-        mod = relay.transform.MergeCompilerRegions()(mod)
-        mod = relay.transform.PartitionGraph()(mod)
-        with open(os.path.join(self.temp_folder, "relay_graph.partitioned.txt"), "w") as relay_txt:
-            print(mod.astext(show_meta_data=False), file=relay_txt)
-        mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
-                                                            compiler=self.tidl_target)
+            #============= Graph partition ==============
+            mod = relay.transform.MergeCompilerRegions()(mod)
+            mod = relay.transform.PartitionGraph()(mod)
+            with open(os.path.join(self.temp_folder, "relay_graph.partitioned.txt"), "w") as relay_txt:
+                print(mod.astext(show_meta_data=False), file=relay_txt)
+            mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
+                                                                compiler=self.tidl_target)
 
-        mod = unpack_composites(mod)
-        mod = relay.transform.InferType()(mod)
-        mod = prune_subgraphs(mod, compiler=self.tidl_target,
-                              num_subgraphs_to_keep=self.max_num_subgraphs,
-                              min_mac_threshold=1)
-        mod = relay.transform.InferType()(mod)
-        mod = flatten_tuple_params(mod, self.tidl_target)
-        mod = relay.transform.InferType()(mod)
+            mod = unpack_composites(mod) # part of partitioning - unwind partition
+            mod = relay.transform.InferType()(mod)
+            # If more than 16 TIDL subgraphs, pull functions back into main function
+            # and out of TIDL offload
+            mod = prune_subgraphs(mod, compiler=self.tidl_target,
+                                  num_subgraphs_to_keep=self.max_num_tidl_subgraphs,
+                                  min_mac_threshold=1)
+            mod = relay.transform.InferType()(mod)
+            mod = flatten_tuple_params(mod, self.tidl_target)
+            mod = relay.transform.InferType()(mod)
 
         #============= Post-partition transformations  ==============
         # ConvertLayout pass does not yet work properly for graph with qnn ops
@@ -2275,8 +2287,9 @@ class TIDLCompiler:
         with open(os.path.join(self.temp_folder, "relay_graph.import.txt"), "w") as relay_txt:
             print(mod.astext(show_meta_data=False), file=relay_txt)
 
-        #================ Import the graph to TIDL =====================
-        if self.tidl_tools_path is not None:
+        num_imported_sgs = 0
+        #================ Import the graph to TIDL, if caller specified =====================
+        if self.max_num_tidl_subgraphs > 0 and self.tidl_tools_path is not None:
             if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
                 tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
                                          self.tidl_tools_path, self.artifacts_folder,
@@ -2306,8 +2319,6 @@ class TIDLCompiler:
                                                     data_layout, has_qnn_ops)
                     print("TIDL artifacts are stored at " + self.artifacts_folder)
                     mod_final, status = mod, 1        # TIDL Compilation success
-                    if (self.c7x_codegen > 0):
-                        mod_final = enable_c7x_mod(self, mod, mod_pre, params, num_imported_sgs)
                 else:
                     print("TIDL import of Relay IR graph failed.")
                     mod_final, status = mod_orig, -1  # TIDL Compilation failure
@@ -2315,8 +2326,16 @@ class TIDLCompiler:
                 print("TIDL import lib does not exist. TIDL import skipped.")
                 mod_final, status = mod_orig, 0       # No TIDL compilation
         else:
-            print("TIDL tools path is not set. TIDL import skipped.")
+            if self.tidl_tools_path is None:
+                print("TIDL tools path is not set. TIDL import skipped.")
+            if self.max_num_tidl_subgraphs == 0:
+                print("max_num_tidl_subgraphs is 0. TIDL import skipped.")
             mod_final, status = mod_orig, 0           # No TIDL compilation
+
+        # Build the c7x deployable module that the C7x TVM C runtime can execute
+        # This also will invoke C7x optimization passes
+        if (self.c7x_codegen > 0):
+            mod_final = enable_c7x_mod(self, mod, mod_pre, params, num_imported_sgs)
 
         return mod_final, status
 
@@ -2344,7 +2363,7 @@ class build_config():
 
     Parameters
     ----------
-    tidl_compiler : TIDLCompiler
+    ti_offload_compiler : TIOffloadCompiler
       artifacts_folder : string : where compilation artifacts are stored
       platform : string : TI SoC platform
       c7x_codegen : int: whether to generate C7x code for TIDL-unsupported layers
@@ -2364,14 +2383,14 @@ class build_config():
         instead of optimized C7x code.  Need to disable vectorization when generating generic C
         code.  Will decide later if this debug option is useful.
     """
-    def __init__(self, tidl_compiler=None, gen_c7x_mod_enabled=0):
+    def __init__(self, ti_offload_compiler=None, gen_c7x_mod_enabled=0):
         artifacts_folder = None
         platform = "J7"
         c7x_codegen_enabled = 0
-        if tidl_compiler != None:
-            artifacts_folder    = tidl_compiler.artifacts_folder
-            platform            = tidl_compiler.tidl_platform
-            c7x_codegen_enabled = tidl_compiler.c7x_codegen
+        if ti_offload_compiler != None:
+            artifacts_folder    = ti_offload_compiler.artifacts_folder
+            platform            = ti_offload_compiler.tidl_platform
+            c7x_codegen_enabled = ti_offload_compiler.c7x_codegen
         assert artifacts_folder, "artifacts_folder must be specified for TVM+TIDL compilation"
         self.debug_c7x_codegen = False
         if (os.environ.get("TIDL_C7X_CODEGEN_DEBUG") != None) and (gen_c7x_mod_enabled != 0):

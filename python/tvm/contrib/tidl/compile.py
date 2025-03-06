@@ -77,9 +77,9 @@ def compile_relay(mod: tvm.IRModule,
   if compile_for_device:
     target += " -device=arm_cpu -mtriple=aarch64-linux-gnu"
 
-  # If TIDL offload is enabled, use TIDLCompiler to partition relay graph
+  # If TIDL offload is enabled, use TIOffloadCompiler to partition relay graph
   # for offload subgraphs to TIDL
-  # If C7x code generation is enabled, use TIDLCompiler to generate C7x
+  # If C7x code generation is enabled, use TIOffloadCompiler to generate C7x
   # code for TIDL unsupported layers
   if enable_tidl_offload or enable_c7x_codegen:
     from tvm.relay.backend.contrib.tidl import tidl
@@ -108,22 +108,24 @@ def compile_relay(mod: tvm.IRModule,
     if advanced_options:
       advanced_options_updated.update(advanced_options)
 
-    tidl_compiler = tidl.TIDLCompiler(platform=platform, # TI device category (E.g. J7)
-                                      version="8.4", # Processor SDK version, currently unused
-                                      tidl_tools_path=tidl_tools_path,
-                                      artifacts_folder=artifacts_folder,
-                                      tensor_bits=tidl_tensor_bits,
-                                      max_num_subgraphs=(16 if enable_tidl_offload else 0),
-                                      deny_list="",
-                                      c7x_codegen=(1 if enable_c7x_codegen else 0),
-                                      accuracy_level=(1 if (tidl_tensor_bits == 8) else 0),
-                                      advanced_options=advanced_options_updated)
+    ti_offload_compiler = tidl.TIOffloadCompiler(
+                                   platform=platform, # TI device category (E.g. J7)
+                                   version="8.4", # Processor SDK version, currently unused
+                                   tidl_tools_path=tidl_tools_path,
+                                   artifacts_folder=artifacts_folder,
+                                   tensor_bits=tidl_tensor_bits,
+                                   max_num_tidl_subgraphs=(16 if enable_tidl_offload else 0),
+                                   deny_list="",
+                                   c7x_codegen=(1 if enable_c7x_codegen else 0),
+                                   accuracy_level=(1 if (tidl_tensor_bits == 8) else 0),
+                                   advanced_options=advanced_options_updated)
     # Perform partitioning
-    mod, _ = tidl_compiler.enable(mod, params, calibration_input_list)
+    mod, _ = ti_offload_compiler.enable(mod, params, calibration_input_list)
 
     # Build the Relay module to run on the Graph Executor
     fmod: relay.backend.executor_factory.GraphExecutorFactoryModule
-    with tidl.build_config(tidl_compiler=tidl_compiler):
+    # Compile the ARM deployable module that will contain the C7x deployable module
+    with tidl.build_config(ti_offload_compiler=ti_offload_compiler):
       fmod = relay.build_module.build(mod, target=target, params=params)
 
     # Remove params used by TIDL subgraphs from deployable module params since they

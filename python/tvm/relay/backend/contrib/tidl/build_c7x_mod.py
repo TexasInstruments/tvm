@@ -26,15 +26,15 @@ from tvm import transform
 from tvm.relay.expr_functor import ExprMutator
 from . import tidl
 
-def enable_c7x_mod(tidl_compiler, mod, mod_pre, params, num_tidl_subgraphs):
+def enable_c7x_mod(ti_offload_compiler, mod, mod_pre, params, num_tidl_subgraphs):
     """
     This function builds a c7x deployable module that c7x TVM C runtime can run,
     returns an Arm wrapper deployable module that has c7x deployable module embedded in
 
     Parameters
     ----------
-    tidl_compiler: TIDLCompiler
-        TIDLCompiler instance
+    ti_offload_compiler: TIOffloadCompiler
+        TIOffloadCompiler instance
     mod : tvm.relay.Module
         Partitioned Relay IR graph between TIDL subgraphs and TIDL-unsupported layers
         To be compiled with "c7x" codegen into a c7x deployable module
@@ -50,7 +50,7 @@ def enable_c7x_mod(tidl_compiler, mod, mod_pre, params, num_tidl_subgraphs):
     mod_arm : tvm.relay.Module
         Wrapper graph that runs on Arm: ["main"](ins) -> outs { tidl_c7x_0(ins) }
     """
-    status = build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs)
+    status = build_c7x_mod(ti_offload_compiler, mod, params, num_tidl_subgraphs)
     if status == -1:
         raise Exception("Building C7x tvm deployable module failed.")
 
@@ -81,7 +81,7 @@ def enable_c7x_mod(tidl_compiler, mod, mod_pre, params, num_tidl_subgraphs):
     func_c7x = relay.Function(params_c7x, body_c7x, func_arm.ret_type)
     func_c7x = func_c7x.with_attr("global_symbol", "tidl_tvm_0")
     func_c7x = func_c7x.with_attr("Primitive", tvm.tir.IntImm("int32", 1))
-    func_c7x = func_c7x.with_attr("Compiler", tidl_compiler.tidl_target)
+    func_c7x = func_c7x.with_attr("Compiler", ti_offload_compiler.tidl_target)
     func_c7x = func_c7x.with_attr("Inline", tvm.tir.IntImm("int32", 1))
     mod_arm[gv_c7x] = func_c7x
 
@@ -91,7 +91,7 @@ def enable_c7x_mod(tidl_compiler, mod, mod_pre, params, num_tidl_subgraphs):
                                      ret_type=func_arm.ret_type, type_params=None,
                                      attrs=func_arm.attrs)
     mod_arm = relay.transform.InferType()(mod_arm)
-    with open(os.path.join(tidl_compiler.temp_folder, "relay_graph.wrapper.txt"), "w") as fo:
+    with open(os.path.join(ti_offload_compiler.temp_folder, "relay_graph.wrapper.txt"), "w") as fo:
         print(mod_arm.astext(show_meta_data=False), file=fo)
 
     return mod_arm
@@ -232,14 +232,14 @@ EXPORT int tvm_main_delete()
 }}
 ''')
 
-def gen_c7x_source(tidl_compiler, mod, params, num_tidl_subgraphs):
+def gen_c7x_source(ti_offload_compiler, mod, params, num_tidl_subgraphs):
     """
     This function generates c7x source files for TIDL-unsupported layers and TIDL subgraphs
 
     Parameters
     ----------
-    tidl_compiler: TIDLCompiler
-        TIDLCompiler instance
+    ti_offload_compiler: TIOffloadCompiler
+        TIOffloadCompiler instance
     mod : tvm.relay.Module
         Partitioned Relay IR graph between TIDL subgraphs and TIDL-unsupported layers
         To be compiled with "c7x" codegen into a c7x deployable module
@@ -248,15 +248,15 @@ def gen_c7x_source(tidl_compiler, mod, params, num_tidl_subgraphs):
     num_tidl_subgraphs: int
         Number of TIDL subgraphs
     """
-    temp_folder = tidl_compiler.temp_folder
+    temp_folder = ti_offload_compiler.temp_folder
     print("Building C7x tvm deployable module: generating c files...")
 
-    if (tidl_compiler.c7x_codegen == 9):  # debug mode: generating generic c code
-        with tidl.build_config(tidl_compiler=tidl_compiler, gen_c7x_mod_enabled=1):
+    if (ti_offload_compiler.c7x_codegen == 9):  # debug mode: generating generic c code
+        with tidl.build_config(ti_offload_compiler=ti_offload_compiler, gen_c7x_mod_enabled=1):
             graph, lib, params_c7x = relay.build(mod, tvm.target.Target("c", host="c"),
                                                  params=params)
     else:
-        with tidl.build_config(tidl_compiler=tidl_compiler, gen_c7x_mod_enabled=1):
+        with tidl.build_config(ti_offload_compiler=ti_offload_compiler, gen_c7x_mod_enabled=1):
             with c7x.c7x_target_config():
                 graph, lib, params_c7x = relay.build(mod, tvm.target.Target("c7x", host="c7x"),
                                                      params=params)
@@ -288,15 +288,15 @@ def gen_c7x_source(tidl_compiler, mod, params, num_tidl_subgraphs):
 
     gen_model_tvm_funcs(os.path.join(temp_folder, "tvm_main.c"), num_tidl_subgraphs)
 
-def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
+def build_c7x_mod(ti_offload_compiler, mod, params, num_tidl_subgraphs):
     """
     This function builds a c7x deployable module that c7x TVM C runtime can run,
     returns an Arm wrapper deployable module that has c7x deployable module embedded in
 
     Parameters
     ----------
-    tidl_compiler: TIDLCompiler
-        TIDLCompiler instance
+    ti_offload_compiler: TIOffloadCompiler
+        TIOffloadCompiler instance
     mod : tvm.relay.Module
         Partitioned Relay IR graph between TIDL subgraphs and TIDL-unsupported layers
         To be compiled with "c7x" codegen into a c7x deployable module
@@ -311,7 +311,7 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
         1: success, -1: failure
     """
     if os.environ.get("TIDL_REBUILD_ONLY") == None:
-        gen_c7x_source(tidl_compiler, mod, params, num_tidl_subgraphs)
+        gen_c7x_source(ti_offload_compiler, mod, params, num_tidl_subgraphs)
 
     print("Building C7x tvm deployable module: building... (log in c7x_deploy_mod.log)")
     # if script from python package:      tvm/relay/backend/contrib/tidl_build_c7x_mod.py
@@ -320,12 +320,12 @@ def build_c7x_mod(tidl_compiler, mod, params, num_tidl_subgraphs):
     if not os.path.exists(os.path.join(tvm_root, "src/runtime/contrib/tidl/c7x")):
         tvm_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
     tvm_c7x_root = os.path.join(tvm_root, "src/runtime/contrib/tidl/c7x")
-    abs_temp_folder = os.path.abspath(tidl_compiler.temp_folder)
+    abs_temp_folder = os.path.abspath(ti_offload_compiler.temp_folder)
     log_file = os.path.join(abs_temp_folder, "c7x_deploy_tvm.log")
 
-    silicon_version = '7504' if tidl_compiler.tidl_platform == "AM62A" else (
-                      '7524_j722s' if tidl_compiler.tidl_platform == "J722S" else (
-                      '7100_j784s4' if tidl_compiler.tidl_platform == "J784S4" else "7100"))
+    silicon_version = '7504' if ti_offload_compiler.tidl_platform == "AM62A" else (
+                      '7524_j722s' if ti_offload_compiler.tidl_platform == "J722S" else (
+                      '7100_j784s4' if ti_offload_compiler.tidl_platform == "J784S4" else "7100"))
     command  = f'make SILICON_VERSION={silicon_version} TVM_ROOT={tvm_root} TVM_C7X_ROOT={tvm_c7x_root} QUIET= ' + \
                f' -C {abs_temp_folder} -f {tvm_c7x_root}/Makefile.c7x_mod -j$(nproc)'
     print(command)
