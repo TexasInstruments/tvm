@@ -252,6 +252,9 @@ class DeviceKernelMutator : public StmtExprMutator {
     auto callee_target = dev_info.target;
 
     bool same_target = caller_target->str() == callee_target->str();
+    // Begin TI: Exclude C7x code generation because both host and device are the same target
+    same_target &= callee_target->str().find("c7x") == std::string::npos;
+    // End TI
     if (same_target) {
       // Calls within the same target may be handled at codegen time
       // as internal subroutine calls.
@@ -260,6 +263,9 @@ class DeviceKernelMutator : public StmtExprMutator {
 
     bool same_device_type =
         caller_target->GetTargetDeviceType() == callee_target->GetTargetDeviceType();
+    // Begin TI: Exclude C7x code generation because both host and device are the same target
+    same_device_type &= callee_target->str().find("c7x") == std::string::npos;
+    // End TI
     if (same_device_type) {
       // Calls to another target using the same device (e.g. LLVM
       // calling a custom TIRToRuntime target) do not require a kernel

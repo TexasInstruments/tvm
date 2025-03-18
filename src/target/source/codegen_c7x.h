@@ -150,9 +150,11 @@ public:
 class CodeGenC7x final : public CodeGenC {
  public:
   CodeGenC7x();
-  void Init(bool output_ssa, bool emit_asserts, std::string target_str);
+  void Init(bool output_ssa, bool emit_asserts, bool emit_fwd_func_decl, std::string target_str,
+            const std::unordered_set<std::string>& devices);
 
-  void AddFunction(const PrimFunc& f);
+  void AddFunction(const GlobalVar& gvar, const PrimFunc& f) override;
+  void AddFunction(const GlobalVar& gvar, const PrimFunc& f, bool emit_fwd_func_decl);
   void InitFuncState(const PrimFunc& f) override;
   void PreFunctionBody(const PrimFunc& f) override;
   void DeclarePackedCalls(const PrimFunc& f);
@@ -163,8 +165,8 @@ class CodeGenC7x final : public CodeGenC {
   void PrintType(DataType t, std::ostream& os) final;  // NOLINT(*)
   void PrintType(const Type& type, std::ostream& os);  // NOLINT(*)
   void PrintFuncPrefix(std::ostream& os) final;        // NOLINT(*)
-  void PrintFinalReturn();                             // NOLINT(*)
   void PrintTrailer();
+  void PrintRestrict(const Var& v, std::ostream& os) final;
 
   // expression visitors
   void VisitExpr_(const VarNode* op, std::ostream& os) override;        // NOLINT(*)
@@ -239,13 +241,24 @@ class CodeGenC7x final : public CodeGenC {
                                bool skip_first_arg, std::ostream& os) override; // NOLINT(*)
 
  private:
+  /* \brief Internal structure to store information about function calls */
+  struct FunctionInfo {
+    /* \brief function name */
+    std::string func_name;
+    /* number of arguments required by the function */
+    int64_t num_args;
+    /* \brief name of resource_handle to pass */
+    std::string resource_handle_name;
+  };
   std::string module_name_;
-  /* \brief tracks declared global variables which live despite GetUniqueName */
-  std::set<std::string> declared_globals_;
+  /* \brief mapping global packed func to the unique name */
+  std::unordered_map<std::string, std::string> declared_globals_;
   /* \brief names of the functions declared in this module */
   Array<String> function_names_;
   /*! \brief whether to emit asserts in the resulting C code */
   bool emit_asserts_;
+  /*! \brief whether to emit forwared function declarations in the resulting C code */
+  bool emit_fwd_func_decl_;
 
   /* \brief names of variables that are used as src or dst in dma intrinsics */
   std::set<const VarNode*> dma_buffers_;
@@ -285,6 +298,8 @@ class CodeGenC7x final : public CodeGenC {
     return it != alloc_storage_scope_.end() && it->second.compare(0, 5, "local") == 0;
   }
 
+  FunctionInfo GetFunctionInfo(const CallNode* op, bool has_resource_handle);
+  std::string GetPackedName(const CallNode* op);
   void PrintGetFuncFromBackend(const std::string& func_name, const std::string& packed_func_name);
   void PrintFuncCall(const std::string& packed_func_name, int num_args);
   void PrintStorageScope(const std::string& scope, std::ostream& os);  // NOLINT(*)

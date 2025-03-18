@@ -311,8 +311,10 @@ class ScanMemory : public StmtExprVisitor {
 CodeGenC7x::CodeGenC7x() { module_name_ = name_supply_->FreshName("__tvm_module_ctx"); }
 
 // adapted from CodeGenC
-void CodeGenC7x::Init(bool output_ssa, bool emit_asserts, std::string target_str) {
+void CodeGenC7x::Init(bool output_ssa, bool emit_asserts, bool emit_fwd_func_decl,
+                      std::string target_str, const std::unordered_set<std::string>& devices) {
   emit_asserts_ = emit_asserts;
+  emit_fwd_func_decl_ = emit_fwd_func_decl;
   declared_globals_.clear();
 
   max_global_alloc_sz_in_bytes_ = 0;
@@ -334,58 +336,34 @@ void CodeGenC7x::PrintTrailer() {
     this->stream << "extern \"C\" size_t get_ddr_scratch_mem_size() { return " << max_global_alloc_sz_in_bytes_ << "; }\n";
 }
 
-void CodeGenC7x::AddFunction(const PrimFunc& f) {
-  // stream << "/* AddFunction */\n";
+void CodeGenC7x::AddFunction(const GlobalVar& gvar, const PrimFunc& func) {
+  return AddFunction(gvar, func, /*emit_fwd_func_decl=*/false);
+}
+
+void CodeGenC7x::AddFunction(const GlobalVar& gvar, const PrimFunc& f,
+                             bool emit_fwd_func_decl) {
   auto global_symbol = f->GetAttr<String>(tvm::attr::kGlobalSymbol);
   ICHECK(global_symbol.defined())
       << "CodeGenC7x: Expect PrimFunc to have the global_symbol attribute";
   function_names_.push_back(global_symbol.value());
 
+  emit_fwd_func_decl_ = emit_fwd_func_decl;
   // below verbatim from CodeGenC::AddFunction(f);
+  // If the function has already been forward-declared, this is a
+  // no-op.
+  DeclareFunction(gvar, f);
+  auto function_name = GetFunctionName(gvar);
   // clear previous generated state.
   this->InitFuncState(f);
-  // reserve keywords
-  ReserveKeywordsAsUnique();
   // declare functions called via "packed calls"
   DeclarePackedCalls(f);
 
-  bool no_alias = f->HasNonzeroAttr(tir::attr::kNoAlias);
-  this->PrintFuncPrefix(stream);
-  this->stream << " " << static_cast<std::string>(global_symbol.value()) << "(";
+  CodeGenC::PrintFunctionSignature(function_name, f, stream);
+  stream << " {\n";
 
-  for (size_t i = 0; i < f->params.size(); ++i) {
-    tir::Var v = f->params[i];
-    std::string vid = AllocVarID(v.get());
-    if (i != 0) stream << ", ";
-    if (v.dtype().is_handle()) {
-      auto it = alloc_storage_scope_.find(v.get());
-      if (it != alloc_storage_scope_.end()) {
-        PrintStorageScope(it->second, stream);
-      }
-
-      PrintType(GetType(v), stream);
-      // Register handle data type
-      // TODO(tvm-team): consider simply keep type info in the
-      // type annotation(via a normalizing rewriting).
-      if (auto* ptr = v->type_annotation.as<PointerTypeNode>()) {
-        if (auto* prim = ptr->element_type.as<PrimTypeNode>()) {
-          RegisterHandleType(v.get(), prim->dtype);
-        }
-      }
-
-      if (no_alias && restrict_keyword_.length() != 0) {
-        stream << ' ' << restrict_keyword_;
-      }
-    } else {
-      PrintType(GetType(v), stream);
-    }
-    stream << ' ' << vid;
-  }
-  stream << ") {\n";
   int func_scope = this->BeginScope();
   this->PreFunctionBody(f);
   this->PrintStmt(f->body);
-  this->PrintFinalReturn();
   this->EndScope(func_scope);
   this->PrintIndent();
   this->stream << "}\n\n";
@@ -573,13 +551,6 @@ void CodeGenC7x::PrintFuncPrefix(std::ostream& os) {  // NOLINT(*)
      << "TVM_DLL int32_t";
   #endif
   os << "extern \"C\"\n";
-  os << "int32_t";
-}
-
-// verbatim from CodegenCHost
-void CodeGenC7x::PrintFinalReturn() {  // NOLINT(*)
-  this->PrintIndent();
-  stream << "return 0;\n";
 }
 
 // verbatim from CodegenCHost
@@ -671,6 +642,13 @@ void CodeGenC7x::PrintVecElemLoad(const std::string& vec, DataType t, int i,
                                 std::ostream& os) {  // NOLINT(*)
   os << "/* PrintVecElemLoad */";
   os << vec << ".s" << std::hex << i << std::dec;
+}
+
+// verbatim from CodegenC
+void CodeGenC7x::PrintRestrict(const Var& v, std::ostream& os) {
+  if (restrict_keyword_.length() != 0) {
+    os << ' ' << restrict_keyword_;
+  }
 }
 
 // verbatim from CodegenC
@@ -1138,6 +1116,62 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
 }
 #endif
 
+// from CodeGenCHost
+std::string CodeGenC7x::GetPackedName(const CallNode* op) {
+  const StringImmNode* s = op->args[0].as<StringImmNode>();
+  ICHECK(s != nullptr) << "tvm_call_packed_lowered expects first argument as function name";
+  std::string func_name = s->value;
+  std::string packed_func_name = func_name + "_packed";
+  std::string unique_name;
+  auto it = declared_globals_.find(packed_func_name);
+  if (it != declared_globals_.end()) {
+    unique_name = it->second;
+  } else {
+    unique_name = name_supply_->FreshName(packed_func_name);
+    declared_globals_[packed_func_name] = unique_name;
+    decl_stream << "static void* " << unique_name << " = NULL;\n";
+  }
+  return unique_name;
+}
+
+// from CodeGenCHost
+CodeGenC7x::FunctionInfo CodeGenC7x::GetFunctionInfo(const CallNode* op,
+                                                     bool has_resource_handle) {
+  const StringImmNode* s = op->args[0].as<StringImmNode>();
+  ICHECK(s != nullptr) << "tvm_call_[c]packed_lowered expects first argument as function name";
+  int64_t begin = op->args[3].as<IntImmNode>()->value;
+  int64_t end = op->args[4].as<IntImmNode>()->value;
+  int64_t num_args = end - begin;
+  ICHECK_GE(num_args, 0);
+  std::string func_name = s->value;
+
+  if (has_resource_handle) {
+    const StringImmNode* resource_handle_var = op->args[5].as<StringImmNode>();
+    if (resource_handle_var != nullptr) {
+      std::string resource_handle_name = resource_handle_var->value;
+      return {func_name, num_args - 1, resource_handle_name};
+    } else {
+      // The final arg should be "(void*) NULL" to indicate the empty resource_handle.
+      num_args--;
+
+      const CallNode* reinterpret_call = op->args[5].as<CallNode>();
+      ICHECK_NE(reinterpret_call, (void*)nullptr)
+          << "At CallNode to " << s
+          << "arg 5: Expect either StringImm naming the resource_handle var from interface API or "
+          << "reinterpret(0); got: " << op->args[5];
+      ICHECK_EQ(reinterpret_call->op, builtin::reinterpret())
+          << "At CallNode to " << s
+          << "arg 5: Expect either StringImm naming the resource_handle var from interface API or "
+          << "reinterpret(0); got: " << op->args[5];
+      ICHECK(is_zero(reinterpret_call->args[0])) << "At CallNode to " << s
+                                                 << " arg 5: Expect either StringImm naming the "
+                                                    "resource_handle var from interface API, or "
+                                                 << "zero; got " << op->args[5];
+    }
+  }
+  return {func_name, num_args, "NULL"};
+}
+
 #if 1
 // from CodeGenCHost
 void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*)
@@ -1164,24 +1198,10 @@ void CodeGenC7x::VisitExpr_(const CallNode* op, std::ostream& os) {  // NOLINT(*
     this->stream << "TVMValue " << stack_name << "[" << size << "];\n";
     os << stack_name;
   } else if (op->op.same_as(builtin::tvm_call_packed_lowered())) {
-    const StringImmNode* s = op->args[0].as<StringImmNode>();
-    ICHECK(s != nullptr) << "tvm_call_packed_lowered expects first argument as function name";
-    int64_t begin = op->args[3].as<IntImmNode>()->value;
-    int64_t end = op->args[4].as<IntImmNode>()->value;
-    int64_t num_args = end - begin;
-    ICHECK_GE(num_args, 0);
-    std::string func_name = s->value;
-    // NOTE: cannot rely on GetUnique for global decl_stream declarations
-    // because it is reset between AddFunction().
-    std::string packed_func_name = func_name + "_packed";
-    if (declared_globals_.insert(packed_func_name).second) {
-      // Still reserve the name among unique names.
-      ICHECK(name_supply_->FreshName(packed_func_name) == packed_func_name)
-          << "Expected name " << packed_func_name << " to not be taken";
-      decl_stream << "static void* " << packed_func_name << " = NULL;\n";
-    }
-    this->PrintGetFuncFromBackend(func_name, packed_func_name);
-    this->PrintFuncCall(packed_func_name, num_args);
+    auto function_info = GetFunctionInfo(op, false /* has_resource_handle */);
+    std::string func_name_packed = GetPackedName(op);
+    this->PrintGetFuncFromBackend(function_info.func_name, func_name_packed);
+    this->PrintFuncCall(func_name_packed, function_info.num_args);
   } else if (op->op.same_as(builtin::tvm_call_packed())) {
     const StringImmNode* s = op->args[0].as<StringImmNode>();
     std::string func_name = MangleExternCallFuncName(s->value, op);
@@ -1919,10 +1939,12 @@ inline void CodeGenC7x::PrintTernaryCondExpr(const T* op, const char* compare,
      << "? (" << a_id << ") : (" << b_id << "))";
 }
 
+// Modeled after BuildCHost() in codegen_c_host.cc
 runtime::Module BuildC7x(IRModule mod, Target target) {
   using tvm::runtime::Registry;
   bool output_ssa = false;
   bool emit_asserts = false;
+  bool emit_fwd_func_decl = true;
 
   std::unordered_set<std::string> devices;
   if (mod->GetAttr<Map<GlobalVar, String>>("device_contexts") != nullptr) {
@@ -1934,9 +1956,8 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   }
 
   CodeGenC7x cg;
-  cg.Init(output_ssa, emit_asserts, target->str());
+  cg.Init(output_ssa, emit_asserts, emit_fwd_func_decl, target->str(), devices);
   cg.SetConstantsByteAlignment(target->GetAttr<Integer>("constants-byte-alignment").value_or(16));
-  PrimFunc aot_executor_fn;
 
   // debug
   if (getenv("TIDL_C7X_CODEGEN_DEBUG_BEGIN")) {
@@ -1944,42 +1965,40 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
     LOG_INFO << tvm::relay::PrettyPrint(mod);
   }
 
-  std::vector<std::pair<tvm::GlobalVar, tvm::BaseFunc>> funcs;
-  for (auto kv : mod->functions) {
-    // Make sure that the executor function is the last one to be code generated so that all the
-    // symbols are available to __tvm_main__
-    auto fun_name = std::string(kv.first->name_hint);
-    bool is_aot_executor_fn = kv.second->GetAttr<Bool>("runner_function", Bool(false)).value();
+  auto is_aot_executor_fn = [](const PrimFunc& func) -> bool {
+    return func->GetAttr<Bool>("runner_function", Bool(false)).value();
+  };
 
-    if (is_aot_executor_fn) {
-      aot_executor_fn = Downcast<PrimFunc>(kv.second);
-      continue;
-    }
-    funcs.push_back(kv);
+  std::vector<std::pair<GlobalVar, PrimFunc>> funcs;
+  for (auto [gvar, base_func] : mod->functions) {
+    ICHECK(base_func->IsInstance<PrimFuncNode>()) << "CodegenCHost: Can only take PrimFunc";
+    auto prim_func = Downcast<PrimFunc>(base_func);
+    funcs.push_back({gvar, prim_func});
   }
 
   // Sort functions
-  std::sort(funcs.begin(), funcs.end(),
-            [](std::pair<tvm::GlobalVar, tvm::BaseFunc> kv_a,
-               std::pair<tvm::GlobalVar, tvm::BaseFunc> kv_b) {
-              std::string name_hint_a = kv_a.first->name_hint;
-              std::string name_hint_b = kv_b.first->name_hint;
-              return name_hint_a < name_hint_b;
-            });
+  auto sort_key = [&is_aot_executor_fn](const auto& kv) {
+    return std::tuple{is_aot_executor_fn(kv.second), kv.first->name_hint};
+  };
+  std::sort(funcs.begin(), funcs.end(), [&sort_key](const auto& kv_a, const auto& kv_b) {
+    return sort_key(kv_a) < sort_key(kv_b);
+  });
 
-  // Add all functions except __tvm_main__
-  for (auto& kv : funcs) {
-    ICHECK(kv.second->IsInstance<PrimFuncNode>()) << "CodegenC7x: Can only take PrimFunc";
-    auto f = Downcast<PrimFunc>(kv.second);
-    cg.AddFunction(f);
+  // Declare all functions first.  This ensures that all functions,
+  // including the __tvm_main__ used in AOT, have access to forward
+  // declarations of other functions in the IRModule.
+  for (const auto& [gvar, prim_func] : funcs) {
+    cg.DeclareFunction(gvar, prim_func);
   }
 
-  // Add __tvm_main__
-  if (aot_executor_fn.defined()) {
-    cg.AddFunction(aot_executor_fn);
+  // Codegen all functions.  Passing emit_fwd_func_decl=true adds a
+  // forward declaration for any `builtin::call_extern`, based on the
+  // arguments provided to it.
+  for (const auto& [gvar, prim_func] : funcs) {
+    cg.AddFunction(gvar, prim_func, emit_fwd_func_decl);
   }
 
-  #if 0
+  #if 0  // Not used in C7x code gen
   // NOTE: it's possible that kRuntime attr is not attached when the mod was built with tvm.build().
   // See issue #10373.
   auto opt_runtime = mod->GetAttr<relay::Runtime>(tvm::attr::kRuntime);
@@ -1989,7 +2008,10 @@ runtime::Module BuildC7x(IRModule mod, Target target) {
   } else {
     runtime = relay::Runtime::Create("cpp", {});
   }
-  if (aot_executor_fn.defined() && runtime->name == relay::kTvmRuntimeCpp) {
+
+  bool has_aot_executor_fn = std::any_of(
+      funcs.begin(), funcs.end(), [&](const auto& kv) { return is_aot_executor_fn(kv.second); });
+  if (has_aot_executor_fn && runtime->name == relay::kTvmRuntimeCpp) {
     cg.InitGlobalContext();
   }
   #endif
