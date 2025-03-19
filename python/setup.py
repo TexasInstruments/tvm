@@ -56,10 +56,12 @@ def get_lib_path():
                     libs.append(name)
                     break
 
-        # Add byoc shared libraries, if present
-        for name in lib_path:
-            if "3rdparty" in name:
-                libs.append(name)
+        # Begin TI: do not put everything from 3rdparty into the python wheel
+        ## Add byoc shared libraries, if present
+        #for name in lib_path:
+        #    if "3rdparty" in name:
+        #        libs.append(name)
+        # End TI
 
         # Add standalone_crt, if present
         for name in lib_path:
@@ -81,6 +83,10 @@ def get_lib_path():
             if os.path.isdir(candidate_path):
                 libs.append(candidate_path)
                 break
+
+        # Begin TI: do not put include/src/etc into the python wheel
+        return libs, version
+        # End TI
 
         for dir in [
             "3rdparty",
