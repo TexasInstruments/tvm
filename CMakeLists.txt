@@ -702,11 +702,12 @@ endif()
 if(USE_TIDL)
   # Check if "tidl_c7x_libs" custom target is defined, so that neo-ai-dlr
   # build does not require tidl_c7x_libs build.  This does not impact TVM build.
-  if(TARGET tidl_c7x_libs)
-    add_dependencies(tvm tidl_c7x_libs)
+  if(TARGET tidl_c7x_libs_j721e)
+    add_dependencies(tvm tidl_c7x_libs_j721e)
+    add_dependencies(tvm tidl_c7x_libs_j721s2)
     add_dependencies(tvm tidl_c7x_libs_j784s4)
+    add_dependencies(tvm tidl_c7x_libs_am62a)
     add_dependencies(tvm tidl_c7x_libs_j722s)
-    add_dependencies(tvm tidl_c7x_libs_mv7504)
   endif()
 endif()
 

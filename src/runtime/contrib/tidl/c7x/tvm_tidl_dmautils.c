@@ -25,13 +25,8 @@
 #include "tvm_tidl_dmautils.h"
 #include "tidl_api_mem.h"
 
-/* UDMA does not use SOC_J722S macro, it is treated the same as SOC_J721E */
-#if defined(SOC_J722S)
-#define SOC_J721E
-#endif
-#include <ti/drv/udma/dmautils/dmautils.h>
-#include <ti/drv/udma/udma.h>
-
+/* Include path is correctly decided based on SDK used for build as part of the Cmake files */
+#include <dmautils_autoincrement_3d.h>
 
 //#define DEBUG_PRINT(...) printf(__VA_ARGS__)
 #define DEBUG_PRINT(...)
@@ -55,7 +50,7 @@ void *getUDMADrvObjPtr()
 */
 uint8_t *tvm_tidl_dmautils_init(int32_t num_channels, uint8_t *pTrMem_chs[])
 {
-  int32_t retVal = UDMA_SOK;
+  int32_t retVal = DMAUTILS_SOK;
   DmaUtilsAutoInc3d_InitParam initParams;
   DmaUtilsAutoInc3d_ChannelInitParam chInitParams[TVMTIDL_DMAUTILS_CHANNEL_MAX];
 
@@ -73,7 +68,7 @@ uint8_t *tvm_tidl_dmautils_init(int32_t num_channels, uint8_t *pTrMem_chs[])
   initParams.contextSize = DmaUtilsAutoInc3d_getContextSize(num_channels);
   initParams.numChannels = num_channels;
   initParams.traceLogLevel   = 1;  // TODO: change to 0 later
-  initParams.udmaDrvHandle   = (Udma_DrvHandle) getUDMADrvObjPtr();
+  initParams.udmaDrvHandle   = (void *) getUDMADrvObjPtr();
   initParams.DmaUtilsVprintf = vprintf;
 
   for (int32_t ch = 0; ch < num_channels; ch++)
@@ -83,7 +78,7 @@ uint8_t *tvm_tidl_dmautils_init(int32_t num_channels, uint8_t *pTrMem_chs[])
   }
 
   retVal = DmaUtilsAutoInc3d_init(dmaUtilsContext, &initParams, chInitParams);
-  if (retVal != UDMA_SOK)
+  if (retVal != DMAUTILS_SOK)
   {
     tvm_tidl_l2_scratch_reset();
     return NULL;
@@ -108,7 +103,7 @@ int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
     uint16_t dicnt0, uint16_t dicnt1, uint16_t dicnt2, uint16_t dicnt3,
                       int32_t ddim1,   int32_t ddim2,   int32_t ddim3)
 {
-  int32_t retVal = UDMA_SOK;
+  int32_t retVal = DMAUTILS_SOK;
   DmaUtilsAutoInc3d_TrPrepareParam trPrepParams;
   DmaUtilsAutoInc3d_TransferProp   xferProp;
 
@@ -180,7 +175,7 @@ int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
 int32_t tvm_tidl_dmautils_deinit(uint8_t *dmaUtilsContext,
     int32_t num_channels, uint8_t *pTrMem_chs[])
 {
-  int32_t retVal = UDMA_SOK;
+  int32_t retVal = DMAUTILS_SOK;
 
   for (int32_t ch = 0; ch < num_channels; ch++)
   {

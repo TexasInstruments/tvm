@@ -31,7 +31,8 @@ CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
 CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG)
 CFLAGS += -I $(USE_TIDL_RT_PATH)/inc -I $(USE_TIDL_RT_PATH)/test/src
 CFLAGS += -I $(IVISION_PATH)
-CFLAGS += -I $(PDK_PATH)/packages
+CFLAGS += -I $(PDK_PATH)
+CFLAGS += -I $(DMAUTILS_PATH)
 
 SOURCES = bundle_static.c \
           tidl_api.c \

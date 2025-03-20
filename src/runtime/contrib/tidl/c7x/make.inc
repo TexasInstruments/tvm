@@ -38,13 +38,22 @@ SILICON_VERSION ?= 7100
 PKG_CFLAGS  = -o3 --abi=eabi --gcc --c11
 CFLAGS += $(PKG_CFLAGS)
 
-ifeq (7100_j784s4, $(SILICON_VERSION))
-  CFLAGS += -mv7100
+# -mv* flag is to indicate which c7x tool chain to be used for compilation based on SoC
+# TVM build (for tidl_api) depends on c7x-mma-tidl/arm-tidl/rt/inc/itidl_ti.h which has structures with dependency on SoC hence need to correctly specify SoC flag
+
+ifeq (7120_j784s4, $(SILICON_VERSION))
+  CFLAGS += -mv7120
   CFLAGS += -DSOC_J784S4
-else ifeq (7524_j722s, $(SILICON_VERSION))
+else ifeq (7120_j721s2, $(SILICON_VERSION))
+  CFLAGS += -mv7120
+  CFLAGS += -DSOC_J721S2
+else ifeq (7524, $(SILICON_VERSION))
   CFLAGS += -mv7524
   CFLAGS += -DSOC_J722S
+else ifeq (7504, $(SILICON_VERSION))
+  CFLAGS += -mv7504
+  CFLAGS += -DSOC_AM62A
 else
   CFLAGS += -mv$(SILICON_VERSION)
   CFLAGS += -DSOC_J721E
-endif
+endif 
