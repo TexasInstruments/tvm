@@ -44,6 +44,34 @@ class RemoveMultiplyByOne(ExprMutator):
         return super().visit_call(call)
 
 
+class RemovePadByZero(ExprMutator):
+    """
+    Removes pad operators that have pad of 0 in all tuples.
+    Cases seen in dmnet after coverted to .onnx.
+    """
+    def visit_call(self, call):
+        if call.op.name == "nn.pad":
+            if (all([ x[0] == 0 and x[1] == 0 for x in call.attrs.pad_width])):
+                return super().visit(call.args[0])
+        return super().visit_call(call)
+
+class RemoveIdentityReshape(ExprMutator):
+    """
+    Removes reshape operators to same shape as input.
+    Cases seen in dmnet after coverted to .onnx.
+    """
+    def visit_call(self, call):
+        if (call.op.name == "reshape"):
+            # Extract shape from first arg
+            orig_shape = call.args[0].checked_type.shape
+            desired_shape = call.attrs.newshape
+            # Compare input tensor's shape to reshape attribute and if the
+            # shapes are the same, remove the reshape operator.
+            if len(orig_shape) == len(desired_shape) and \
+               all([ o == d for o, d in zip(orig_shape, desired_shape)]):
+                    return super().visit(call.args[0])
+        return super().visit_call(call)
+
 class RemoveTrainingOperators(ExprMutator):
     """
     Removes operators that apply to network training but not to inference.
@@ -230,6 +258,9 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod['main'] = relay.build_module.bind_params_by_name(mod['main'], params)
     mod = relay.transform.FoldConstant()(mod)
     mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
+    mod['main'] = RemovePadByZero().visit(mod['main'])
+    mod = relay.transform.InferType()(mod)
+    mod['main'] = RemoveIdentityReshape().visit(mod['main'])
     mod['main'] = Power2ToMultiply().visit(mod['main'])
     mod['main'] = RemoveTrainingOperators().visit(mod['main'])
     mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
