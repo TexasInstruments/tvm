@@ -25,6 +25,142 @@ from tvm import relay
 from tvm.runtime import NDArray
 from tvm.contrib.tidl.c7x import supported_platform
 
+def convert_model_to_relay_IR(model_path: str,
+                              input_details: List[Dict[str, Any]]):
+  """Convert model from ONNX/tflite frameworks to Relay IR format"""
+  ### Checks ###
+  if model_path is None or input_details is None:
+    print("Model path and input details are not provided")
+    return None, None
+  if not os.path.exists(model_path):
+    print("Model path does not exist")
+    return None, None
+
+  ### Get type of model ####
+  model_type = os.path.splitext(model_path)[1][1:]
+  if model_type not in ['tflite', 'onnx']:
+      print("ERROR : Only tflite/onnx models can be converted to Relay IR internally. Please convert your model to Relay IR and pass converted 'mod', 'params' arguments to compile_model()")
+      return None, None
+
+  if model_type == 'onnx':
+    import onnx
+    try:
+      onnx_model = onnx.load(model_path)
+    except:
+      print("Loading ONNX model failed")
+      return None, None
+
+    mod, params = relay.frontend.from_onnx(
+        onnx_model, shape={inp_d['name']: inp_d['shape'] for inp_d in input_details}
+    )
+  elif model_type == 'tflite':
+    import tflite
+    try:
+      with open(model_path, "rb") as fp:
+          tflite_model = tflite.Model.GetRootAsModel(fp.read(), 0)
+    except:
+      print("Loading tflite model failed")
+      return None, None
+
+    mod, params = relay.frontend.from_tflite(
+        tflite_model,
+        shape_dict={inp_d['name']: inp_d['shape'] for inp_d in input_details},
+        dtype_dict={inp_d['name']: inp_d['type'] for inp_d in input_details},
+    )
+  return mod, params
+
+def compile_model(platform: str,
+                  compile_for_device: bool,
+                  enable_tidl_offload: bool,
+                  enable_c7x_codegen: bool,
+                  delegate_options: Dict[str, Any],
+                  calibration_input_list: List[Dict[str, NDArray]],
+                  model_path: str = None,
+                  input_details: List[Dict[str, Any]] = None,
+                  mod: tvm.IRModule = None,
+                  params: Dict[str, NDArray] = None
+                  ) -> bool:
+  """ Compile model for TVM inference based on the parameters specified
+
+  Parameters
+  ----------
+  platform :
+      ["am68pa", "am68a", "am69a", "am67a", "am62a]
+      Converted internally to one of the following
+      ["J7", "J721S2", "J784S4", "J722S", "AM62A"]
+  compile_for_device:
+      True => Compile module for inference on device (aarch64).
+      False => Compile module for inference on host (x86).
+  enable_tidl_offload:
+      Set to True to enable TIDL offload.
+  enable_c7x_codegen:
+      True => Enable c7x code generation for layers not offloaded to TIDL. i.e. entire network runs on the C7x.
+      False => Enable Arm code generation for layers not offloaded to TIDL. Unsupported layers are run on Arm (aarch64).
+  tidl_tensor_bits:
+      Number of bits used to represent TIDL tensors and weights.
+  delegate_options:
+      TIDL offload related options specified in the form of a dictionary
+  calibration_input_list :
+      A dictionary where the key is input name and the value is input tensor.
+  model_path : (Optional)
+      Path to the model file. Supported formats: tflite, onnx
+  input_details : (Optional)
+      A list of dictionaries where each dictionary contains the input name, shape and type.
+      Example: [{'name': 'input_1', 'shape': (1, 3, 224, 224), 'type': 'float32'}]
+  mod : (Optional)
+      Input Relay IR module.
+  params : (Optional)
+      The parameter dict used by Relay.
+
+  User expected to provide either (model_path, input_details) or (mod, params) of the optional arguments
+
+  Return
+  ------
+  True for success, False for failure.
+  """
+
+  artifacts_folder = delegate_options["artifacts_folder"]
+  tidl_tensor_bits = delegate_options["tensor_bits"]
+
+  if((enable_c7x_codegen == True) and (compile_for_device == False)):
+    compile_for_device = True
+    print("\n\nWarning: 'enable_c7x_codegen' == True is applicable only for target device build and not for PC build \nDefaulting 'compile_for_device' to True\n")
+
+  if mod is None or params is None:
+    mod, params = convert_model_to_relay_IR(model_path, input_details)
+
+    if mod is None or params is None:
+      print("Conversion to Relay IR format failed")
+      return False
+
+  # If TIDL offload is enabled, use TIOffloadCompiler to partition relay graph
+  # for offload subgraphs to TIDL
+  # If C7x code generation is enabled, use TIOffloadCompiler to generate C7x
+  # code for TIDL unsupported layers
+  if enable_tidl_offload or enable_c7x_codegen:
+    from tvm.relay.backend.contrib.tidl import tidl
+
+    # tvm need advanced options as a dict
+    # convert the entries starting with advanced_options: to a dict
+    advanced_options_prefix = 'advanced_options:'
+    object_detection_prefix = 'object_detection:'
+    advanced_options = {k.replace(advanced_options_prefix,''):v for k,v in delegate_options.items() \
+                        if (k.startswith(advanced_options_prefix) or k.startswith(object_detection_prefix))}
+
+  status = compile_relay(mod = mod,
+                        params = params,
+                        calibration_input_list = calibration_input_list,
+                        platform = platform,
+                        compile_for_device = compile_for_device,
+                        enable_tidl_offload = enable_tidl_offload,
+                        enable_c7x_codegen = enable_c7x_codegen,
+                        artifacts_folder = artifacts_folder,
+                        tidl_tensor_bits = tidl_tensor_bits,
+                        advanced_options = advanced_options)
+  return status
+
+
+
 def compile_relay(mod: tvm.IRModule,
                   params: Dict[str, NDArray],
                   calibration_input_list: List[Dict[str, NDArray]],
@@ -43,10 +179,12 @@ def compile_relay(mod: tvm.IRModule,
       Input Relay IR module.
   params :
       The parameter dict used by Relay.
-  platform :
-      in ["J7", "J721S2", "J784S4", "J722S", "AM62A"]
   calibration_input_list :
       A dictionary where the key is input name and the value is input tensor.
+  platform:
+      Any of ["am68pa", "am68a", "am69a", "am67a", "am62a]
+      Converted internally to one of the following
+      ["J7", "J721S2", "J784S4", "J722S", "AM62A"]
   compile_for_device:
       True => Compile module for inference on device (aarch64).
       False => Compile module for inference on host (x86).
@@ -55,8 +193,12 @@ def compile_relay(mod: tvm.IRModule,
   enable_c7x_codegen:
       True => Enable c7x code generation for layers not offloaded to TIDL. i.e. entire network runs on the C7x.
       False => Enable Arm code generation for layers not offloaded to TIDL. Unsupported layers are run on Arm (aarch64).
+  artifacts_folder:
+      Folder where the artifacts will be saved.
   tidl_tensor_bits:
       Number of bits used to represent TIDL tensors and weights.
+  advanced_options:
+      Advanced options for TIDL offload
   Return
   ------
   True for success, False for failure.
@@ -77,37 +219,8 @@ def compile_relay(mod: tvm.IRModule,
   if compile_for_device:
     target += " -device=arm_cpu -mtriple=aarch64-linux-gnu"
 
-  # If TIDL offload is enabled, use TIOffloadCompiler to partition relay graph
-  # for offload subgraphs to TIDL
-  # If C7x code generation is enabled, use TIOffloadCompiler to generate C7x
-  # code for TIDL unsupported layers
   if enable_tidl_offload or enable_c7x_codegen:
     from tvm.relay.backend.contrib.tidl import tidl
-
-    # Calibration options corresponding to quantized tensor bits
-    advanced_options_default = {
-      8 : {
-        #'calibration_iterations' : 10,
-        'calibration_iterations' : 3,
-        # Following options take effect only at accuracy level 9, are ignored otherwise
-        'activation_clipping' : 1,
-        'weight_clipping' : 1,
-        'bias_calibration' : 1,
-        'channel_wise_quantization' : 0,
-      },
-      16 : {
-        'calibration_iterations' : 1,
-      },
-      32 : {
-        'calibration_iterations' : 1,
-      }
-    }
-
-    
-    advanced_options_updated = advanced_options_default[tidl_tensor_bits]
-    if advanced_options:
-      advanced_options_updated.update(advanced_options)
-
     ti_offload_compiler = tidl.TIOffloadCompiler(
                                    platform=platform, # TI device category (E.g. J7)
                                    version="8.4", # Processor SDK version, currently unused
@@ -118,7 +231,7 @@ def compile_relay(mod: tvm.IRModule,
                                    deny_list="",
                                    c7x_codegen=(1 if enable_c7x_codegen else 0),
                                    accuracy_level=(1 if (tidl_tensor_bits == 8) else 0),
-                                   advanced_options=advanced_options_updated)
+                                   advanced_options=advanced_options)
     # Perform partitioning
     mod, _ = ti_offload_compiler.enable(mod, params, calibration_input_list)
 

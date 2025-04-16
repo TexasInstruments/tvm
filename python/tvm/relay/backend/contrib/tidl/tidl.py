@@ -148,8 +148,8 @@ def find_in_nodes(all_nodes, this_node, input_prefix):
     """
 
     def _get_result(node):
-        """ Return the name or names of the tensor produced by a node as a flattened list. 
-            Tuples are "flattened" so that each result in the list represents a single tensor.  
+        """ Return the name or names of the tensor produced by a node as a flattened list.
+            Tuples are "flattened" so that each result in the list represents a single tensor.
         """
         result = []
         node_name = str(all_nodes[node])
@@ -485,14 +485,14 @@ def unpack_composites(mod):
     return mod
 
 def flatten_tuple_params(mod, compiler):
-    """ TIDL can't handle passing Tuples as arguments to a subgraph. This pass 
+    """ TIDL can't handle passing Tuples as arguments to a subgraph. This pass
         flattens them into their constituent components.
 
         The declaration is rewritten as follows:
-            def %tidl_0(%tidl_0_i0: (<typeA>, <typeB>),   /* tuple */ 
+            def %tidl_0(%tidl_0_i0: (<typeA>, <typeB>),   /* tuple */
                         %tidl_0_i1: <typeC>) {            /* tensor */
                ... use %tidl_0_i0 ...
-        ==> 
+        ==>
             fn (%tidl_0_i0: <typeA>,                      /* tensor */
                 %tidl_0_i1: <typeB>,                      /* tensor */
                 %tidl_0_i2: <typeC>) {                    /* tensor */
@@ -522,7 +522,7 @@ def flatten_tuple_params(mod, compiler):
                 tuple_parms = []
                 for t in var.checked_type.fields:
                     tuple_parms.append(_addparm(t))
-                # create new tuple from tuple subparams, and enqueue for 
+                # create new tuple from tuple subparams, and enqueue for
                 # rewriting (uses of old tuple param replaced with new tuple)
                 new_tuple = relay.expr.Tuple(tuple_parms)
                 var_map[var] = new_tuple
@@ -532,10 +532,10 @@ def flatten_tuple_params(mod, compiler):
 
         # apply enqueued var replacements, and re-construct the function
         new_body = VarReplacer(var_map).visit(func.body)
-        func = tvm.relay.Function(params=new_params, 
-                                  body=new_body, 
-                                  ret_type=func.ret_type, 
-                                  type_params=func.type_params, 
+        func = tvm.relay.Function(params=new_params,
+                                  body=new_body,
+                                  ret_type=func.ret_type,
+                                  type_params=func.type_params,
                                   attrs=func.attrs)
         return func
 
@@ -665,7 +665,7 @@ class CalibrationPerLayerMutator(ExprMutator):
         if isinstance(expr.body.checked_type, relay.TupleType):
             self.num_original_outputs = len(expr.body.checked_type.fields)
         for i in range(self.num_original_outputs):
-            self.name_map[i] = f"graph_output_{i}" 
+            self.name_map[i] = f"graph_output_{i}"
         visit_body = super().visit(expr.body)
         # Get original output(s)
         outputs = []
@@ -931,7 +931,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
                 #   - Avoiding re-calibration is possible if every corresponding relay layer
                 #     is of type "uint8"/"int8", and all bits are used
                 #     - we then compute (minTensorValue, maxTensorValue) from relay layer,
-                #       without any calibration data, set 
+                #       without any calibration data, set
                 zp, scale = relay_quantization[calib_mutator.name_map[i]]
                 # Keep TVM results as is, Use TIDL data convert layers to interface
                 #res = dequantize_tensor(res, zp, scale, data_layout)
@@ -1508,7 +1508,7 @@ class TIDLImport:
         import_fail = -1
 
         # Put some information about the graph in the info file passed to the TIDL codegen
-        self.info_dict['tvm'] = { 
+        self.info_dict['tvm'] = {
            'is_nchw'   : 1 if self.data_layout == "NCHW" else 0,
            'macs'      : relay.analysis.get_total_mac_number(mod['main']),
            'nodes'     : {},
@@ -1564,8 +1564,8 @@ class TIDLImport:
                 return import_fail
 
             # Initialize subgraph info for nfo file
-            subgraph_info_dict = { 
-               'name'    : tidl_subgraph, 
+            subgraph_info_dict = {
+               'name'    : tidl_subgraph,
                'is_nchw' : 1 if self.data_layout == "NCHW" else 0,
                'macs'    : relay.analysis.get_total_mac_number(subgraph),
                'ninputs' : len(input_names),
@@ -1579,7 +1579,7 @@ class TIDLImport:
             inout_quant_dict = obtain_inout_quant_dict(subgraph, subgraph_id, relay_quantization)
 
             # If subgraph contains "tidl_odpostproc" layer, only import up to the inputs
-            #   of this layer, TIDL will add the postprocessing layers using MetaArch info 
+            #   of this layer, TIDL will add the postprocessing layers using MetaArch info
             def find_tidl_odpostproc(node, node_list):
                 if isinstance(node, relay.expr.Call) and node.op.name == "tidl_odpostproc":
                     node_list.append(node)
@@ -1864,13 +1864,13 @@ class TIDLAnnotation:
     # Helper functions
     def _user_denied(self, *args):
         """ The arguments are operator names. Return true if any of the operators
-            are in the user-specified denylist (e.g. via the --deny option to the 
+            are in the user-specified denylist (e.g. via the --deny option to the
             unit test program).  """
         for op in args:
             if self.denylist and op in self.denylist:
                 return True
         return False
-       
+
     def _register_supported_op(self, op_name):
         """ Helper function to register an op that is supported without any constraints """
         @tvm.ir.register_op_attr(op_name, "target.tidl")
@@ -1991,8 +1991,8 @@ class TIOffloadCompiler:
         ti_internal_nc_flag: int
             Internal use only, default is 0x641
     """
-
-    default_advanced_options = {
+    ## Dict with all the calibration related options
+    default_advanced_options_for_calibration = {
             'calibration_iterations'       : 50,
             'quantization_scale_type'      : 0,
             'high_resolution_optimization' : 0,
@@ -2007,6 +2007,25 @@ class TIOffloadCompiler:
             'bias_calibration'             : None,
             'channel_wise_quantization'    : None,
             }
+
+    # Subset of calibration options corresponding to quantized tensor bits
+    default_calib_options_based_on_tensor_bits = {
+      8 : {
+        #'calibration_iterations' : 10,
+        'calibration_iterations' : 3,
+        # Following options take effect only at accuracy level 9, are ignored otherwise
+        'activation_clipping' : 1,
+        'weight_clipping' : 1,
+        'bias_calibration' : 1,
+        'channel_wise_quantization' : 0,
+      },
+      16 : {
+        'calibration_iterations' : 1,
+      },
+      32 : {
+        'calibration_iterations' : 1,
+      }
+    }
     default_accuracy_level_options = {
                                    # options for level 0 and 1 cannot be updated
                                    # only options for level 9 (user-defined) can be overwritten
@@ -2064,7 +2083,10 @@ class TIOffloadCompiler:
             self.tidl_calib_tool = os.path.join(self.tidl_tools_path, "PC_dsp_test_dl_algo.out")
             self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
 
-            calib_options = self.default_advanced_options
+            # Tensor bits known here - update default calibration options with defaults based on tensor bits
+            self.default_advanced_options_for_calibration.update(self.default_calib_options_based_on_tensor_bits[self.tensor_bits])
+
+            calib_options = self.default_advanced_options_for_calibration
             accu_level_options_index = 0 if self.accuracy_level == 0 else 1
             accu_level_options = self.default_accuracy_level_options[accu_level_options_index]
             if isinstance(self.advanced_options, dict):
@@ -2073,11 +2095,11 @@ class TIOffloadCompiler:
                         if self.accuracy_level == 9:
                             # only overwritable at level 9
                             accu_level_options[key] = self.advanced_options[key]
-                    elif key in calib_options:
+                    elif key in calib_options:  # Calibration options not related to accuracy level
                         calib_options[key] = self.advanced_options[key]
-                    elif key in self.default_od_options:
+                    elif key in self.default_od_options:  # OD options
                         self.od_options[key] = self.advanced_options[key]
-            for key in accu_level_options:
+            for key in accu_level_options:  # Re-populate updated calibration options
                 calib_options[key] = accu_level_options[key]
 
             self.tidl_bias_calib_iters = calib_options['calibration_iterations']
@@ -2156,9 +2178,9 @@ class TIOffloadCompiler:
             import_lib_get_od_info(tidl_od_meta_arch_type,
                                     tidl_od_num_graph_outputs, tidl_od_meta_layers_names_list,
                                     ctypes.cast(ctypes.byref(od_postproc_info), ctypes.c_void_p))
-            tidl_od_postproc_inputs = [name.value.decode() for name 
+            tidl_od_postproc_inputs = [name.value.decode() for name
                                         in od_postproc_info.in_node_names[:od_postproc_info.num_in_nodes]]
-            tidl_od_output_shapes = [(node.n, node.channel, node.height, node.width) for node 
+            tidl_od_output_shapes = [(node.n, node.channel, node.height, node.width) for node
                                         in od_postproc_info.out_nodes[:od_postproc_info.num_out_nodes]]
             element_type_map = {
                 0: "uint8",
@@ -2315,7 +2337,7 @@ class TIOffloadCompiler:
                     print(f"TIDL import of {num_imported_sgs} Relay IR subgraphs succeeded.")
                     if num_imported_sgs > 0 and self.tidl_relay_import_debug == "4":
                         generate_tidl_layer_tensors(self.tidl_target, mod, params,
-                                                    graph_input_list, self.temp_folder, 
+                                                    graph_input_list, self.temp_folder,
                                                     data_layout, has_qnn_ops)
                     print("TIDL artifacts are stored at " + self.artifacts_folder)
                     mod_final, status = mod, 1        # TIDL Compilation success

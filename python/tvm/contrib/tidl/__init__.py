@@ -16,4 +16,5 @@
 # under the License.
 """TI Deep Learning (TIDL) APIs."""
 
+from .compile import compile_model
 from .compile import compile_relay
