@@ -19,10 +19,11 @@
 import logging
 
 from tvm import topi
-from tvm.te import SpecializedCondition
-from .generic import *
+from .generic import schedule_pool, schedule_injective, concatenate_strategy
+from .generic import wrap_compute_concat, wrap_topi_schedule
+from .generic import scatter_nd_strategy, wrap_compute_scatter_nd
+
 from .. import op as _op
-from .. import strategy as _strategy
 
 logger = logging.getLogger('strategy')
 
@@ -39,13 +40,13 @@ def schedule_injective_c7x(_, outs, target):
         return topi.c7x.schedule_injective(outs)
 
 
-@concatenate_strategy.register("c7x")
+@concatenate_strategy.register(["c7x"])
 def concatenate_strategy_c7x(attrs, inputs, out_type, target):
     """concatenate strategy for c7x"""
     strategy = _op.OpStrategy()
     strategy.add_implementation(
-        wrap_compute_concat(topi.concatenate),
-        wrap_topi_schedule(topi.c7x.schedule_injective),
+        wrap_compute_concat(topi.c7x.compute_concatenation),
+        wrap_topi_schedule(topi.generic.schedule_extern),
         name="concatenate.c7x",
     )
     return strategy
