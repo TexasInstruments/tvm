@@ -77,6 +77,18 @@ def find_qnn_ops(mod):
     return any(isinstance(node, relay.expr.Call) and node.op.name.startswith('qnn.')
                for node in all_nodes)
 
+def get_tidl_subgraphs(mod, tidl_target):
+    # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
+    all_nodes_main = {}
+    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_main)
+    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    tidl_subgraphs = []
+    for node in all_nodes_main:
+        if isinstance(node, relay.expr.GlobalVar):
+            if tidl_target in node.name_hint:
+                tidl_subgraphs.append(node.name_hint)
+    return tidl_subgraphs
+
 # borrowed from python/tvm/relay/op/contrib/tensorrt.py, modified to check all dimensions
 def check_dynamism(args, op_name):
     """
@@ -1508,26 +1520,9 @@ class TIDLImport:
         import_fail = -1
 
         # Put some information about the graph in the info file passed to the TIDL codegen
-        self.info_dict['tvm'] = {
-           'is_nchw'   : 1 if self.data_layout == "NCHW" else 0,
-           'macs'      : relay.analysis.get_total_mac_number(mod['main']),
-           'nodes'     : {},
-        }
         self.info_dict['subgraphs'] = []
 
-        # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
-        all_nodes_main = {}
-        traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_main)
-        relay.analysis.post_order_visit(mod['main'], traverse_func)
-        tidl_subgraphs = []
-        relay_call_ops = 0
-        for node in all_nodes_main:
-            if isinstance(node, relay.expr.GlobalVar):
-                if self.tidl_target in node.name_hint:
-                    tidl_subgraphs.append(node.name_hint)
-            # Tally relay call nodes that are not calls to a TIDL subgraph
-            if isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.op.Op):
-                self._tally_op(str(node.op), self.info_dict['tvm']['nodes'])
+        tidl_subgraphs = get_tidl_subgraphs(mod, self.tidl_target)
 
         # For each TIDL subgraph, import to TIDL and calibrate
         for tidl_subgraph in tidl_subgraphs:
@@ -2285,7 +2280,7 @@ class TIOffloadCompiler:
             # and out of TIDL offload
             mod = prune_subgraphs(mod, compiler=self.tidl_target,
                                   num_subgraphs_to_keep=self.max_num_tidl_subgraphs,
-                                  min_mac_threshold=1)
+                                  min_mac_threshold=None)
             mod = relay.transform.InferType()(mod)
             mod = flatten_tuple_params(mod, self.tidl_target)
             mod = relay.transform.InferType()(mod)
@@ -2309,7 +2304,9 @@ class TIOffloadCompiler:
         with open(os.path.join(self.temp_folder, "relay_graph.import.txt"), "w") as relay_txt:
             print(mod.astext(show_meta_data=False), file=relay_txt)
 
-        num_imported_sgs = 0
+        num_imported_sgs = len(get_tidl_subgraphs(mod, self.tidl_target))    
+        print(f"TVM Relay detected {num_imported_sgs} subgraphs")
+        
         #================ Import the graph to TIDL, if caller specified =====================
         if self.max_num_tidl_subgraphs > 0 and self.tidl_tools_path is not None:
             if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
