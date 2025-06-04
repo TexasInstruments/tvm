@@ -64,9 +64,16 @@ def find_data_layout(mod):
     relay.analysis.post_order_visit(mod['main'], traverse_func)
     data_layout = "NCHW"
     for node in all_nodes:
-        if isinstance(node, relay.expr.Call) and (node.op.name == 'nn.conv2d' or
-                                                  node.op.name == 'qnn.conv2d'):
-            data_layout = node.attrs.data_layout
+        if isinstance(node, relay.expr.Call):
+            if not node.attrs:
+                continue
+            if node.op.name == 'nn.conv2d' or node.op.name == 'qnn.conv2d':
+                data_layout = node.attrs.data_layout
+            else:
+                try:
+                    data_layout = node.attrs.layout
+                except:
+                    pass
             break
     return data_layout
 
@@ -76,6 +83,17 @@ def find_qnn_ops(mod):
     relay.analysis.post_order_visit(mod['main'], traverse_func)
     return any(isinstance(node, relay.expr.Call) and node.op.name.startswith('qnn.')
                for node in all_nodes)
+
+def get_all_nodes(mod):
+    # Traverse Relay IR graph and generate a dictionary of all nodes
+    def traverse_func(node, node_dict):
+        if node not in node_dict:
+            node_dict[node] = 0
+
+    all_nodes_main = {}
+    traverse_func = functools.partial(traverse_func, node_dict=all_nodes_main)
+    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    return list(all_nodes_main.keys())
 
 def get_tidl_subgraphs(mod, tidl_target):
     # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
@@ -1334,6 +1352,7 @@ class TIDLImport:
         True if initialization succeeds or False if initialization fails
         """
 
+        # TODO: Allow inputs of dimension > 4
         input_shapes = []
         for input_tensor in input_tensors:
             input_shape = input_tensor.shape
@@ -1347,6 +1366,12 @@ class TIDLImport:
                 in_shape = input_shape
                 if self.data_layout == "NHWC":
                     in_shape = (in_shape[0], in_shape[3], in_shape[1], in_shape[2])
+            elif len(input_shape) == 5:
+                in_shape = input_shape
+                if self.data_layout == "NCDHW":
+                    in_shape = (in_shape[0], in_shape[1], in_shape[3], in_shape[4])
+                elif self.data_layout == "NDHWC":
+                    in_shape = (in_shape[0], in_shape[4], in_shape[2], in_shape[3])
             else:
                 print("Subgraph input_shape " + str(input_shape) + " is not supported")
                 return False
@@ -1359,8 +1384,9 @@ class TIDLImport:
             layout = b'NHWC'
             is_nchw = 0
         else:
-            print('data layout ' + self.data_layout + ' is not supported')
-            return False
+            is_nchw = 0
+            # print('data layout ' + self.data_layout + ' is not supported')
+            # return False
 
         descr = (TensorDescriptor * (len(input_zps) + len(output_zps)))()
         for i in range(len(input_zps)):
@@ -1773,6 +1799,8 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.dense")
         self._register_constrained_op("nn.conv2d_transpose")
         self._register_constrained_op("nn.global_avg_pool2d")
+        self._register_constrained_op("nn.adaptive_avg_pool1d") # 1d global average pool
+        self._register_constrained_op("nn.adaptive_avg_pool3d") # 3d global average pool
         self._register_constrained_op("nn.max_pool2d")
         self._register_constrained_op("nn.softmax")
         self._register_constrained_op("concatenate")
@@ -2157,6 +2185,9 @@ class TIOffloadCompiler:
         tidl_od_postproc_inputs = []
         import_lib = None
 
+        total_op_nodes = [node for node in get_all_nodes(mod_orig) if isinstance(node, tvm.ir.Op)]
+        print(f"Total Nodes - {len(total_op_nodes)}")
+
         # TIDL-specific handling of object detection specifics. Skip if user doesn't want TIDL offload
         if (self.max_num_tidl_subgraphs > 0 and self.od_options):
             # with open(os.path.join(self.temp_folder, "relay_graph.input.txt"), "w") as relay_txt:
@@ -2306,6 +2337,8 @@ class TIOffloadCompiler:
 
         num_imported_sgs = len(get_tidl_subgraphs(mod, self.tidl_target))    
         print(f"TVM Relay detected {num_imported_sgs} subgraphs")
+        op_nodes_left = [node for node in get_all_nodes(mod) if isinstance(node, tvm.ir.Op)]
+        print(f"Offloaded Nodes - {len(total_op_nodes) - len(op_nodes_left)}")
         
         #================ Import the graph to TIDL, if caller specified =====================
         if self.max_num_tidl_subgraphs > 0 and self.tidl_tools_path is not None:
