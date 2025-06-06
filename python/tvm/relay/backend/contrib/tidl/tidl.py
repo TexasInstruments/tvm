@@ -1266,6 +1266,8 @@ class TensorDescriptor(ctypes.Structure):
                 ('zp', ctypes.c_int),
                 ('element_type', ctypes.c_int),
                 ('n', ctypes.c_int),
+                ('dim1', ctypes.c_int),
+                ('dim2', ctypes.c_int),
                 ('channel', ctypes.c_int),
                 ('height', ctypes.c_int),
                 ('width', ctypes.c_int),
@@ -1356,25 +1358,12 @@ class TIDLImport:
         input_shapes = []
         for input_tensor in input_tensors:
             input_shape = input_tensor.shape
-            if len(input_shape) == 2:
-                # input is a vector - expand (N,W) to (N,1,1,W)
-                in_shape = (input_shape[0], 1, 1, input_shape[1])
-            elif len(input_shape) == 3:
-                # expand (N,H,W) to (N,1,H,W)
-                in_shape = (input_shape[0], 1, input_shape[1], input_shape[2])
-            elif len(input_shape) == 4:
-                in_shape = input_shape
-                if self.data_layout == "NHWC":
-                    in_shape = (in_shape[0], in_shape[3], in_shape[1], in_shape[2])
-            elif len(input_shape) == 5:
-                in_shape = input_shape
-                if self.data_layout == "NCDHW":
-                    in_shape = (in_shape[0], in_shape[1], in_shape[3], in_shape[4])
-                elif self.data_layout == "NDHWC":
-                    in_shape = (in_shape[0], in_shape[4], in_shape[2], in_shape[3])
+            if len(input_shape) <= 6:
+                # input is a vector - expand (x,y,z) to (1,1,1,x,y,z) - and respectively for other dims < 6
+                in_shape = (1,)*(6-len(input_shape)) + input_shape
             else:
                 print("Subgraph input_shape " + str(input_shape) + " is not supported")
-                return False
+                return False          
             input_shapes.append(in_shape)
 
         if self.data_layout == "NCHW":
@@ -1393,7 +1382,7 @@ class TIDLImport:
             descr[i].scale = input_scale_invs[i]
             descr[i].zp = input_zps[i]
             descr[i].element_type = input_etypes[i]
-            (descr[i].n, descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][0:4]
+            (descr[i].n, descr[i].dim1, descr[i].dim2, descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][0:6]
             descr[i].name = bytes(input_names[i], 'utf-8')
         for i in range(len(output_zps)):
             descr[len(input_zps) + i].scale = output_scale_invs[i]
