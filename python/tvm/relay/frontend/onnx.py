@@ -694,7 +694,12 @@ class Pool(OnnxOpConverter):
                 raise tvm.error.OpAttributeInvalid(msg)
             attr.pop("auto_pad")
 
-        if "storage_order" in attr:
+        # Begin TI
+        #   This TVM ONNX frontend interprets storage_order incorrectly.
+        #   storage_order only affects the optional 2nd output of some pooling
+        #   operators (which TVM doesn't seem to support).
+        if False and "storage_order" in attr:
+        # End TI
             attr["layout"] = onnx_storage_order2layout(
                 attr["storage_order"], dims=(len(input_shape) - 2), op_name=cls.name
             )
@@ -2036,7 +2041,12 @@ class LpPool(OnnxOpConverter):
                 raise tvm.error.OpAttributeInvalid(msg)
             attr.pop("auto_pad")
 
-        if "storage_order" in attr:
+        # Begin TI
+        #   This TVM ONNX frontend interprets storage_order incorrectly.
+        #   storage_order only affects the optional 2nd output of some pooling
+        #   operators (which TVM doesn't seem to support).
+        if False and "storage_order" in attr:
+        # End TI
             attr["layout"] = onnx_storage_order2layout(
                 attr["storage_order"], dims=(len(input_shape) - 2), op_name="LpPool"
             )
