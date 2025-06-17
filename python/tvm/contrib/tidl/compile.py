@@ -277,6 +277,13 @@ def prepare_output_directory(output_dir: str):
 
   if os.environ.get("TIDL_REBUILD_ONLY", None) is not None:
     return
+  
+  if os.environ.get("REUSE_TIDL_ARTIFACTS", None) is not None:
+    if not os.path.isdir(output_dir):
+      print(f'\n\nWARNING: Cannot reuse TIDL artifacts since artifacts folder "{output_dir}" is not present\n')
+      del os.environ["REUSE_TIDL_ARTIFACTS"]
+    else:
+      return
 
   # create the directory if its not already preset
   os.makedirs(output_dir, exist_ok=True)

@@ -2175,8 +2175,6 @@ class TIOffloadCompiler:
 
         # TIDL-specific handling of object detection specifics. Skip if user doesn't want TIDL offload
         if (self.max_num_tidl_subgraphs > 0 and self.od_options):
-            # with open(os.path.join(self.temp_folder, "relay_graph.input.txt"), "w") as relay_txt:
-            #     print(mod_orig.astext(show_meta_data=False), file=relay_txt)
             tidl_od_meta_layers_names_list = self.od_options['object_detection:meta_layers_names_list']
             tidl_od_meta_arch_type = self.od_options['object_detection:meta_arch_type']
             tidl_od_num_graph_outputs = len(mod_orig['main'].body.fields) \
@@ -2215,7 +2213,7 @@ class TIOffloadCompiler:
             #     main() function API will be the same in TIDL_REBUILD_ONLY path.
             mod_orig['main'] = relay.build_module.bind_params_by_name(mod_orig['main'], params)
             mod_orig = relay.transform.DynamicToStatic()(mod_orig)
-            return enable_c7x_mod(self, mod_orig, mod_orig, params, 0), 0
+            return enable_c7x_mod(self, mod_orig, params, 0), 0
 
         # (Backward compatible) if single calibration image/data/dict, convert to list
         if not isinstance(graph_input_list, list):
@@ -2231,14 +2229,8 @@ class TIOffloadCompiler:
         data_layout = find_data_layout(mod_orig)
         has_qnn_ops = find_qnn_ops(mod_orig)
 
-        # Initialize the temp folder
+        # Initialize the temp folder - required only if TIDL offload is enabled
         os.makedirs(self.temp_folder, exist_ok=True)
-        for root, dirs, files in os.walk(self.temp_folder, topdown=False):
-            for f in files:
-                if f != "relay_graph.input.txt":
-                    os.remove(os.path.join(root, f))
-            for d in dirs:
-                os.rmdir(os.path.join(root, d))
 
         # Open TIDL import library. Skip if user doesn't want TIDL offload
         if self.max_num_tidl_subgraphs > 0:
@@ -2320,6 +2312,8 @@ class TIOffloadCompiler:
         with open(os.path.join(self.temp_folder, "relay_graph.import.txt"), "w") as relay_txt:
             print(mod.astext(show_meta_data=False), file=relay_txt)
 
+        mod_final = mod
+        status = 1
         num_imported_sgs = len(get_tidl_subgraphs(mod, self.tidl_target))
         print(f"TVM Relay detected {num_imported_sgs} subgraphs")
 
@@ -2329,55 +2323,62 @@ class TIOffloadCompiler:
         op_nodes_left = [node for node in get_all_nodes(mod) if isinstance(node, tvm.ir.Op)]
         num_offloaded_nodes = len(total_op_nodes) - len(op_nodes_left)
 
-        #================ Import the graph to TIDL, if caller specified =====================
-        if self.max_num_tidl_subgraphs > 0 and self.tidl_tools_path is not None:
-            if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
-                tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
-                                         self.tidl_tools_path, self.artifacts_folder,
-                                         self.tidl_target, self.tidl_platform,
-                                         data_layout, self.tensor_bits,
-                                         self.tidl_calib_flags, self.tidl_bias_calib_iters,
-                                         self.output_feature_16bit_names_list,
-                                         self.params_16bit_names_list,
-                                         self.mixed_precision_factor,
-                                         tidl_od_meta_arch_type,
-                                         tidl_od_num_graph_outputs,
-                                         tidl_od_meta_layers_names_list,
-                                         tidl_od_postproc_inputs)
-                print("Generating subgraph boundary tensors for calibration...")
-                subgraph_tensors_list, relay_quantization, relay_etypes = generate_subgraph_tensors(
-                                 self.tidl_target, mod, params, graph_input_list, self.temp_folder,
-                                 data_layout, has_qnn_ops)
-                print("Importing subgraph into TIDL...")
-                num_imported_sgs = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list,
-                                                     relay_quantization, relay_etypes, has_qnn_ops)
-                _ctypes.dlclose(import_lib._handle)
-                if num_imported_sgs >= 0:
-                    print(f"TIDL import of {num_imported_sgs} Relay IR subgraphs succeeded.")
-                    if num_imported_sgs > 0 and self.tidl_relay_import_debug == "4":
-                        generate_tidl_layer_tensors(self.tidl_target, mod, params,
-                                                    graph_input_list, self.temp_folder,
-                                                    data_layout, has_qnn_ops)
-                    print("TIDL artifacts are stored at " + self.artifacts_folder)
-                    mod_final, status = mod, 1        # TIDL Compilation success
+        if not os.environ.get('REUSE_TIDL_ARTIFACTS'):
+            # If reusing TIDL artifacts, skip creation of TIDLImport object and corresponding calls (these mainly create TIDL subgraph artifacts)
+            # Any TIDL subgraph related artifacts will be reused from tempDir
+            # Only update to IR Module as part of this code is to mark relay expressions corresponding to TIDL layers with let
+            # This is a debug feature, and will not be available in case of artifacts re-use. 
+            # For any debug related runs, compile artifacts from scratch without re-use
+
+            #================ Import the graph to TIDL, if caller specified =====================
+            if self.max_num_tidl_subgraphs > 0 and self.tidl_tools_path is not None:
+                if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
+                    tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
+                                            self.tidl_tools_path, self.artifacts_folder,
+                                            self.tidl_target, self.tidl_platform,
+                                            data_layout, self.tensor_bits,
+                                            self.tidl_calib_flags, self.tidl_bias_calib_iters,
+                                            self.output_feature_16bit_names_list,
+                                            self.params_16bit_names_list,
+                                            self.mixed_precision_factor,
+                                            tidl_od_meta_arch_type,
+                                            tidl_od_num_graph_outputs,
+                                            tidl_od_meta_layers_names_list,
+                                            tidl_od_postproc_inputs)
+                    print("Generating subgraph boundary tensors for calibration...")
+                    subgraph_tensors_list, relay_quantization, relay_etypes = generate_subgraph_tensors(
+                                    self.tidl_target, mod, params, graph_input_list, self.temp_folder,
+                                    data_layout, has_qnn_ops)
+                    print("Importing subgraph into TIDL...")
+                    num_imported_sgs = tidl_import.import_relay_ir(mod, params, subgraph_tensors_list,
+                                                        relay_quantization, relay_etypes, has_qnn_ops)
+                    _ctypes.dlclose(import_lib._handle)
+                    if num_imported_sgs >= 0:
+                        print(f"TIDL import of {num_imported_sgs} Relay IR subgraphs succeeded.")
+                        if num_imported_sgs > 0 and self.tidl_relay_import_debug == "4":
+                            generate_tidl_layer_tensors(self.tidl_target, mod, params,
+                                                        graph_input_list, self.temp_folder, 
+                                                        data_layout, has_qnn_ops)
+                        print("TIDL artifacts are stored at " + self.artifacts_folder)
+                        mod_final, status = mod, 1        # TIDL Compilation success
+                    else:
+                        print("TIDL import of Relay IR graph failed.")
+                        mod_final, status = mod_pre, -1  # TIDL Compilation failure
                 else:
-                    print("TIDL import of Relay IR graph failed.")
-                    mod_final, status = mod_orig, -1  # TIDL Compilation failure
+                    print("TIDL import lib does not exist. TIDL import skipped.")
+                    mod_final, status = mod_pre, 0       # No TIDL compilation
+                print(f"Final number of subgraphs created are : {num_imported_sgs}, Offloaded Nodes - {num_offloaded_nodes}, Total Nodes - {len(total_op_nodes)}")
             else:
-                print("TIDL import lib does not exist. TIDL import skipped.")
-                mod_final, status = mod_orig, 0       # No TIDL compilation
-            print(f"Final number of subgraphs created are : {num_imported_sgs}, Offloaded Nodes - {num_offloaded_nodes}, Total Nodes - {len(total_op_nodes)}")
-        else:
-            if self.tidl_tools_path is None:
-                print("TIDL tools path is not set. TIDL import skipped.")
-            if self.max_num_tidl_subgraphs == 0:
-                print("max_num_tidl_subgraphs is 0. TIDL import skipped.")
-            mod_final, status = mod_orig, 0           # No TIDL compilation
+                if self.tidl_tools_path is None:
+                    print("TIDL tools path is not set. TIDL import skipped.")
+                if self.max_num_tidl_subgraphs == 0:
+                    print("max_num_tidl_subgraphs is 0. TIDL import skipped.")
+                mod_final, status = mod_pre, 0           # No TIDL compilation
 
         # Build the c7x deployable module that the C7x TVM C runtime can execute
         # This also will invoke C7x optimization passes
         if (self.c7x_codegen > 0):
-            mod_final = enable_c7x_mod(self, mod, mod_pre, params, num_imported_sgs)
+            mod_final = enable_c7x_mod(self, mod_final, params, num_imported_sgs)
 
         return mod_final, status
 
