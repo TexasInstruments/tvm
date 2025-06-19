@@ -1810,6 +1810,7 @@ class TIDLAnnotation:
         # or those for which there are no allow functions.
         self._register_constrained_op("add")
         self._register_constrained_op("nn.bias_add")
+        self._register_constrained_op("subtract")
         self._register_constrained_op("maximum")
         self._register_constrained_op("minimum")
         self._register_constrained_op("transpose")

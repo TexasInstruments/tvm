@@ -121,6 +121,8 @@ class ConvertMaxMinToClip(ExprMutator):
                                                                        max_val.item())
         return super().visit_call(call)
 
+# (deprecated) add layers with addition to a constant were converted to biasadd to get later converted to broadcast layer by tidl
+# now support for all such add layers is added and the below class is not required anymore
 class ConvertBroadcastAddtoBiasAdd(ExprMutator):
 
     def get_broadcasting_constant_axis(self, call : relay.expr.Call):
@@ -282,7 +284,7 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod = relay.transform.InferType()(mod)
     mod['main'] = RemoveIdentityResize().visit(mod['main'])
     mod = relay.transform.InferType()(mod)
-    mod['main'] = ConvertBroadcastAddtoBiasAdd().visit(mod['main'])
+    # mod['main'] = ConvertBroadcastAddtoBiasAdd().visit(mod['main'])
     mod['main'] = ConvertConvStride().visit(mod['main'])
     mod['main'] = TransposeScatterND().visit(mod['main'])
     mod['main'] = MergePadLayer().visit(mod['main'])
