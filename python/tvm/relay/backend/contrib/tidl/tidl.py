@@ -1801,6 +1801,7 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.bias_add")
         self._register_constrained_op("maximum")
         self._register_constrained_op("minimum")
+        self._register_constrained_op("transpose")
         self._register_constrained_op("multiply")
         self._register_constrained_op("divide")
         self._register_constrained_op("split")
@@ -2353,7 +2354,7 @@ class TIOffloadCompiler:
                                                      relay_quantization, relay_etypes, has_qnn_ops)
                 _ctypes.dlclose(import_lib._handle)
                 if num_imported_sgs >= 0:
-                    print(f"TIDL import of {num_imported_sgs} Relay IR subgraphs succeeded.")
+                    print(f"TIDL import of {1 if not len(op_nodes_left) else 0} Relay IR subgraphs succeeded.")
                     if num_imported_sgs > 0 and self.tidl_relay_import_debug == "4":
                         generate_tidl_layer_tensors(self.tidl_target, mod, params,
                                                     graph_input_list, self.temp_folder,

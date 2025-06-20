@@ -247,6 +247,19 @@ class TransposeScatterND(ExprMutator):
 
         return super().visit_call(call)
 
+class MergePadLayer(ExprMutator):
+    """
+    Merges pad layer with the following conv2d layer
+    """
+    def visit_call(self, call):
+        if call.op.name == 'nn.conv2d':
+            if isinstance(call.args[0], relay.expr.Call) and call.args[0].op.name == 'nn.pad':
+                pad_width = call.args[0].attrs.pad_width
+                attrs = {key: call.attrs[key] for key in call.attrs.keys()}
+                attrs['padding'] = (pad_width[2][0], pad_width[3][0], pad_width[2][1], pad_width[3][1]) # tlbr
+                return relay.nn.conv2d(super().visit(call.args[0].args[0]), super().visit(call.args[1]), **attrs)
+        return super().visit_call(call)
+
 def prepare_graph_for_partitioning(mod_orig: tvm.IRModule, 
                                   has_qnn_ops: bool, 
                                   params : typing.Dict[str, tvm.nd.NDArray]) -> tvm.IRModule:
@@ -271,6 +284,7 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod['main'] = ConvertBroadcastAddtoBiasAdd().visit(mod['main'])
     mod['main'] = ConvertConvStride().visit(mod['main'])
     mod['main'] = TransposeScatterND().visit(mod['main'])
+    mod['main'] = MergePadLayer().visit(mod['main'])
 
 
     if has_qnn_ops:
