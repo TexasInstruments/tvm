@@ -47,6 +47,9 @@ from .prepare import prune_graph_for_ODPostProc_inputs
 
 tidl_annotations_registered = False
 
+# Macros
+TIDL_DIM_MAX = 6
+
 import tvm._ffi
 
 from . import _ffi_tidl_api
@@ -1358,12 +1361,12 @@ class TIDLImport:
         input_shapes = []
         for input_tensor in input_tensors:
             input_shape = input_tensor.shape
-            if len(input_shape) <= 6:
-                # input is a vector - expand (x,y,z) to (1,1,1,x,y,z) - and respectively for other dims < 6
-                in_shape = (1,)*(6-len(input_shape)) + input_shape
+            if len(input_shape) <= TIDL_DIM_MAX:
+                # input is a vector - expand (x,y,z) to (1,1,1,x,y,z) - and respectively for other dims < TIDL_DIM_MAX
+                in_shape = (1,)*(TIDL_DIM_MAX-len(input_shape)) + input_shape
             else:
                 print("Subgraph input_shape " + str(input_shape) + " is not supported")
-                return False          
+                return False
             input_shapes.append(in_shape)
 
         if self.data_layout == "NCHW":
@@ -1373,16 +1376,15 @@ class TIDLImport:
             layout = b'NHWC'
             is_nchw = 0
         else:
-            is_nchw = 0
-            # print('data layout ' + self.data_layout + ' is not supported')
-            # return False
+            print('data layout ' + self.data_layout + ' is not supported')
+            return False
 
         descr = (TensorDescriptor * (len(input_zps) + len(output_zps)))()
         for i in range(len(input_zps)):
             descr[i].scale = input_scale_invs[i]
             descr[i].zp = input_zps[i]
             descr[i].element_type = input_etypes[i]
-            (descr[i].n, descr[i].dim1, descr[i].dim2, descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][0:6]
+            (descr[i].n, descr[i].dim1, descr[i].dim2, descr[i].channel, descr[i].height, descr[i].width) = input_shapes[i][0:TIDL_DIM_MAX]
             descr[i].name = bytes(input_names[i], 'utf-8')
         for i in range(len(output_zps)):
             descr[len(input_zps) + i].scale = output_scale_invs[i]
@@ -1535,9 +1537,18 @@ class TIDLImport:
         import_fail = -1
 
         # Put some information about the graph in the info file passed to the TIDL codegen
+        self.info_dict['tvm'] = {
+           'is_nchw'   : 1 if self.data_layout == "NCHW" else 0,
+           'macs'      : relay.analysis.get_total_mac_number(mod['main']),
+           'nodes'     : {},
+        }
         self.info_dict['subgraphs'] = []
 
         tidl_subgraphs = get_tidl_subgraphs(mod, self.tidl_target)
+
+        for node in get_all_nodes(mod):
+             if isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.op.Op):
+                self._tally_op(str(node.op), self.info_dict['tvm']['nodes'])
 
         # For each TIDL subgraph, import to TIDL and calibrate
         for tidl_subgraph in tidl_subgraphs:
@@ -1912,13 +1923,6 @@ class TIDLAnnotation:
         ### TIDL does not support scalar as the first argument
         if isinstance(expr.args[0].checked_type, relay.TensorType) and \
                   len(expr.args[0].checked_type.shape) == 0:
-            return False
-
-        ### TIDL batch proecessing does not support all types of layers
-        if op_name in ["image.resize2d", "strided_slice"]:
-            if expr.args[0].checked_type.shape[0] > 1:
-                return False
-        if op_name == "image.resize2d" and not self._check_tidl_optimized_resize(expr):
             return False
 
         if self.import_lib is None:
@@ -2325,11 +2329,15 @@ class TIOffloadCompiler:
         with open(os.path.join(self.temp_folder, "relay_graph.import.txt"), "w") as relay_txt:
             print(mod.astext(show_meta_data=False), file=relay_txt)
 
-        num_imported_sgs = len(get_tidl_subgraphs(mod, self.tidl_target))    
+        num_imported_sgs = len(get_tidl_subgraphs(mod, self.tidl_target))
         print(f"TVM Relay detected {num_imported_sgs} subgraphs")
+
+        # Check the number of Op nodes left in Module main function
+        # tidl_subgraph_x is a GlobalVar, and is not counted as an Op node
+        # Number of offloaded is (total op nodes - left op nodes)
         op_nodes_left = [node for node in get_all_nodes(mod) if isinstance(node, tvm.ir.Op)]
-        print(f"Offloaded Nodes - {len(total_op_nodes) - len(op_nodes_left)}")
-        
+        num_offloaded_nodes = len(total_op_nodes) - len(op_nodes_left)
+
         #================ Import the graph to TIDL, if caller specified =====================
         if self.max_num_tidl_subgraphs > 0 and self.tidl_tools_path is not None:
             if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
@@ -2354,7 +2362,7 @@ class TIOffloadCompiler:
                                                      relay_quantization, relay_etypes, has_qnn_ops)
                 _ctypes.dlclose(import_lib._handle)
                 if num_imported_sgs >= 0:
-                    print(f"TIDL import of {1 if not len(op_nodes_left) else 0} Relay IR subgraphs succeeded.")
+                    print(f"TIDL import of {num_imported_sgs} Relay IR subgraphs succeeded.")
                     if num_imported_sgs > 0 and self.tidl_relay_import_debug == "4":
                         generate_tidl_layer_tensors(self.tidl_target, mod, params,
                                                     graph_input_list, self.temp_folder,
@@ -2367,6 +2375,7 @@ class TIOffloadCompiler:
             else:
                 print("TIDL import lib does not exist. TIDL import skipped.")
                 mod_final, status = mod_orig, 0       # No TIDL compilation
+            print(f"Final number of subgraphs created are : {num_imported_sgs}, Offloaded Nodes - {num_offloaded_nodes}, Total Nodes - {len(total_op_nodes)}")
         else:
             if self.tidl_tools_path is None:
                 print("TIDL tools path is not set. TIDL import skipped.")
