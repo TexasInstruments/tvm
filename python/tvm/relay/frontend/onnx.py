@@ -4036,6 +4036,84 @@ class Resize(OnnxOpConverter):
             size = _op.cast(shape_of(inputs[0]), scale_dtype) * scale
 
         return cls.v11_13_common(inputs, size, attr, params)
+    
+    # Begin TI
+    # Unit test cases cover tests with Resize Opset v19
+    # 'antialias' and 'axes' attribute have been added in Opset v18
+    # The implementation of Resize Opset v18 is identical to Opset v19
+    # Adding a workaround support for both those attributes
+    @classmethod
+    def _impl_v18(cls, inputs, attr, params):
+        scale = inputs[2]
+        size = inputs[3]
+
+        axes = attr.get("axes", None)
+
+        if axes is not None:
+            if scale is not None:
+                scale = cls.expand_scale(scale, len(infer_shape(inputs[0])), axes=axes)
+            
+            if size is not None:
+                size = cls.expand_size(size, inputs[0], axes)
+
+        antialias = attr.get("antialias", 0)
+        if antialias:
+            raise tvm.error.OpAttributeInvalid(
+                f'[Unsupported] Attribute "antialias={antialias}" is not supported in Resize operator.'
+            )
+
+        keep_aspect_ratio_policy = attr.get("keep_aspect_ratio_policy", b"stretch").decode("ascii")
+        if keep_aspect_ratio_policy != "stretch":
+            raise tvm.error.OpAttributeInvalid(
+                f'[Unsupported] Value `{keep_aspect_ratio_policy}` in attribute "keep_aspect_ratio_policy" of '
+                'operator Resize is not supported.'
+            )
+
+        # ROI with axes not implemented
+        if size is not None:
+            assert scale is None, "One of scale or size should be passed, not both."
+        else:
+            scale_type = infer_type(scale)
+            scale_shape = scale_type.checked_type.shape
+            scale_dtype = scale_type.checked_type.dtype
+            assert len(scale_shape) != 0, "One of scale or size should be passed."
+            size = _op.cast(shape_of(inputs[0]), scale_dtype) * scale
+        
+        nc_scale = fold_constant(
+            _op.strided_slice(
+                _op.divide(
+                    _op.cast(size, dtype="float32"),
+                    _op.const(list(infer_shape(inputs[0])), dtype="float32")
+                ),
+                [0], [2]
+            )
+        ).data.numpy().tolist()
+        if nc_scale != [1.0, 1.0] or nc_scale != [1, 1]:
+            raise tvm.error.OpAttributeInvalid(
+                f'[Unsupported] Cannot resize for N and C axes, got {nc_scale} resize ratio for N, C.'
+            )
+
+        return cls.v11_13_common(inputs, size, attr, params)
+
+    # This function will expand the input attribute to match the input[0] dimensions according to axes provided
+    def expand_scale(attr, dims, axes):
+        return fold_constant(
+            relay.scatter_nd(
+                relay.const([1] * dims, dtype=attr.data.dtype),
+                relay.const([axes], dtype="int64"),
+                attr
+            )
+        )
+    
+    def expand_size(attr, X, axes):
+        return fold_constant(
+            relay.scatter_nd(
+                relay.const(list(infer_shape(X)), dtype=attr.data.dtype),
+                relay.const([axes], dtype="int64"),
+                attr
+            )
+        )
+    # End TI
 
     @classmethod
     def v11_13_common(cls, inputs, size, attr, params):

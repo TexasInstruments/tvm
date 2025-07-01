@@ -96,7 +96,7 @@ class RemoveIdentityResize(ExprMutator):
             old_shape = call.args[0].checked_type.shape
             old_h, old_w = old_shape[2:4] if call.attrs.layout == "NCHW" else old_shape[1:3]
             if old_h == new_h and old_w == new_w:
-               print("\n[TVM Optimize] Removing identity resize2d operator")
+               print("\n[TVM Optimize]: Removing identity resize2d operator")
                return super().visit(call.args[0])
         return super().visit_call(call)
 
