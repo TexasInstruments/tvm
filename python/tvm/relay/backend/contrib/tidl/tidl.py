@@ -1369,10 +1369,10 @@ class TIDLImport:
                 return False
             input_shapes.append(in_shape)
 
-        if self.data_layout == "NCHW":
+        if self.data_layout in ["NCHW", "NCW"]:
             layout = b'NCHW'
             is_nchw = 1
-        elif self.data_layout == "NHWC":
+        elif self.data_layout in ["NHWC", "NWC"]:
             layout = b'NHWC'
             is_nchw = 0
         else:
