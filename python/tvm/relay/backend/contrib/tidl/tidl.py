@@ -1752,7 +1752,6 @@ class TIDLAnnotation:
 
     def register_allowed_ops(self):
         """ TIDL operators registration """
-
         # Can't register annotations more than once.
         global tidl_annotations_registered
         if tidl_annotations_registered:
@@ -1808,6 +1807,7 @@ class TIDLAnnotation:
 
         # Register J7 specific operators, or those supported standalone by J7,
         # or those for which there are no allow functions.
+        self._register_constrained_op("abs")
         self._register_constrained_op("add")
         self._register_constrained_op("nn.bias_add")
         self._register_constrained_op("subtract")
