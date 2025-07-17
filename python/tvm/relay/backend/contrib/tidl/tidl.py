@@ -1812,6 +1812,7 @@ class TIDLAnnotation:
         self._register_constrained_op("add")
         self._register_constrained_op("asin")
         self._register_constrained_op("asinh")
+        self._register_constrained_op("atan")
         self._register_constrained_op("nn.bias_add")
         self._register_constrained_op("subtract")
         self._register_constrained_op("maximum")
