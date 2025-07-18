@@ -4371,22 +4371,38 @@ class Clip(OnnxOpConverter):
 
     @classmethod
     def _impl_v11(cls, inputs, attr, params):
-        if len(inputs) == 3 and isinstance(inputs[2], _expr.Constant):
-            attr["max"] = inputs[2].data.numpy().item()
-            inputs = inputs[0:2]
-        if len(inputs) >= 2 and isinstance(inputs[1], _expr.Constant):
-            attr["min"] = inputs[1].data.numpy().item()
+        # Begin TI : Fix the Clip operator implementation for variable number of inputs case
+        # that is, when either max or min is not present
+        if 1:
+            if len(inputs) == 3 and isinstance(inputs[2], _expr.Constant):
+                attr["max"] = inputs[2].data.numpy().item()
+            if len(inputs) >= 2 and isinstance(inputs[1], _expr.Constant):
+                attr["min"] = inputs[1].data.numpy().item()
             inputs = inputs[0:1]
-        if "min" in attr and "max" in attr:
+            if "min" not in attr:
+                attr["min"] = -np.inf
+            if "max" not in attr:
+                attr["max"] = np.inf
             return Clip.convert_attributes(inputs, attr, params)
+        # End TI
 
-        assert len(inputs) <= 3, "Clip-11 takes up to 3 inputs, input, min, max"
-        result = inputs[0]
-        for i, op in enumerate([_op.tensor.maximum, _op.tensor.minimum]):
-            if i < len(inputs) - 1:
-                if inputs[i + 1] is not None:
-                    result = op(result, inputs[i + 1])
-        return result
+        else:
+            if len(inputs) == 3 and isinstance(inputs[2], _expr.Constant):
+                attr["max"] = inputs[2].data.numpy().item()
+                inputs = inputs[0:2]
+            if len(inputs) >= 2 and isinstance(inputs[1], _expr.Constant):
+                attr["min"] = inputs[1].data.numpy().item()
+                inputs = inputs[0:1]
+            if "min" in attr and "max" in attr:
+                return Clip.convert_attributes(inputs, attr, params)
+
+            assert len(inputs) <= 3, "Clip-11 takes up to 3 inputs, input, min, max"
+            result = inputs[0]
+            for i, op in enumerate([_op.tensor.maximum, _op.tensor.minimum]):
+                if i < len(inputs) - 1:
+                    if inputs[i + 1] is not None:
+                        result = op(result, inputs[i + 1])
+            return result
 
 
 class Softplus(OnnxOpConverter):
