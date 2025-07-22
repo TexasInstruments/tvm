@@ -524,6 +524,12 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    * When the module does not include linked parmeters, module_lookup_linked_param_ will be nullptr.
    */
   bool module_lookup_linked_param_valid_;
+
+  // timestamp and ddr statistics variables
+  /*! \brief Start time of model execution in nanoseconds */
+  uint64_t run_start_ts{0};
+  /*! \brief End time of model execution in nanoseconds. */
+  uint64_t run_end_ts{0};
 };
 
 std::vector<Device> GetAllDevice(const TVMArgs& args, int dev_start_arg);

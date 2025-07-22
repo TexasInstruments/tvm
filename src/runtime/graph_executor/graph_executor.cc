@@ -23,6 +23,7 @@
 #include "graph_executor.h"
 
 #include <tvm/runtime/container/map.h>
+#include <tvm/runtime/container/array.h>
 #include <tvm/runtime/container/string.h>
 #include <tvm/runtime/data_type.h>
 #include <tvm/runtime/device_api.h>
@@ -77,6 +78,12 @@ static uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
  * \brief Run all the operations one by one.
  */
 void GraphExecutor::Run() {
+  // get start timestamp
+  struct timespec ts;
+  unsigned long long nanosec_in_one_sec = 1000000000ull;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  run_start_ts = (uint64_t)ts.tv_sec * (uint64_t)nanosec_in_one_sec + (uint64_t)ts.tv_nsec;
+
   int tvm_rt_debug_level = 0;
   int tvm_rt_trace_node = -1;
   char *env_var;
@@ -128,6 +135,10 @@ void GraphExecutor::Run() {
     t_g = _TSC_read() - t_g;  /* Nanoseconds */
     tvm_rt_trace_finalize(t_g);
   }
+
+  // get end timestamp
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  run_end_ts = (uint64_t)ts.tv_sec * (uint64_t)nanosec_in_one_sec + (uint64_t)ts.tv_nsec;
 }
 
 /*!
@@ -878,6 +889,64 @@ PackedFunc GraphExecutor::GetFunction(const String& name, const ObjectPtr<Object
       input_info.Set("shape", shape_info);
       input_info.Set("dtype", dtype_info);
       *rv = input_info;
+    });
+  } else if (name == "get_benchmark_data") {
+    return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
+      // define a vector of tuples (string, uint64_t) to hold the
+      // benchmark data.
+      std::vector<std::pair<std::string, uint64_t>> benchmarks;
+
+      // run duration timestamps
+      benchmarks.push_back(std::make_pair<std::string, uint64_t>("ts:run_start", uint64_t(run_start_ts)));
+      benchmarks.push_back(std::make_pair<std::string, uint64_t>("ts:run_end", uint64_t(run_end_ts)));
+
+      // get subgraph timestamps
+      int subgraph_id = 0;
+      std::string custom_data_prefix = "tidl_get_custom_data_";
+
+      while(true) {
+          std::string key = custom_data_prefix + std::to_string(subgraph_id);
+          PackedFunc func = module_.GetFunction(key, true);
+          if (func == nullptr) {
+              break;
+          }
+
+          // call the get_custom_data function for the subgraph id
+          TVMRetValue result = func();
+          if (result.type_code() == kTVMNullptr) {
+              break;
+          }
+
+          std::vector<uint64_t>* v = static_cast<std::vector<uint64_t>*>(result.operator void*());
+          std::string annots[] = {
+              "copy_in_start", "copy_in_end",
+              "proc_start", "proc_end",
+              "copy_out_start", "copy_out_end"
+          };
+
+          int index = 0;
+          for (auto it = v->begin(); it != v->end(); it++, index++) {
+              benchmarks.push_back(std::make_pair<std::string, uint64_t>(
+                                       "ts:subgraph_" + std::to_string(subgraph_id) + "_" + annots[index],
+                                       uint64_t(*it)));
+          }
+          delete v;
+          subgraph_id++;
+      }
+
+      // convert to arrays for return value
+      Array<String> tvm_annotations;
+      Array<ObjectRef> tvm_values;
+
+      for (const auto& pair : benchmarks) {
+        tvm_annotations.push_back(String(pair.first));
+        tvm_values.push_back(String(std::to_string(pair.second)));
+      }
+
+      Map<String, ObjectRef> result;
+      result.Set("annotations", tvm_annotations);
+      result.Set("values", tvm_values);
+      *rv = result;
     });
   } else {
     return PackedFunc();
