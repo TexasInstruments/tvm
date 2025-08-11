@@ -25,23 +25,23 @@ from tvm import relay
 from tvm.runtime import NDArray
 from tvm.contrib.tidl.c7x import supported_platform
 
-def convert_model_to_relay_IR(model_path: str,
-                              input_details: List[Dict[str, Any]]):
+def convert_model_to_relay_IR(model_path: str, 
+                              input_shape_dict: List[Dict[str, Any]]):
   """Convert model from ONNX/tflite frameworks to Relay IR format"""
   ### Checks ###
-  if model_path is None or input_details is None:
+  if model_path is None or input_shape_dict is None:
     print("Model path and input details are not provided")
     return None, None
   if not os.path.exists(model_path):
     print("Model path does not exist")
     return None, None
-
+  
   ### Get type of model ####
   model_type = os.path.splitext(model_path)[1][1:]
   if model_type not in ['tflite', 'onnx']:
       print("ERROR : Only tflite/onnx models can be converted to Relay IR internally. Please convert your model to Relay IR and pass converted 'mod', 'params' arguments to compile_model()")
       return None, None
-
+  
   if model_type == 'onnx':
     import onnx
     try:
@@ -51,7 +51,7 @@ def convert_model_to_relay_IR(model_path: str,
       return None, None
     
     mod, params = relay.frontend.from_onnx(
-        onnx_model, shape={inp_d['name']: inp_d['shape'] for inp_d in input_details}
+        onnx_model, shape=input_shape_dict
     )
   elif model_type == 'tflite':
     import tflite
@@ -64,8 +64,7 @@ def convert_model_to_relay_IR(model_path: str,
 
     mod, params = relay.frontend.from_tflite(
         tflite_model,
-        shape_dict={inp_d['name']: inp_d['shape'] for inp_d in input_details},
-        dtype_dict={inp_d['name']: inp_d['type'] for inp_d in input_details},
+        shape_dict=input_shape_dict
     )
   return mod, params
 
@@ -75,7 +74,7 @@ def compile_model(platform: str,
                   delegate_options: Dict[str, Any],
                   calibration_input_list: List[Dict[str, NDArray]],
                   model_path: str = None,
-                  input_details: List[Dict[str, Any]] = None,
+                  input_shape_dict: List[Dict[str, Any]] = None,              
                   mod: tvm.IRModule = None,
                   params: Dict[str, NDArray] = None
                   ) -> bool:
@@ -128,8 +127,8 @@ def compile_model(platform: str,
 Setting 'c7x_codegen' = 0 for PC artifacts generation\n")
 
   if mod is None or params is None:
-    mod, params = convert_model_to_relay_IR(model_path, input_details)
-
+    mod, params = convert_model_to_relay_IR(model_path, input_shape_dict)
+  
     if mod is None or params is None:
       print("Conversion to Relay IR format failed")
       return False
