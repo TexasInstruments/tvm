@@ -1794,6 +1794,7 @@ class TIDLAnnotation:
         self._register_constrained_op("transpose")
         self._register_constrained_op("multiply")
         self._register_constrained_op("divide")
+        self._register_constrained_op("sin")
         self._register_constrained_op("split")
         self._register_constrained_op("strided_slice")
         self._register_constrained_op("image.resize2d")
