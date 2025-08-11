@@ -71,12 +71,13 @@ def find_data_layout(mod):
                 continue
             if node.op.name == 'nn.conv2d' or node.op.name == 'qnn.conv2d':
                 data_layout = node.attrs.data_layout
+                break
             else:
                 try:
                     data_layout = node.attrs.layout
+                    break
                 except:
                     pass
-            break
     return data_layout
 
 def find_qnn_ops(mod):
@@ -1356,27 +1357,36 @@ class TIDLImport:
         True if initialization succeeds or False if initialization fails
         """
 
-        # TODO: Allow inputs of dimension > 4
+        # Populate input shapes for communication with TIDL
         input_shapes = []
         for input_tensor in input_tensors:
             input_shape = input_tensor.shape
-            if len(input_shape) <= TIDL_DIM_MAX:
-                # input is a vector - expand (x,y,z) to (1,1,1,x,y,z) - and respectively for other dims < TIDL_DIM_MAX
-                in_shape = (1,)*(TIDL_DIM_MAX-len(input_shape)) + input_shape
-            else:
+            if len(input_shape) > TIDL_DIM_MAX:
                 print("Subgraph input_shape " + str(input_shape) + " is not supported")
                 return False
+            if self.data_layout in ["NCHW", "NCW"]:
+                # Populate shapes consistent with TI-ONNXRT
+                is_nchw = 1
+                # input is a vector - expand (x,y,z) to (1,1,1,x,y,z) - and respectively for other dims < TIDL_DIM_MAX
+                in_shape = (1,)*(TIDL_DIM_MAX-len(input_shape)) + input_shape
+            elif self.data_layout in ["NHWC", "NWC"]: 
+                # Populate shapes consistent with TI-TfLiteRT
+                is_nchw = 0
+                if len(input_shape) == 2:
+                    # input is a vector - expand (N,W) to (N,1,1,W)
+                    in_shape = (input_shape[0], 1, 1, 1, 1, input_shape[1])
+                elif len(input_shape) == 3:
+                    # expand (N,H,W) to (N,1,H,W)
+                    in_shape = (input_shape[0], 1, 1, 1, input_shape[1], input_shape[2])
+                elif len(input_shape) == 4:
+                    in_shape = input_shape
+                    if self.data_layout == "NHWC":
+                        in_shape = (in_shape[0], 1, 1, in_shape[3], in_shape[1], in_shape[2])
+            else:
+                print('data layout ' + self.data_layout + ' is not supported')
+                return False            
+            
             input_shapes.append(in_shape)
-
-        if self.data_layout in ["NCHW", "NCW"]:
-            layout = b'NCHW'
-            is_nchw = 1
-        elif self.data_layout in ["NHWC", "NWC"]:
-            layout = b'NHWC'
-            is_nchw = 0
-        else:
-            print('data layout ' + self.data_layout + ' is not supported')
-            return False
 
         descr = (TensorDescriptor * (len(input_zps) + len(output_zps)))()
         for i in range(len(input_zps)):
