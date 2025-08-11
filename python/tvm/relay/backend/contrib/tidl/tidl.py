@@ -1844,6 +1844,7 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.instance_norm")
         self._register_constrained_op("erf")
         self._register_constrained_op("exp")
+        self._register_constrained_op("squeeze")
 
         tidl_annotations_registered = True
 
