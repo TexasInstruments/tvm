@@ -39,7 +39,6 @@ from tvm.relay.function import Function
 from tvm.contrib import graph_executor
 from tvm.contrib.tidl.c7x import supported_platform, platform_map
 #import tvm.relay.op.contrib.tidl as tidl_annotation
-from .reduce_subgraph_size import reduce_subgraph_size
 from .visualize import visualize_relay_graph
 from .build_c7x_mod import enable_c7x_mod
 from .prepare import prepare_graph_for_partitioning
@@ -1744,9 +1743,8 @@ class TIDLImport:
         return CallMarker(subgraph_id, all_nodes_tidl, layer_info).visit(subgraph)
 
 class TIDLAnnotation:
-    def __init__(self, platform, version, import_lib, denylist=None):
+    def __init__(self, platform, import_lib, denylist=None):
         self.tidl_platform = platform
-        self.version = version
         self.import_lib = import_lib
         self.denylist = denylist
 
@@ -2055,41 +2053,48 @@ class TIOffloadCompiler:
         'object_detection:meta_arch_type',
     ]
 
-    def __init__(self, platform="J7", version="7.3", max_num_layers=225, max_total_memory_mb=448, **kwargs):
-        self.version = version
-        if supported_platform(platform): # and float(version) >= 7.3:
-            # Set default values for J7, PSDK 7.0 or newer
+    def __init__(self, platform="J7", tidl_tools_path=None, enable_tidl_offload=True, delegate_options={}):
+        if supported_platform(platform):
+            # TODO: Ideally this entire code should move to TIDL or reuse existing TIDL code
+            # TVM should only be pass through for options, TIDL should interpret and 
+            # parse the options, set default values, etc. as needed)
             self.tidl_platform = platform_map(platform)
             self.tidl_target = "tidl"
-            self.tidl_tools_path = None
+            self.tidl_tools_path = tidl_tools_path
             self.artifacts_folder = None
             self.debug_level = None
             self.tensor_bits = 8
-            self.max_num_tidl_subgraphs = 16
+            self.max_num_tidl_subgraphs = (16 if enable_tidl_offload else 0)
             self.deny_list = []
             self.accuracy_level = 1
-            self.c7x_codegen = 1
+            self.c7x_codegen = 0
             self.advanced_options = {}
             self.od_options = {}
             self.ti_internal_nc_flag = (0x1 | 0x40 | 0x200 | 0x400)
-            # options dict can be used to unify with option names used by ONNXRT and TFLiteRT flow
-            # e.g. self.options['object_detection:meta_layers_names_list'] = None
-            # e.g. self.options['object_detection:meta_arch_type'] = None
 
-            # Read arguments provided through regular args
-            self.max_num_layers = max_num_layers
-            self.max_total_memory_mb = max_total_memory_mb
-            # Read arguments provided through **kwargs
-            # Unified names as TFLite runtime and ONNX runtime
-            #   see ti_dl/utils/tidlModelImport/tidl_{tfLiteRtImport_delegate, onnxRtImport_EP}.cpp
-            for key in ('tidl_tools_path', 'artifacts_folder', 'tensor_bits', 'debug_level',
-                        'max_num_tidl_subgraphs', 'deny_list', 'accuracy_level',
-                        'c7x_codegen', 'advanced_options',
-                       ):
-                if key in kwargs:
-                    setattr(self, key, kwargs[key])
+            # tvm need advanced options as a dict
+            # convert the entries starting with "advanced_options:" to a dict
+            advanced_options_prefix = 'advanced_options:'
+            object_detection_prefix = 'object_detection:'
+
+            keys_to_remove = []
+            # Move options with prefix 'advanced_options:' or 'object_detection:' from delegate_options to advanced_options
+            for k, v in delegate_options.items():
+                if(k.startswith(advanced_options_prefix) or k.startswith(object_detection_prefix)):
+                    keys_to_remove.append(k)
+                    self.advanced_options[k.replace(advanced_options_prefix,'')] = v
+            for key in keys_to_remove:
+                delegate_options.pop(key)
+
+            for key in delegate_options.keys():
+                setattr(self, key, delegate_options[key])
+            for key in self.advanced_options.keys():
+                setattr(self, key, self.advanced_options[key])
+
             self.tidl_calib_tool = os.path.join(self.tidl_tools_path, "PC_dsp_test_dl_algo.out")
             self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
+
+            self.max_num_tidl_subgraphs = (delegate_options['max_num_subgraphs'] if 'max_num_subgraphs' in delegate_options else self.max_num_tidl_subgraphs)
 
             # Tensor bits known here - update default calibration options with defaults based on tensor bits
             self.default_advanced_options_for_calibration.update(self.default_calib_options_based_on_tensor_bits[self.tensor_bits])
@@ -2247,7 +2252,7 @@ class TIOffloadCompiler:
                 import_lib = None # Continue with graph annotation and partition for CI testing
 
             # Register TIDL annotation functions
-            tidl_annotation = TIDLAnnotation(self.tidl_platform, self.version, import_lib,
+            tidl_annotation = TIDLAnnotation(self.tidl_platform, import_lib,
                                              self.deny_list)
             tidl_annotation.register_allowed_ops()
 

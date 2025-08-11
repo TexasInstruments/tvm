@@ -46,10 +46,10 @@ def convert_model_to_relay_IR(model_path: str,
     import onnx
     try:
       onnx_model = onnx.load(model_path)
-    except:
-      print("Loading ONNX model failed")
+    except Exception as e:
+      print(f"ERROR: Loading ONNX model failed with exception - {e}")
       return None, None
-
+    
     mod, params = relay.frontend.from_onnx(
         onnx_model, shape={inp_d['name']: inp_d['shape'] for inp_d in input_details}
     )
@@ -58,8 +58,8 @@ def convert_model_to_relay_IR(model_path: str,
     try:
       with open(model_path, "rb") as fp:
           tflite_model = tflite.Model.GetRootAsModel(fp.read(), 0)
-    except:
-      print("Loading tflite model failed")
+    except Exception as e:
+      print(f"ERROR: Loading Tflite model failed with exception - {e}")
       return None, None
 
     mod, params = relay.frontend.from_tflite(
@@ -72,7 +72,6 @@ def convert_model_to_relay_IR(model_path: str,
 def compile_model(platform: str,
                   compile_for_device: bool,
                   enable_tidl_offload: bool,
-                  enable_c7x_codegen: bool,
                   delegate_options: Dict[str, Any],
                   calibration_input_list: List[Dict[str, NDArray]],
                   model_path: str = None,
@@ -111,20 +110,22 @@ def compile_model(platform: str,
       Input Relay IR module.
   params : (Optional)
       The parameter dict used by Relay.
-
+  
   User expected to provide either (model_path, input_details) or (mod, params) of the optional arguments
-
+  
   Return
   ------
   True for success, False for failure.
   """
-
-  artifacts_folder = delegate_options["artifacts_folder"]
-  tidl_tensor_bits = delegate_options["tensor_bits"]
-
-  if((enable_c7x_codegen == True) and (compile_for_device == False)):
-    compile_for_device = True
-    print("\n\nWarning: 'enable_c7x_codegen' == True is applicable only for target device build and not for PC build \nDefaulting 'compile_for_device' to True\n")
+  
+  if "advanced_options:c7x_codegen" in delegate_options:
+    c7x_codegen = delegate_options["advanced_options:c7x_codegen"]
+    enable_c7x_codegen = (c7x_codegen > 0)
+    if((enable_c7x_codegen) and (not compile_for_device)):
+      enable_c7x_codegen = False
+      delegate_options["advanced_options:c7x_codegen"] = 0
+      print("\n\n*** WARNING: 'c7x_codegen' > 0 is applicable only for target device build and not for PC build \n\
+Setting 'c7x_codegen' = 0 for PC artifacts generation\n")
 
   if mod is None or params is None:
     mod, params = convert_model_to_relay_IR(model_path, input_details)
@@ -132,33 +133,17 @@ def compile_model(platform: str,
     if mod is None or params is None:
       print("Conversion to Relay IR format failed")
       return False
-
-  # If TIDL offload is enabled, use TIOffloadCompiler to partition relay graph
-  # for offload subgraphs to TIDL
-  # If C7x code generation is enabled, use TIOffloadCompiler to generate C7x
-  # code for TIDL unsupported layers
-  if enable_tidl_offload or enable_c7x_codegen:
-    from tvm.relay.backend.contrib.tidl import tidl
-
-    # tvm need advanced options as a dict
-    # convert the entries starting with advanced_options: to a dict
-    advanced_options_prefix = 'advanced_options:'
-    object_detection_prefix = 'object_detection:'
-    advanced_options = {k.replace(advanced_options_prefix,''):v for k,v in delegate_options.items() \
-                        if (k.startswith(advanced_options_prefix) or k.startswith(object_detection_prefix))}
-
-  status = compile_relay(mod = mod,
-                        params = params,
-                        calibration_input_list = calibration_input_list,
-                        platform = platform,
+    
+  status = compile_relay(mod = mod, 
+                        params = params, 
+                        calibration_input_list = calibration_input_list, 
+                        platform = platform, 
                         compile_for_device = compile_for_device,
                         enable_tidl_offload = enable_tidl_offload,
                         enable_c7x_codegen = enable_c7x_codegen,
-                        artifacts_folder = artifacts_folder,
-                        tidl_tensor_bits = tidl_tensor_bits,
-                        advanced_options = advanced_options)
+                        delegate_options=delegate_options)
   return status
-
+  
 
 
 def compile_relay(mod: tvm.IRModule,
@@ -168,9 +153,7 @@ def compile_relay(mod: tvm.IRModule,
                   compile_for_device: bool,
                   enable_tidl_offload: bool,
                   enable_c7x_codegen: bool,
-                  artifacts_folder: str,
-                  tidl_tensor_bits: int = 8,
-                  advanced_options: Dict[str, Any] = None) -> bool:
+                  delegate_options: Dict[str, Any] = None) -> bool:
   """ Compile Relay IR module based on the parameters specified
 
   Parameters
@@ -204,6 +187,12 @@ def compile_relay(mod: tvm.IRModule,
   True for success, False for failure.
   """
 
+  if "artifacts_folder" not in delegate_options:
+    raise Exception("Required option 'artifacts_folder' is not set!")
+  
+  artifacts_folder = delegate_options["artifacts_folder"]
+  tidl_tensor_bits = delegate_options.get("tensor_bits", 8)
+
   assert tidl_tensor_bits in [8, 16, 32]
   assert supported_platform(platform)
 
@@ -223,15 +212,9 @@ def compile_relay(mod: tvm.IRModule,
     from tvm.relay.backend.contrib.tidl import tidl
     ti_offload_compiler = tidl.TIOffloadCompiler(
                                    platform=platform, # TI device category (E.g. J7)
-                                   version="8.4", # Processor SDK version, currently unused
                                    tidl_tools_path=tidl_tools_path,
-                                   artifacts_folder=artifacts_folder,
-                                   tensor_bits=tidl_tensor_bits,
-                                   max_num_tidl_subgraphs=(16 if enable_tidl_offload else 0),
-                                   deny_list="",
-                                   c7x_codegen=(1 if enable_c7x_codegen else 0),
-                                   accuracy_level=(1 if (tidl_tensor_bits == 8) else 0),
-                                   advanced_options=advanced_options)
+                                   enable_tidl_offload=enable_tidl_offload,
+                                   delegate_options=delegate_options)
     # Perform partitioning
     mod, _ = ti_offload_compiler.enable(mod, params, calibration_input_list)
 
