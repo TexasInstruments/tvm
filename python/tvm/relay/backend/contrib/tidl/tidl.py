@@ -53,17 +53,22 @@ import tvm._ffi
 
 from . import _ffi_tidl_api
 
-def traverse_expr(node, node_dict):
-    if node in node_dict:
-        return
-    if isinstance(node, tvm.ir.Op):
-        return
-    node_dict[node] = len(node_dict)
+def get_all_nodes(mod_func):
+    # Traverse Relay IR graph and generate a dictionary of all nodes except tvm.ir.Op nodes)
+    # mod_func is expected to be a function in Relay IR Module
+    def traverse_expr(node, node_dict):
+        if node in node_dict:
+            return
+        if isinstance(node, tvm.ir.Op):
+            return
+        node_dict[node] = len(node_dict)
+    all_nodes_main = {}
+    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_main)
+    relay.analysis.post_order_visit(mod_func, traverse_func)
+    return all_nodes_main
 
 def find_data_layout(mod):
-    all_nodes = {}
-    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
-    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    all_nodes = get_all_nodes(mod['main'])
     data_layout = "NCHW"
     for node in all_nodes:
         if isinstance(node, relay.expr.Call):
@@ -81,28 +86,13 @@ def find_data_layout(mod):
     return data_layout
 
 def find_qnn_ops(mod):
-    all_nodes = {}
-    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
-    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    all_nodes = get_all_nodes(mod['main'])
     return any(isinstance(node, relay.expr.Call) and node.op.name.startswith('qnn.')
                for node in all_nodes)
 
-def get_all_nodes(mod):
-    # Traverse Relay IR graph and generate a dictionary of all nodes
-    def traverse_func(node, node_dict):
-        if node not in node_dict:
-            node_dict[node] = 0
-
-    all_nodes_main = {}
-    traverse_func = functools.partial(traverse_func, node_dict=all_nodes_main)
-    relay.analysis.post_order_visit(mod['main'], traverse_func)
-    return list(all_nodes_main.keys())
-
 def get_tidl_subgraphs(mod, tidl_target):
     # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
-    all_nodes_main = {}
-    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_main)
-    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    all_nodes_main = get_all_nodes(mod['main'])
     tidl_subgraphs = []
     for node in all_nodes_main:
         if isinstance(node, relay.expr.GlobalVar):
@@ -141,9 +131,7 @@ def check_dynamism(args, op_name):
     return False
 
 def find_dynamic_shape(mod):
-    all_nodes = {}
-    traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
-    relay.analysis.post_order_visit(mod['main'], traverse_func)
+    all_nodes = get_all_nodes(mod['main'])
     return any(isinstance(node, relay.expr.Call) and check_dynamism(node.args, node.op.name)
                for node in all_nodes)
 
@@ -716,9 +704,7 @@ def get_arg_quantization(expr, mod, all_nodes=None, inout_quant_dict={}, field_i
         and find quantization of expr from the CallNode
     """
     if all_nodes == None:
-        all_nodes = {}
-        traverse_func = functools.partial(traverse_expr, node_dict=all_nodes)
-        relay.analysis.post_order_visit(mod['main'], traverse_func)
+        all_nodes = get_all_nodes(mod['main'])
     for node in all_nodes:
         if isinstance(node, relay.expr.Call):
             if expr in node.args:
@@ -1555,8 +1541,9 @@ class TIDLImport:
 
         tidl_subgraphs = get_tidl_subgraphs(mod, self.tidl_target)
 
-        for node in get_all_nodes(mod):
-             if isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.op.Op):
+        # Tally relay call nodes that are not calls to a TIDL subgraph (Nodes to be operated on by TVM, not TIDL)
+        for node in get_all_nodes(mod['main']):
+            if isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.op.Op): # Check for TVM specific ops
                 self._tally_op(str(node.op), self.info_dict['tvm']['nodes'])
 
         # For each TIDL subgraph, import to TIDL and calibrate
@@ -1627,9 +1614,7 @@ class TIDLImport:
                         self.tidl_od_num_graph_outputs, self.tidl_od_meta_layers_names_list)
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
-            all_nodes_tidl = {}
-            traverse_func = functools.partial(traverse_expr, node_dict=all_nodes_tidl)
-            relay.analysis.post_order_visit(subgraph_body, traverse_func)
+            all_nodes_tidl = get_all_nodes(subgraph_body)
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params, output_names,
@@ -2185,8 +2170,12 @@ class TIOffloadCompiler:
         tidl_od_postproc_inputs = []
         import_lib = None
 
-        total_op_nodes = [node for node in get_all_nodes(mod_orig) if isinstance(node, tvm.ir.Op)]
-        print(f"Total Nodes - {len(total_op_nodes)}")
+        all_nodes_dict_orig = get_all_nodes(mod_orig['main'])
+        total_nodes_original = 0
+        for node in all_nodes_dict_orig:
+            if isinstance(node, relay.expr.Call):
+                total_nodes_original += 1
+        print(f"Total Nodes - {total_nodes_original}")
 
         # TIDL-specific handling of object detection specifics. Skip if user doesn't want TIDL offload
         if (self.max_num_tidl_subgraphs > 0 and self.od_options):
@@ -2335,8 +2324,12 @@ class TIOffloadCompiler:
         # Check the number of Op nodes left in Module main function
         # tidl_subgraph_x is a GlobalVar, and is not counted as an Op node
         # Number of offloaded is (total op nodes - left op nodes)
-        op_nodes_left = [node for node in get_all_nodes(mod) if isinstance(node, tvm.ir.Op)]
-        num_offloaded_nodes = len(total_op_nodes) - len(op_nodes_left)
+        all_nodes_dict = get_all_nodes(mod['main'])
+        num_nodes = 0
+        for node in all_nodes_dict:
+            if isinstance(node, relay.expr.Call):
+                num_nodes += 1
+        num_offloaded_nodes =  total_nodes_original - (num_nodes - num_imported_sgs)
 
         if not os.environ.get('REUSE_TIDL_ARTIFACTS'):
             # If reusing TIDL artifacts, skip creation of TIDLImport object and corresponding calls (these mainly create TIDL subgraph artifacts)
@@ -2347,6 +2340,7 @@ class TIOffloadCompiler:
 
             #================ Import the graph to TIDL, if caller specified =====================
             if self.max_num_tidl_subgraphs > 0 and self.tidl_tools_path is not None:
+                print(f"Final number of subgraphs created are : {num_imported_sgs}, Offloaded Nodes - {num_offloaded_nodes}, Total Nodes - {total_nodes_original}")
                 if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
                     tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
                                             self.tidl_tools_path, self.artifacts_folder,
@@ -2382,7 +2376,6 @@ class TIOffloadCompiler:
                 else:
                     print("TIDL import lib does not exist. TIDL import skipped.")
                     mod_final, status = mod_pre, 0       # No TIDL compilation
-                print(f"Final number of subgraphs created are : {num_imported_sgs}, Offloaded Nodes - {num_offloaded_nodes}, Total Nodes - {len(total_op_nodes)}")
             else:
                 if self.tidl_tools_path is None:
                     print("TIDL tools path is not set. TIDL import skipped.")
