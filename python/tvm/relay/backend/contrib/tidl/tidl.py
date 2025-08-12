@@ -1777,7 +1777,7 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.softmax")
         self._register_constrained_op("concatenate")
         self._register_constrained_op("mean")          # 'mean' mapped to avg_pooling layer
-
+        self._register_constrained_op("nn.depth_to_space")
         # Register J7 specific operators, or those supported standalone by J7,
         # or those for which there are no allow functions.
         self._register_constrained_op("abs")
