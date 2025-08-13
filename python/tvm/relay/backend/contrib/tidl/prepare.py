@@ -55,6 +55,16 @@ class RemovePadByZero(ExprMutator):
                 return super().visit(call.args[0])
         return super().visit_call(call)
 
+class RemoveCopy(ExprMutator):
+    """
+    Removes copy operator 
+    """
+    def visit_call(self,call):
+        if(call.op.name == "copy"):
+            return super().visit(call.args[0])
+        return super().visit_call(call)
+    
+
 class RemoveIdentityReshape(ExprMutator):
     """
     Removes reshape operators to same shape as input.
@@ -275,6 +285,7 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod = relay.transform.FoldConstant()(mod)
     mod['main'] = RemoveMultiplyByOne().visit(mod['main'])
     mod['main'] = RemovePadByZero().visit(mod['main'])
+    mod['main'] = RemoveCopy().visit(mod['main']) # removing copy layer as(idenity layer is remppaed to copy and it just puts input to output)
     mod = relay.transform.InferType()(mod)
     mod['main'] = RemoveIdentityReshape().visit(mod['main'])
     mod['main'] = Power2ToMultiply().visit(mod['main'])
