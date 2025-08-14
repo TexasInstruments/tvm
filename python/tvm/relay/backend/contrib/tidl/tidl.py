@@ -1820,6 +1820,7 @@ class TIDLAnnotation:
         self._register_constrained_op("qnn.dense")
         self._register_constrained_op("qnn.mul")
         self._register_constrained_op("nn.pad")
+        self._register_constrained_op("negative")
 
         tidl_annotations_registered = True
 
