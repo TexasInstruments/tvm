@@ -2068,7 +2068,7 @@ class TIOffloadCompiler:
         'object_detection:meta_arch_type',
     ]
 
-    def __init__(self, platform="J7", tidl_tools_path=None, enable_tidl_offload=True, delegate_options={}):
+    def __init__(self, platform="J7", tidl_tools_path=None, enable_tidl_offload=True, reuse_tidl_artifacts=False, delegate_options={}):
         if supported_platform(platform):
             # TODO: Ideally this entire code should move to TIDL or reuse existing TIDL code
             # TVM should only be pass through for options, TIDL should interpret and 
@@ -2160,6 +2160,7 @@ class TIOffloadCompiler:
         
         
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
+        self.reuse_tidl_artifacts = reuse_tidl_artifacts
 
     def enable(self, mod_orig, params, graph_input_list):
         """ Enable TIDL compilation
@@ -2360,7 +2361,7 @@ class TIOffloadCompiler:
                 num_nodes += 1
         num_offloaded_nodes =  total_nodes_original - (num_nodes - num_imported_sgs)
 
-        if not os.environ.get('REUSE_TIDL_ARTIFACTS'):
+        if not self.reuse_tidl_artifacts:
             # If reusing TIDL artifacts, skip creation of TIDLImport object and corresponding calls (these mainly create TIDL subgraph artifacts)
             # Any TIDL subgraph related artifacts will be reused from tempDir
             # Only update to IR Module as part of this code is to mark relay expressions corresponding to TIDL layers with let

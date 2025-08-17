@@ -199,8 +199,13 @@ def compile_relay(mod: tvm.IRModule,
                                                       compile_for_device)
   if not status:
     return False
-
-  prepare_output_directory(artifacts_folder)
+  
+  reuse_tidl_artifacts = False
+  if os.environ.get("REUSE_TIDL_ARTIFACTS", None) is not None:
+    reuse_tidl_artifacts = True
+    if not os.path.isdir(artifacts_folder):
+      print(f'\n\nWARNING: Cannot reuse TIDL artifacts since artifacts folder "{artifacts_folder}" is not present\n')
+      reuse_tidl_artifacts = False
 
   # If compiling for the device, generate aarch64 code for unsupported layers
   target = "llvm"
@@ -213,6 +218,7 @@ def compile_relay(mod: tvm.IRModule,
                                    platform=platform, # TI device category (E.g. J7)
                                    tidl_tools_path=tidl_tools_path,
                                    enable_tidl_offload=enable_tidl_offload,
+                                   reuse_tidl_artifacts = reuse_tidl_artifacts,
                                    delegate_options=delegate_options)
     # Perform partitioning
     mod, _ = ti_offload_compiler.enable(mod, params, calibration_input_list)
@@ -252,28 +258,6 @@ def compile_relay(mod: tvm.IRModule,
 
   print("Artifacts can be found at " + artifacts_folder)
   return True
-
-
-def prepare_output_directory(output_dir: str):
-  """Create and clean the output directory"""
-
-  if os.environ.get("TIDL_REBUILD_ONLY", None) is not None:
-    return
-  
-  if os.environ.get("REUSE_TIDL_ARTIFACTS", None) is not None:
-    if not os.path.isdir(output_dir):
-      print(f'\n\nWARNING: Cannot reuse TIDL artifacts since artifacts folder "{output_dir}" is not present\n')
-      del os.environ["REUSE_TIDL_ARTIFACTS"]
-    else:
-      return
-
-  # create the directory if its not already preset
-  os.makedirs(output_dir, exist_ok=True)
-
-  # Delete all files and directories from within dir
-  for root, dirs, files in os.walk(output_dir, topdown=False):
-    [os.remove(os.path.join(root, f)) for f in files]
-    [os.rmdir(os.path.join(root, d)) for d in dirs]
 
 def setup_tool_paths(enable_tidl_offload: bool,
                      enable_c7x_codegen: bool,
