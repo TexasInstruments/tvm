@@ -310,7 +310,7 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
 
     return mod
 
-
+odpostproc_operator_registered = False
 def prune_graph_for_ODPostProc_inputs(mod: tvm.IRModule,
         ODPostProc_inputs: typing.List[str],
         od_output_shapes: typing.List[typing.Tuple],
@@ -393,17 +393,20 @@ def prune_graph_for_ODPostProc_inputs(mod: tvm.IRModule,
         return strategy
 
     # Create an operator that takes ODPostProc input nodes and returns TIDL processed outputs
-    op_name = "tidl_odpostproc"
-    reg.register(op_name)
-    reg.get(op_name).set_num_inputs(len(ODPostProc_inputs))
-    for i in range(len(ODPostProc_inputs)):
-        reg.get(op_name).add_argument(f"ODPostProc_input{i}", "Tensor", "ODPostProc input")
-    reg.get(op_name).add_type_rel(op_name, tidl_odpostproc_type_rel)
-    reg.get(op_name).set_support_level(10)
-    reg.get(op_name).set_attr("FMacCount", tidl_odpostproc_macs)
-    reg.register_strategy(op_name, tidl_odpostproc_strategy)
-    reg.register_pattern("tidl_odpostproc", OpPattern.OPAQUE)
-    register_tidl_postproc_as_supported()
+    global odpostproc_operator_registered
+    if not odpostproc_operator_registered:
+        op_name = "tidl_odpostproc"
+        reg.register(op_name)
+        reg.get(op_name).set_num_inputs(len(ODPostProc_inputs))
+        for i in range(len(ODPostProc_inputs)):
+            reg.get(op_name).add_argument(f"ODPostProc_input{i}", "Tensor", "ODPostProc input")
+        reg.get(op_name).add_type_rel(op_name, tidl_odpostproc_type_rel)
+        reg.get(op_name).set_support_level(10)
+        reg.get(op_name).set_attr("FMacCount", tidl_odpostproc_macs)
+        reg.register_strategy(op_name, tidl_odpostproc_strategy)
+        reg.register_pattern("tidl_odpostproc", OpPattern.OPAQUE)
+        register_tidl_postproc_as_supported()
+        odpostproc_operator_registered = True
 
     # Find relay graph nodes that correspond to ODPostProc_inputs names
     names_to_nodes = {}
