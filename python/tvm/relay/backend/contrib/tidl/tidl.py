@@ -1821,6 +1821,7 @@ class TIDLAnnotation:
         self._register_constrained_op("qnn.mul")
         self._register_constrained_op("nn.pad")
         self._register_constrained_op("negative")
+        self._register_constrained_op("power")
 
         tidl_annotations_registered = True
 
