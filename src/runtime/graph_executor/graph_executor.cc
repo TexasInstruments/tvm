@@ -78,11 +78,7 @@ static uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
  * \brief Run all the operations one by one.
  */
 void GraphExecutor::Run() {
-  // get start timestamp
-  struct timespec ts;
-  unsigned long long nanosec_in_one_sec = 1000000000ull;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  run_start_ts = (uint64_t)ts.tv_sec * (uint64_t)nanosec_in_one_sec + (uint64_t)ts.tv_nsec;
+  run_start_ts = _TSC_read();
 
   int tvm_rt_debug_level = 0;
   int tvm_rt_trace_node = -1;
@@ -137,8 +133,7 @@ void GraphExecutor::Run() {
   }
 
   // get end timestamp
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  run_end_ts = (uint64_t)ts.tv_sec * (uint64_t)nanosec_in_one_sec + (uint64_t)ts.tv_nsec;
+  run_end_ts = _TSC_read();
 }
 
 /*!
@@ -892,13 +887,12 @@ PackedFunc GraphExecutor::GetFunction(const String& name, const ObjectPtr<Object
     });
   } else if (name == "get_benchmark_data") {
     return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
-      // define a vector of tuples (string, uint64_t) to hold the
-      // benchmark data.
-      std::vector<std::pair<std::string, uint64_t>> benchmarks;
+      // Create a TVM Map to hold the benchmark data
+      Map<String, String> benchmark_data;
 
       // run duration timestamps
-      benchmarks.push_back(std::make_pair<std::string, uint64_t>("ts:run_start", uint64_t(run_start_ts)));
-      benchmarks.push_back(std::make_pair<std::string, uint64_t>("ts:run_end", uint64_t(run_end_ts)));
+      benchmark_data.Set("ts:run_start", String(std::to_string(run_start_ts)));
+      benchmark_data.Set("ts:run_end", String(std::to_string(run_end_ts)));
 
       // get subgraph timestamps
       int subgraph_id = 0;
@@ -926,27 +920,14 @@ PackedFunc GraphExecutor::GetFunction(const String& name, const ObjectPtr<Object
 
           int index = 0;
           for (auto it = v->begin(); it != v->end(); it++, index++) {
-              benchmarks.push_back(std::make_pair<std::string, uint64_t>(
-                                       "ts:subgraph_" + std::to_string(subgraph_id) + "_" + annots[index],
-                                       uint64_t(*it)));
+              std::string annotation = "ts:subgraph_" + std::to_string(subgraph_id) + "_" + annots[index];
+              benchmark_data.Set(String(annotation), String(std::to_string(*it)));
           }
           delete v;
           subgraph_id++;
       }
 
-      // convert to arrays for return value
-      Array<String> tvm_annotations;
-      Array<ObjectRef> tvm_values;
-
-      for (const auto& pair : benchmarks) {
-        tvm_annotations.push_back(String(pair.first));
-        tvm_values.push_back(String(std::to_string(pair.second)));
-      }
-
-      Map<String, ObjectRef> result;
-      result.Set("annotations", tvm_annotations);
-      result.Set("values", tvm_values);
-      *rv = result;
+      *rv = benchmark_data;
     });
   } else {
     return PackedFunc();

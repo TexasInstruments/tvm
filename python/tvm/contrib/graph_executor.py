@@ -514,12 +514,26 @@ class GraphModule(object):
             repeats_to_cooldown=repeats_to_cooldown,
         )()
 
-    def get_benchmark_data(self):
+    def get_TI_benchmark_data(self):
         """Get the profiling/benchmark data from the graph
 
         Returns
         -------
-        count : dict
-            The number of outputs.
+        dict
+            A dictionary mapping timestamp annotations to their values as strings.
+            The keys are annotation strings like:
+            - "ts:run_start": The timestamp when the Run() method began
+            - "ts:run_end": The timestamp when the Run() method completed
+            - "ts:subgraph_X_copy_in_start": When subgraph id X began copying input data
+            - "ts:subgraph_X_copy_in_end": When subgraph id X finished copying input data
+            - "ts:subgraph_X_proc_start": When subgraph id X began processing
+            - "ts:subgraph_X_proc_end": When subgraph id X finished processing
+            - "ts:subgraph_X_copy_out_start": When subgraph id X began copying output data
+            - "ts:subgraph_X_copy_out_end": When subgraph id X finished copying output data
+
+        All timestamp values are returned as string representations of uint64_t
+        nanosecond timestamps and should be converted to integers for
+        calculations.
         """
-        return self._get_benchmark_data()
+        data = self._get_benchmark_data()
+        return { k: int(v) for k, v in data.items() }
