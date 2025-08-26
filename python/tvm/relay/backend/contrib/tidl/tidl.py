@@ -1823,6 +1823,7 @@ class TIDLAnnotation:
         self._register_constrained_op("negative")
         self._register_constrained_op("power")
         self._register_constrained_op("floor")
+        self._register_constrained_op("nn.instance_norm")
 
         tidl_annotations_registered = True
 

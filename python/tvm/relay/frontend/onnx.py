@@ -788,6 +788,11 @@ class InstanceNorm(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        print('*'*100)
+        print(inputs,"\n",attr,"\n",params)
+        print('*'*100)
+        if "epsilon" not in attr:
+            attr["epsilon"] = 1e-5
         return AttrCvt(op_name="instance_norm")(inputs, attr, params)
 
 
