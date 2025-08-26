@@ -1824,6 +1824,8 @@ class TIDLAnnotation:
         self._register_constrained_op("power")
         self._register_constrained_op("floor")
         self._register_constrained_op("nn.instance_norm")
+        self._register_constrained_op("erf")
+        self._register_constrained_op("exp")
 
         tidl_annotations_registered = True
 
