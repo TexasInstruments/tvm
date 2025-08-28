@@ -177,7 +177,9 @@ class GraphModule(object):
         self._get_num_inputs = module["get_num_inputs"]
         self._load_params = module["load_params"]
         self._share_params = module["share_params"]
+        # Begin TI
         self._get_benchmark_data = module["get_benchmark_data"]
+        # End TI
 
     def set_input(self, key=None, value=None, **params):
         """Set inputs to the module via kwargs
@@ -514,6 +516,7 @@ class GraphModule(object):
             repeats_to_cooldown=repeats_to_cooldown,
         )()
 
+    # Begin TI
     def get_TI_benchmark_data(self):
         """Get the profiling/benchmark data from the graph
 
@@ -537,3 +540,4 @@ class GraphModule(object):
         """
         data = self._get_benchmark_data()
         return { k: int(v) for k, v in data.items() }
+    # End TI

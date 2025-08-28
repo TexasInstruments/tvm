@@ -525,11 +525,13 @@ class TVM_DLL GraphExecutor : public ModuleNode {
    */
   bool module_lookup_linked_param_valid_;
 
+  // Begin TI
   // timestamp and ddr statistics variables
   /*! \brief Start time of model execution in nanoseconds */
   uint64_t run_start_ts{0};
   /*! \brief End time of model execution in nanoseconds. */
   uint64_t run_end_ts{0};
+  // End TI
 };
 
 std::vector<Device> GetAllDevice(const TVMArgs& args, int dev_start_arg);

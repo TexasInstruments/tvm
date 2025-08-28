@@ -23,7 +23,6 @@
 #include "graph_executor.h"
 
 #include <tvm/runtime/container/map.h>
-#include <tvm/runtime/container/array.h>
 #include <tvm/runtime/container/string.h>
 #include <tvm/runtime/data_type.h>
 #include <tvm/runtime/device_api.h>
@@ -78,7 +77,9 @@ static uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
  * \brief Run all the operations one by one.
  */
 void GraphExecutor::Run() {
+  // Begin TI
   run_start_ts = _TSC_read();
+  // End TI
 
   int tvm_rt_debug_level = 0;
   int tvm_rt_trace_node = -1;
@@ -132,8 +133,10 @@ void GraphExecutor::Run() {
     tvm_rt_trace_finalize(t_g);
   }
 
+  // Begin TI
   // get end timestamp
   run_end_ts = _TSC_read();
+  // End TI
 }
 
 /*!
@@ -885,6 +888,7 @@ PackedFunc GraphExecutor::GetFunction(const String& name, const ObjectPtr<Object
       input_info.Set("dtype", dtype_info);
       *rv = input_info;
     });
+  // Begin TI
   } else if (name == "get_benchmark_data") {
     return PackedFunc([sptr_to_self, this](TVMArgs args, TVMRetValue* rv) {
       // Create a TVM Map to hold the benchmark data
@@ -929,6 +933,7 @@ PackedFunc GraphExecutor::GetFunction(const String& name, const ObjectPtr<Object
 
       *rv = benchmark_data;
     });
+  // End TI
   } else {
     return PackedFunc();
   }
