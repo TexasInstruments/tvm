@@ -91,17 +91,17 @@ def enable_c7x_mod(ti_offload_compiler, mod, params, num_tidl_subgraphs):
     mod_arm = relay.transform.InferType()(mod_arm)
     with open(os.path.join(ti_offload_compiler.temp_folder, "relay_graph.wrapper.txt"), "w") as fo:
         print(mod_arm.astext(show_meta_data=False), file=fo)
-
     return mod_arm
 
 
-def bin_to_c(infile, outfile, array_name):
+def bin_to_c(infile, outfile, array_name, compile_for_device):
     """
     Encode infile as char array in outfile, similar to "xxd -i" mode
     Update: cl7x/acpia7x has problem with big char array initialization in C file (~600MB)
     Workaround: Instead of use C array with (big) initialization, directly
                 encode the binary file data in assembly, as asm7x has no problem
                 with big assembly files
+    X86 host emulation: use X86 assembly (.s suffix) that gcc understands
 
     Parameters
     ----------
@@ -117,9 +117,16 @@ def bin_to_c(infile, outfile, array_name):
     -------
     """
     num_bytes = 0
-    with open(infile, "rb") as fi, open(outfile+"_embed.asm", "wt") as fo:
-        fo.write(f"\t.sect \".const\"\n\t.clink")
-        fo.write(f"\n\t.global ||{array_name}||\n||{array_name}||:")
+    suffix = "asm" if compile_for_device else "s"
+    symbol_name = f"||{array_name}||" if compile_for_device else array_name
+    with open(infile, "rb") as fi, open(outfile+f"_embed.{suffix}", "wt") as fo:
+        if compile_for_device:
+            fo.write(f"\t.sect \".const\"\n")
+            fo.write(f"\t.clink")
+        else:
+            fo.write(f"\t.sect \".rodata\"\n")
+            fo.write(f"\t.p2align 4\n")
+        fo.write(f"\n\t.global {symbol_name}\n{symbol_name}:")
         byte = fi.read(1)
         while byte:
             if (num_bytes % 16 == 0):
@@ -274,17 +281,20 @@ def gen_c7x_source(ti_offload_compiler, mod, params, num_tidl_subgraphs):
     func_registry.graph_json_to_c_func_registry(graph_fname,
                                                 os.path.join(temp_folder, "func_registry.c"))
 
-    bin_to_c(graph_fname, graph_fname + ".c", "graph_json")
-    bin_to_c(params_fname, params_fname + ".c", "params_bin")
+    compile_for_device = ti_offload_compiler.compile_for_device
+    bin_to_c(graph_fname, graph_fname + ".c", "graph_json", compile_for_device)
+    bin_to_c(params_fname, params_fname + ".c", "params_bin", compile_for_device)
     for i in range(num_tidl_subgraphs):
         subgraph_net_fname = os.path.join(temp_folder, f"subgraph{i}_net.bin")
         c_net_fname = os.path.join(temp_folder, f"subgraph{i}_net.c")
         subgraph_params_fname = os.path.join(temp_folder, f"subgraph{i}_params_1.bin")
         c_params_fname = os.path.join(temp_folder, f"subgraph{i}_params.c")
-        bin_to_c(subgraph_net_fname, c_net_fname, f"subgraph{i}_net_bin")
-        bin_to_c(subgraph_params_fname, c_params_fname, f"subgraph{i}_params_1_bin")
+        bin_to_c(subgraph_net_fname, c_net_fname, f"subgraph{i}_net_bin", compile_for_device)
+        bin_to_c(subgraph_params_fname, c_params_fname, f"subgraph{i}_params_1_bin",
+                 compile_for_device)
 
     gen_model_tvm_funcs(os.path.join(temp_folder, "tvm_main.c"), num_tidl_subgraphs)
+
 
 def build_c7x_mod(ti_offload_compiler, mod, params, num_tidl_subgraphs):
     """
@@ -327,6 +337,8 @@ def build_c7x_mod(ti_offload_compiler, mod, params, num_tidl_subgraphs):
                       '7120_j784s4' if ti_offload_compiler.tidl_platform == "J784S4" else "7100")))
     command  = f'make SILICON_VERSION={silicon_version} TVM_ROOT={tvm_root} TVM_C7X_ROOT={tvm_c7x_root} QUIET= ' + \
                f' -C {abs_temp_folder} -f {tvm_c7x_root}/Makefile.c7x_mod -j$(nproc)'
+    if  ti_offload_compiler.compile_for_device == 0:
+        command += " TARGET_PLATFORM=PC"
     print(command)
     with open(log_file, "w") as fo:
         p_status = subprocess.run([command], stdout=fo, stderr=fo, shell=True).returncode

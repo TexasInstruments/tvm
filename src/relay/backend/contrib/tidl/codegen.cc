@@ -68,15 +68,17 @@ class TIDLContextNode : public Object {
   std::string platform;
   int         c7x_codegen_enabled;
   int         gen_c7x_mod_enabled;
+  int         compile_for_device;
 
   TIDLContextNode() : artifacts_directory(""), platform("J7"),
-                      c7x_codegen_enabled(0), gen_c7x_mod_enabled(0) {}
+                      c7x_codegen_enabled(0), gen_c7x_mod_enabled(0), compile_for_device(1) {}
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("artifacts_directory", &artifacts_directory);
     v->Visit("platform", &platform);
     v->Visit("c7x_codegen_enabled", &c7x_codegen_enabled);
     v->Visit("gen_c7x_mod_enabled", &gen_c7x_mod_enabled);
+    v->Visit("compile_for_device",  &compile_for_device);
   }
 
   static constexpr const char* _type_key = "tidl.TIDLContext";
@@ -228,11 +230,19 @@ TVM_REGISTER_GLOBAL("tidl.CreateTIDLContext")
   runtime::String platform = args[1];
   int             c7x_codegen_enabled = args[2];
   int             gen_c7x_mod_enabled = args[3];
+  int             compile_for_device  = args[4];
   ctx->artifacts_directory = artifacts_directory;
   ctx->platform = platform;
   ctx->c7x_codegen_enabled = c7x_codegen_enabled;
   ctx->gen_c7x_mod_enabled = gen_c7x_mod_enabled;
+  ctx->compile_for_device  = compile_for_device;
   *ret = ctx;
+});
+
+TVM_REGISTER_GLOBAL("tidl.CompileForDevice")
+.set_body([](TVMArgs args, TVMRetValue *ret) {
+  auto ctx = TIDLContext::Current();
+  *ret = ctx->compile_for_device;
 });
 
 /*!
@@ -524,6 +534,8 @@ class TIDLJ7C7xModuleCodeGen : public CSourceModuleCodegenBase {
 
     // Read in the deploy_mod binary file
     std::string c7xmod_filename = tempdir_name + "/c7x_deploy_tvm.out";
+    if (ctx->compile_for_device == 0)
+      c7xmod_filename = tempdir_name + "/libc7x_deploy_tvm_hostemu.so";
     std::ifstream c7xmod_file_stream(c7xmod_filename, std::ios::binary | std::ios::in);
     if (!c7xmod_file_stream.is_open())
       LOG(FATAL) << "Failed to open C7x TVM deployable mod file " << c7xmod_filename << '\n';

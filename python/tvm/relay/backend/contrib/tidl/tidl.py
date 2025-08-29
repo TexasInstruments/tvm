@@ -2092,7 +2092,8 @@ class TIOffloadCompiler:
         'object_detection:meta_arch_type',
     ]
 
-    def __init__(self, platform="J7", tidl_tools_path=None, enable_tidl_offload=True, reuse_tidl_artifacts=False, delegate_options={}):
+    def __init__(self, platform="J7", tidl_tools_path=None, enable_tidl_offload=True,
+                 compile_for_device=1, reuse_tidl_artifacts=False, delegate_options={}):
         if supported_platform(platform):
             # TODO: Ideally this entire code should move to TIDL or reuse existing TIDL code
             # TVM should only be pass through for options, TIDL should interpret and 
@@ -2107,6 +2108,7 @@ class TIOffloadCompiler:
             self.deny_list = []
             self.accuracy_level = 1
             self.c7x_codegen = 0
+            self.compile_for_device = compile_for_device
             self.advanced_options = {}
             self.od_options = {}
             self.ti_internal_nc_flag = (0x1 | 0x40 | 0x200 | 0x400)
@@ -2130,8 +2132,9 @@ class TIOffloadCompiler:
             for key in self.advanced_options.keys():
                 setattr(self, key, self.advanced_options[key])
 
-            self.tidl_calib_tool = os.path.join(self.tidl_tools_path, "PC_dsp_test_dl_algo.out")
-            self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
+            if enable_tidl_offload:
+                self.tidl_calib_tool = os.path.join(self.tidl_tools_path, "PC_dsp_test_dl_algo.out")
+                self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
 
             if self.max_num_tidl_subgraphs != 0:
                 self.max_num_tidl_subgraphs = (delegate_options['max_num_subgraphs'] if 'max_num_subgraphs' in delegate_options else self.max_num_tidl_subgraphs)
@@ -2176,7 +2179,8 @@ class TIOffloadCompiler:
 
         # Create and set up the TIDL context for C++ codegen
         CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
-        self.tidl_context = CreateTIDLContext(self.artifacts_folder, self.tidl_platform, self.c7x_codegen, 0)
+        self.tidl_context = CreateTIDLContext(self.artifacts_folder, self.tidl_platform,
+                                              self.c7x_codegen, 0, self.compile_for_device)
         # Enter the context to make it active
         EnterTIDLContext = tvm.get_global_func("tidl.EnterTIDLContext")
         EnterTIDLContext(self.tidl_context)
@@ -2380,6 +2384,9 @@ class TIOffloadCompiler:
             mod = relay.transform.InferType()(mod)
             mod = flatten_tuple_params(mod, self.tidl_target)
             mod = relay.transform.InferType()(mod)
+        else:  # no TIDL offload, need to unpack tidl composites
+            mod = unpack_composites(mod, self.tidl_target)
+            mod = relay.transform.InferType()(mod)
 
         #============= Post-partition transformations  ==============
         # ConvertLayout pass does not yet work properly for graph with qnn ops
@@ -2522,10 +2529,12 @@ class build_config():
         artifacts_folder = None
         platform = "J7"
         c7x_codegen_enabled = 0
+        compile_for_device = 1
         if ti_offload_compiler != None:
             artifacts_folder    = ti_offload_compiler.artifacts_folder
             platform            = ti_offload_compiler.tidl_platform
             c7x_codegen_enabled = ti_offload_compiler.c7x_codegen
+            compile_for_device  = ti_offload_compiler.compile_for_device
         assert artifacts_folder, "artifacts_folder must be specified for TVM+TIDL compilation"
         self.debug_c7x_codegen = False
         if (os.environ.get("TIDL_C7X_CODEGEN_DEBUG") != None) and (gen_c7x_mod_enabled != 0):
@@ -2535,7 +2544,7 @@ class build_config():
             self.temp_folder = None
         CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
         self.tidl_context = CreateTIDLContext(artifacts_folder, platform, c7x_codegen_enabled,
-                                              gen_c7x_mod_enabled)
+                                              gen_c7x_mod_enabled, compile_for_device)
         self.tvm_context  = tvm.transform.PassContext(opt_level=3,
                                       config={'tir.disable_vectorize': (c7x_codegen_enabled == 9)})
 

@@ -27,6 +27,7 @@
 #include <tvm/runtime/crt/internal/common/ndarray.h>
 #include <tvm/runtime/crt/page_allocator.h>
 #include <tvm/runtime/crt/platform.h>
+#include <tvm/runtime/crt_runtime_api.h>
 
 #include "crt_config.h"
 
@@ -64,7 +65,7 @@ int TVMNDArray_Empty(int32_t ndim, const tvm_index_t* shape, DLDataType dtype, D
   }
   int total_elem_bytes = TVMNDArray_DataSizeBytes(array);
   array->dl_tensor.data =
-      TVMBackendAllocWorkspace(kDLCPU, 0, total_elem_bytes, dtype.code, dtype.bits);
+      CRT_TVMBackendAllocWorkspace(kDLCPU, 0, total_elem_bytes, dtype.code, dtype.bits);
   memset(array->dl_tensor.data, 0, total_elem_bytes);
   return 0;
 }
@@ -105,10 +106,25 @@ int TVMNDArray_Load(TVMNDArray* ret, const char** strm) {
       *strm += sizeof(shape[idx]);
     }
   }
-  status = TVMNDArray_Empty(ndim, shape, dtype, dev, ret);
-  if (status != 0) {
-    return status;
+
+  // Begin TI: Do not re-allocate, memory has already been allocated by storage_pool
+  //           who owns the memory.  data_entry is just a view into storage_pool.
+  // Prompt: Explain the relationship between "storage_pool" and "data_entry" in graph executor.
+  void *existing_data = ret->dl_tensor.data;
+  if (existing_data != NULL) {
+    status = Create(ndim, shape, dtype, dev, ret);
+    if (status != 0) {
+      return status;
+    }
+    ret->dl_tensor.data = existing_data;
+  } else {
+    status = TVMNDArray_Empty(ndim, shape, dtype, dev, ret);
+    if (status != 0) {
+      return status;
+    }
   }
+  // End TI
+
   int64_t num_elems = 1;
   int elem_bytes = (ret->dl_tensor.dtype.bits + 7) / 8;
   for (idx = 0; idx < ret->dl_tensor.ndim; ++idx) {

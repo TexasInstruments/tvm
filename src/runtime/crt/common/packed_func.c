@@ -84,12 +84,13 @@ int TVMPackedFunc_InitGlobalFunc(TVMPackedFunc* pf, const char* name, const TVMA
   pf->Call = &TVMPackedFunc_Call;
   pf->SetArgs = &TVMPackedFunc_SetArgs;
 
-  status = TVMFuncGetGlobal(name, &pf->fexec);
+  status = CRT_TVMFuncGetGlobal(name, &pf->fexec);
   if (status != 0) {
     return status;
   }
 
   snprintf(pf->name, sizeof(pf->name), "%s", name);
+
   TVMPackedFunc_SetArgs(pf, args);
   return status;
 }
@@ -101,7 +102,7 @@ int TVMPackedFunc_InitModuleFunc(TVMPackedFunc* pf, TVMModuleHandle module, cons
   pf->Call = &TVMPackedFunc_Call;
   pf->SetArgs = &TVMPackedFunc_SetArgs;
 
-  status = TVMModGetFunction(module, name, 0, &pf->fexec);
+  status = CRT_TVMModGetFunction(module, name, 0, &pf->fexec);
   if (status != 0) {
     return status;
   }
@@ -126,7 +127,7 @@ TVMArgs TVMArgs_Create(TVMValue* values, uint32_t* tcodes, uint32_t values_count
 int TVMPackedFunc_Call(TVMPackedFunc* pf) {
   pf->ret_value.values_count = 1;
   pf->ret_value.tcodes[0] = kTVMNullptr;
-  return TVMFuncCall(pf->fexec, pf->args.values, pf->args.tcodes, pf->args.values_count,
+  return CRT_TVMFuncCall(pf->fexec, pf->args.values, pf->args.tcodes, pf->args.values_count,
                      pf->ret_value.values, pf->ret_value.tcodes);
 }
 

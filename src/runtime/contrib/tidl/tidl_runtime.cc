@@ -32,6 +32,10 @@
 #include <tvm/relay/type.h>
 #include <tvm/runtime/ndarray.h>
 #include "../../../support/base64.h"
+#include <sys/utsname.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <float.h>
 
 #include <dmlc/logging.h>
 #include <dmlc/memory_io.h>
@@ -47,6 +51,7 @@
 #include "tidl_runtime.h"
 #include "itidl_rt.h"
 #include "itvm_rt.h"
+#include "c7x/tidl_api.h"
 
 /* 1: TVM RT Arm timing, 2: + TVM CRT C7x timing, 3: + TVM RT/CRT debug info, tensor stats */
 static int tvmrt_debuglevel = 0;
@@ -548,14 +553,31 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
            : infos(infos), c7xgraph_id(-1) {}
 
   ~TIDLJ7C7xModule() {
-    for (auto rt_arg : tvmrt_args)  delete rt_arg;
+    struct utsname system_info;
+    uname(&system_info);
+    if (strcmp(system_info.machine, "aarch64") == 0) {
+      for (auto rt_arg : tvmrt_args)  delete rt_arg;
 
-    if (tvmrt_handle != nullptr) {
-      TIDL_LOG << "#TVM# TVMRT_delete " << tvmrt_handle << "...";
-      if (TVMRT_delete_(tvmrt_handle) != 0)
-        LOG(FATAL) << "TVMRT_delete failed\n";
+      if (tvmrt_handle != nullptr) {
+        TIDL_LOG << "#TVM# TVMRT_delete " << tvmrt_handle << "...";
+        if (TVMRT_delete_(tvmrt_handle) != 0)
+          LOG(FATAL) << "TVMRT_delete failed\n";
+      }
+      if (tidl_handle != nullptr)  dlclose(tidl_handle);
+    } else if (strcmp(system_info.machine, "x86_64") == 0) {
+      if (tvm_main_delete != nullptr)  tvm_main_delete();
+      if (hostemu_dl_handle != nullptr) {
+        dlclose(hostemu_dl_handle);
+        dlerror();
+      }
+      if (tidl_handle != nullptr) {
+        dlclose(tidl_handle);
+        dlerror();
+      }
+      if (tvm_rt_trace_ptr != nullptr) {
+        free(tvm_rt_trace_ptr);
+      }
     }
-    if (tidl_handle != nullptr)  dlclose(tidl_handle);
   }
 
   /*!
@@ -579,12 +601,24 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
        *
        * Very ugly hack, but need to maintain this as of now.
        */
-      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
-      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_NOW | RTLD_GLOBAL );
+      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_LAZY | RTLD_GLOBAL );
+      tidl_handle = dlopen("libvx_tidl_rt.so", RTLD_LAZY | RTLD_GLOBAL );
       const char *dlsym_error1 = dlerror();
       if (dlsym_error1) {
         LOG(FATAL) << "Cannot open libvx_tidl_rt.so! " << dlsym_error1 << '\n';
       }
+
+      // host emu mode:
+      // how about we build tvm crt into a .so file, embed into deploy_lib.so
+      // at inference, take it out, save to file system temp, load as .so,
+      // get tvm_main_create/process/destroy functions
+      //
+      // how  do we check if we are on X86 or Aarch64?
+      //
+      // YUANDEBUG TODO: how to get function from deploy_lib.so?
+      //void (*yuan_func)(void);
+      //yuan_func = LoadSymbol<decltype(yuan_func)>("yuan_func");
+      //yuan_func();
 
       TVMRT_create_   = LoadSymbol<decltype(TVMRT_create_)>  ("TVMRT_create");
       TVMRT_delete_   = LoadSymbol<decltype(TVMRT_delete_)>  ("TVMRT_delete");
@@ -626,77 +660,188 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
     // Get graph id which is after "tidl_tvm_" (9 characters).
     c7xgraph_id = std::stoi(name.substr(9));
 
-    // Load TIDLRT library.  Each subgraph/TIDLJ7Module, C7xTVMGraph/TIDLJ7C7xModule will call
-    //     this once, it is okay to dlopen() same library multiple times
-    LoadTIDLRT();
+    struct utsname system_info;
+    uname(&system_info);
+    if (strcmp(system_info.machine, "aarch64") == 0) {
+      // Running on real SoC: aarch64 + c7x/mma
 
-    // Call TVMRT_create() to initialize the C7x TVM graph
-    sTVMRT_Params_t params;
-    TVMRT_setParamsDefault_(&params);
-    params.deploy_mod = (void*) info.c7x_deploy_mod.data();
-    params.deploy_mod_size = info.c7x_deploy_mod.size();
-    params.num_input_tensors = info.NumInputs();
-    params.num_output_tensors = info.NumOutputs();
-    for (int i = 0, count = 0; i < params.num_input_tensors; i++)
-    {
-      if (count + info.input_names[i].size() + 1 > TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE)
+      // Load TIDLRT library.  Each subgraph/TIDLJ7Module, C7xTVMGraph/TIDLJ7C7xModule will call
+      //     this once, it is okay to dlopen() same library multiple times
+      LoadTIDLRT();
+
+      // Call TVMRT_create() to initialize the C7x TVM graph
+      sTVMRT_Params_t params;
+      TVMRT_setParamsDefault_(&params);
+      params.deploy_mod = (void*) info.c7x_deploy_mod.data();
+      params.deploy_mod_size = info.c7x_deploy_mod.size();
+      params.num_input_tensors = info.NumInputs();
+      params.num_output_tensors = info.NumOutputs();
+      for (int i = 0, count = 0; i < params.num_input_tensors; i++)
       {
-        LOG(FATAL) << "TVMRT: total length of input names exceeded maximum allowed: "
-                   << TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE << '\n';
+        if (count + info.input_names[i].size() + 1 > TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE)
+        {
+          LOG(FATAL) << "TVMRT: total length of input names exceeded maximum allowed: "
+                     << TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE << '\n';
+          return PackedFunc(nullptr);
+        }
+        params.input_names_offset[i] = count;
+        strcpy((char*) &params.input_names[count], info.input_names[i].c_str());
+        count += (info.input_names[i].size() + 1);
+      }
+      for (size_t i = 0; i < info.tensor_sizes.size(); i++)
+        params.tensors_params[i].size_in_bytes = info.tensor_sizes[i];
+
+      std::string trace_base_name = "./tidl_trace_c7xgraph_" + std::to_string(c7xgraph_id) + "_";
+      params.traceBaseName = const_cast<char *>(trace_base_name.c_str());
+      params.tvm_rt_debug_level = tvmrt_debuglevel;
+      params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
+      params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
+      params.TVMVprintf = TIDLVprintf;
+      char *env_string = getenv("TIDL_RT_TARGET_PRIORITY");
+      if (env_string)
+        params.targetPriority = atoi(env_string);
+      env_string = getenv("TIDL_RT_MAX_PREEMPT_DELAY");
+      if (env_string)
+        params.maxPreEmptDelay = atof(env_string);
+      env_string = getenv("TVM_RT_TRACE_NODE");
+      if (env_string)
+        params.tvm_rt_trace_node = atoi(env_string);
+      env_string = getenv("TVM_RT_TRACE_SIZE");
+      if (env_string)
+        params.tvm_rt_trace_size = atoi(env_string);
+      env_string = getenv("TIDL_RT_CORE_NUM");
+      if (env_string)
+        params.coreNum = atoi(env_string);
+      TIDL_LOG << "#TVM# c7x_deploy_mod size: " << params.deploy_mod_size;
+
+      if (TVMRT_create_(&params, &tvmrt_handle) != 0) {
+        LOG(FATAL) << "Failed to initialize TVMRT for c7xgraph " << c7xgraph_id << '\n';
         return PackedFunc(nullptr);
       }
-      params.input_names_offset[i] = count;
-      strcpy((char*) &params.input_names[count], info.input_names[i].c_str());
-      count += (info.input_names[i].size() + 1);
+      TIDL_LOG << "#TVM# TVMRT_create tidl_tvm_" << c7xgraph_id << ": " << tvmrt_handle;
+
+      // release c7x_deploy_mod by swapping with an empty string and let empty string go out of scope
+      std::string().swap(info.c7x_deploy_mod);
+
+      // Initialize sTVMRT_Tensor_t* vector for inputs/outputs
+      tvmrt_args.resize(info.NumInputs() + info.NumOutputs(), nullptr);
+      for (size_t i = 0; i < tvmrt_args.size(); i++)
+        tvmrt_args[i] = new sTVMRT_Tensor_t;
+
+      return PackedFunc([this, info](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+        for (int i = 0; i < args.size(); i++)
+          tvmrt_args[i]->data = (reinterpret_cast<DLTensor*>((void *) args[i]))->data;
+
+        // TVMRT_invoke() sequence
+        if (TVMRT_invoke_(tvmrt_handle, &tvmrt_args[0], &tvmrt_args[info.NumInputs()]) != 0)
+          LOG(FATAL) << "TVMRT_invoke failed\n";
+      });
+
+    } else if (strcmp(system_info.machine, "x86_64") == 0) {
+      // Running on x86 with host emulation
+      // Create temp file in /tmp
+      char temp_filename[] = "/tmp/libXXXXXX.so";
+      int fd = mkstemps(temp_filename, 3);  // 3 for ".so" suffix
+      if (fd == -1) {
+          perror("mkstemps failed");
+          return PackedFunc(nullptr);
+      }
+
+      // Write binary data
+      ssize_t bytes_written = write(fd, info.c7x_deploy_mod.data(),
+                                    info.c7x_deploy_mod.size());
+      if (bytes_written != info.c7x_deploy_mod.size()) {
+          perror("write failed");
+          close(fd);
+          return PackedFunc(nullptr);
+      }
+      close(fd);
+
+      if (!hostemu_dl_handle) {
+        dlerror();
+        tidl_handle = dlopen("libvx_tidl_rt.so",  RTLD_LAZY | RTLD_GLOBAL);
+        tidl_handle = dlopen("libvx_tidl_rt.so",  RTLD_LAZY | RTLD_GLOBAL);
+        const char *dlsym_error1 = dlerror();
+        if (dlsym_error1) {
+          LOG(FATAL) << "Cannot open libvx_tidl_rt.so! " << dlsym_error1 << '\n';
+        }
+        hostemu_dl_handle = dlopen(temp_filename, RTLD_LAZY | RTLD_GLOBAL);
+        const char *dlsym_error2 = dlerror();
+        if (dlsym_error2) {
+          LOG(FATAL) << "Cannot open c7x deployable module (hostemu)! " << dlsym_error2 << '\n';
+        }
+      }
+      if (!hostemu_dl_handle) {
+          fprintf(stderr, "dlopen failed: %s\n", dlerror());
+          unlink(temp_filename);  // cleanup
+          return PackedFunc(nullptr);
+      }
+
+      // Get function pointer
+      tvm_main_create  = (tvm_main_create_t) dlsym(hostemu_dl_handle, "tvm_main_create");
+      tvm_main_process = (tvm_main_process_t)dlsym(hostemu_dl_handle, "tvm_main_process");
+      tvm_main_delete  = (tvm_main_delete_t) dlsym(hostemu_dl_handle, "tvm_main_delete");
+      if (!tvm_main_create || !tvm_main_process || !tvm_main_delete) {
+          fprintf(stderr, "dlsym failed: %s\n", dlerror());
+          dlclose(hostemu_dl_handle);
+          unlink(temp_filename);
+          return PackedFunc(nullptr);
+      }
+
+      int32_t tvm_rt_trace_node = -1;
+      int32_t tvm_rt_trace_size = 2 * 1024 * 1024;
+      if (tvmrt_debuglevel >= 2) {
+        char *env_string = getenv("TVM_RT_TRACE_NODE");
+        if (env_string)
+          tvm_rt_trace_node = atoi(env_string);
+        env_string = getenv("TVM_RT_TRACE_SIZE");
+        if (env_string)
+          tvm_rt_trace_size = atoi(env_string);
+        tvm_rt_trace_ptr = malloc(tvm_rt_trace_size);
+      }
+      tvm_tidl_rt_info rt_info = { tvmrt_debuglevel, std::min(tidlrt_debuglevel, 3), 0, FLT_MAX,
+          reinterpret_cast<uint64_t>(tvm_rt_trace_ptr), tvm_rt_trace_size, tvm_rt_trace_node,
+          0, 1 };
+      tvm_main_create(&rt_info);
+
+      hostemu_input_names_offset.clear();
+      hostemu_input_names.resize(TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE);
+      for (int i = 0, count = 0; i < info.NumInputs(); i++)
+      {
+        if (count + info.input_names[i].size() + 1 > TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE)
+        {
+          LOG(FATAL) << "TVMRT: total length of input names exceeded maximum allowed: "
+                     << TVMRT_MAX_TOTAL_INPUT_TENSOR_NAMES_SIZE << '\n';
+          return PackedFunc(nullptr);
+        }
+        hostemu_input_names_offset.push_back(count);
+        strcpy((char*) (hostemu_input_names.data() + count), info.input_names[i].c_str());
+        count += (info.input_names[i].size() + 1);
+      }
+      hostemu_tensors.resize(info.NumInputs() + info.NumOutputs(), nullptr);
+
+      return PackedFunc([this, info](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
+        for (int i = 0; i < args.size(); i++)
+          hostemu_tensors[i] = (reinterpret_cast<DLTensor*>((void *) args[i]))->data;
+
+        if (tvm_main_process(info.NumInputs(), info.NumOutputs(),
+                             hostemu_input_names_offset.data(), hostemu_input_names.data(),
+                             hostemu_tensors.data()) != 0)
+          LOG(FATAL) << "tvm_main_process failed\n";
+        if (tvm_rt_trace_ptr != nullptr) {
+          int32_t trace_size;
+          memcpy(&trace_size, tvm_rt_trace_ptr, 4);
+          FILE* f_trace = fopen("tvm_c7x_hostemu.trace", "wb");
+          if (f_trace != NULL) {
+            fwrite(tvm_rt_trace_ptr, trace_size, 1, f_trace);
+            fclose(f_trace);
+            printf("TVM CRT: Wrote %d bytes to tvm_c7x_hostemu.trace\n", trace_size);
+          } else {
+            printf("TVM CRT: ERROR: Failed to open tvm_c7x_hostemu.trace for writing\n");
+          }
+        }
+      });
     }
-    for (size_t i = 0; i < info.tensor_sizes.size(); i++)
-      params.tensors_params[i].size_in_bytes = info.tensor_sizes[i];
-
-    std::string trace_base_name = "./tidl_trace_c7xgraph_" + std::to_string(c7xgraph_id) + "_";
-    params.traceBaseName = const_cast<char *>(trace_base_name.c_str());
-    params.tvm_rt_debug_level = tvmrt_debuglevel;
-    params.traceLogLevel   = std::min(tidlrt_debuglevel, 3);
-    params.traceWriteLevel = (tidlrt_debuglevel > 3) ? ((tidlrt_debuglevel > 4) ? 3 : 1)  : 0;
-    params.TVMVprintf = TIDLVprintf;
-    char *env_string = getenv("TIDL_RT_TARGET_PRIORITY");
-    if (env_string)
-      params.targetPriority = atoi(env_string);
-    env_string = getenv("TIDL_RT_MAX_PREEMPT_DELAY");
-    if (env_string)
-      params.maxPreEmptDelay = atof(env_string);
-    env_string = getenv("TVM_RT_TRACE_NODE");
-    if (env_string)
-      params.tvm_rt_trace_node = atoi(env_string);
-    env_string = getenv("TVM_RT_TRACE_SIZE");
-    if (env_string)
-      params.tvm_rt_trace_size = atoi(env_string);
-    env_string = getenv("TIDL_RT_CORE_NUM");
-    if (env_string)
-      params.coreNum = atoi(env_string);
-    TIDL_LOG << "#TVM# c7x_deploy_mod size: " << params.deploy_mod_size;
-
-    if (TVMRT_create_(&params, &tvmrt_handle) != 0) {
-      LOG(FATAL) << "Failed to initialize TVMRT for c7xgraph " << c7xgraph_id << '\n';
-      return PackedFunc(nullptr);
-    }
-    TIDL_LOG << "#TVM# TVMRT_create tidl_tvm_" << c7xgraph_id << ": " << tvmrt_handle;
-
-    // release c7x_deploy_mod by swapping with an empty string and let empty string go out of scope
-    std::string().swap(info.c7x_deploy_mod);
-
-    // Initialize sTVMRT_Tensor_t* vector for inputs/outputs
-    tvmrt_args.resize(info.NumInputs() + info.NumOutputs(), nullptr);
-    for (size_t i = 0; i < tvmrt_args.size(); i++)
-      tvmrt_args[i] = new sTVMRT_Tensor_t;
-
-    return PackedFunc([this, info](tvm::TVMArgs args, tvm::TVMRetValue* rv) {
-      for (int i = 0; i < args.size(); i++)
-        tvmrt_args[i]->data = (reinterpret_cast<DLTensor*>((void *) args[i]))->data;
-
-      // TVMRT_invoke() sequence
-      if (TVMRT_invoke_(tvmrt_handle, &tvmrt_args[0], &tvmrt_args[info.NumInputs()]) != 0)
-        LOG(FATAL) << "TVMRT_invoke failed\n";
-    });
   }
 
   const char* type_key() const { return "tidl"; }
@@ -738,7 +883,7 @@ private:
   std::unordered_map<std::string, C7xTVMGraphInfo> infos;
 
   int c7xgraph_id;
-  void* tvmrt_handle;
+  void* tvmrt_handle = nullptr;
   std::vector<sTVMRT_Tensor_t*> tvmrt_args;
 
   // TVMRT API from TIDLRT/TVMRT shared library
@@ -748,6 +893,19 @@ private:
   decltype(&TVMRT_invoke)     TVMRT_invoke_ = nullptr;
   decltype(&TVMRT_deactivate) TVMRT_deactive_ = nullptr;
   decltype(&TVMRT_setParamsDefault) TVMRT_setParamsDefault_ = nullptr;
+
+  // host emulation data structures and functions
+  void* hostemu_dl_handle = nullptr;
+  void* tvm_rt_trace_ptr  = nullptr;
+  std::vector<uint32_t> hostemu_input_names_offset;
+  std::vector<uint8_t>  hostemu_input_names;
+  std::vector<void*>    hostemu_tensors;
+  typedef int (*tvm_main_create_t)(void*);
+  typedef int (*tvm_main_process_t)(int32_t, int32_t, uint32_t*, uint8_t*, void*[]);
+  typedef int (*tvm_main_delete_t)(void);
+  tvm_main_create_t  tvm_main_create  = nullptr;
+  tvm_main_process_t tvm_main_process = nullptr;
+  tvm_main_delete_t  tvm_main_delete  = nullptr;
 };
 
 

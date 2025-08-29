@@ -17,12 +17,18 @@
 
 include make.inc
 
-LIB_NAME = $(SILICON_VERSION)/tidl_api.lib
+ifeq ($(TARGET_PLATFORM), PC)
+  LIB_NAME = $(SILICON_VERSION)/libtidl_api.a
+	HOSTEMU_SOURCE = tvm_tidl_hostemu.c
+else
+  LIB_NAME = $(SILICON_VERSION)/tidl_api.lib
+	HOSTEMU_SOURCE =
+endif
 
 CRT_ROOT    ?= $(TVM_ROOT)/src/runtime/crt
 CRT_CONFIG  ?= .
 DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
-BUILD_DIR   ?= $(SILICON_VERSION)/build
+BUILD_DIR   ?= $(SILICON_VERSION)/$(BUILD_DIR_NAME)
 
 TI_MEM_MANAGER_C = $(USE_TIDL_RT_PATH)/test/src/ti_mem_manager.c
 TIDL_RT_OVX_DEBUG_UTILS_C = $(USE_TIDL_RT_PATH)/src/tidl_rt_ovx_debug_utils.c
@@ -38,7 +44,7 @@ SOURCES = bundle_static.c \
           tidl_api.c \
           tidl_api_mem.c \
           tvm_tidl_dmautils.c \
-		  tvm_tidl_sort.cc
+          tvm_tidl_sort.cc $(HOSTEMU_SOURCE)
 
 HEADERS := $(shell find . -name "*.h")
 OBJS_C  = $(patsubst %.c,$(BUILD_DIR)/%.obj,$(SOURCES))
@@ -54,19 +60,19 @@ $(LIB_NAME): $(OBJS)
 
 $(BUILD_DIR)/%.obj: %.cc $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
-	$(QUIET)$(CC) $(CFLAGS) -c --c++14 $< -fr=$(BUILD_DIR)
+	$(QUIET)$(CXX) $(CFLAGS) $(CXXFLAGS) -c $< $(OPTION_OUTFILE) $@
 
 $(BUILD_DIR)/%.obj: %.c $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
-	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
+	$(QUIET)$(CC) $(CFLAGS) -c $< $(OPTION_OUTFILE) $@
 
 $(BUILD_DIR)/%.obj: $(TI_MEM_MANAGER_C) $(HEADERS)
 	$(QUIET)$(MKDIR_P) $(dir $@)
-	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
+	$(QUIET)$(CC) $(CFLAGS) -c $< $(OPTION_OUTFILE) $@
 
 $(BUILD_DIR)/tidl_rt_ovx_debug_utils.obj: $(TIDL_RT_OVX_DEBUG_UTILS_C)
 	$(QUIET)$(MKDIR_P) $(dir $@)
-	$(QUIET)$(CC) $(CFLAGS) -c $< -fr=$(BUILD_DIR)
+	$(QUIET)$(CC) $(CFLAGS) -c $< $(OPTION_OUTFILE) $@
 
 clean:
 	$(QUIET)$(RMDIR) $(LIB_NAME) $(OBJS) $(SILICON_VERSION)

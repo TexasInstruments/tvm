@@ -864,6 +864,10 @@ int TVMGraphExecutor_LoadParams(TVMGraphExecutor* executor, const char* param_bl
       }
       executor->data_entry[eid].dl_tensor.shape = 0;
     }
+    // Begin TI: data_entry[].dl_tensor.data is just a view into storage_pool.
+    //           storage_pool owns the memory.  Do not free and re-allocate here.
+    //           TVMNDArray_Load() is modified to not re-allocate.
+    #if 0
     if (executor->data_entry[eid].dl_tensor.data) {
       err = TVMPlatformMemoryFree(executor->data_entry[eid].dl_tensor.data, dev);
       if (err != kTvmErrorNoError) {
@@ -871,6 +875,8 @@ int TVMGraphExecutor_LoadParams(TVMGraphExecutor* executor, const char* param_bl
       }
       executor->data_entry[eid].dl_tensor.data = 0;
     }
+    #endif
+    // End TI
     status |= TVMNDArray_Load(&(executor->data_entry[eid]), &bptr);
 #if TVM_CRT_DEBUG
     TVMNDArray* entry = &(executor->data_entry[eid]);
@@ -921,7 +927,7 @@ void TVMGraphExecutor_Run(TVMGraphExecutor* executor) {
       {
         t_n = _TSC_read() - t_n;  /* Cycles */
         tvm_rt_trace_node_begin(idx, executor->op_execs[idx].name, t_n);
-    }
+      }
       if (tvm_rt_debug_level > 2)
       {
         uint32_t num_outputs = 1;

@@ -46,19 +46,16 @@
 #define C7X_TARGET
 #endif
 
+#define CRT_MEMORY_NUM_PAGES (1 * 1024 * 8)
+#define CRT_MEMORY_PAGE_SIZE_LOG2 7
+#define CRT_MEMORY_SIZE (CRT_MEMORY_NUM_PAGES * (1 << CRT_MEMORY_PAGE_SIZE_LOG2))
+#define CRT_MEMORY_MAX_ALLOC_SIZE (1 << 10)
+static MemoryManagerInterface* g_memory_manager = NULL;
+
 #if defined(C7X_TARGET) && ! defined(HOST_EMULATION)
-  #define CRT_MEMORY_NUM_PAGES (1 * 1024 * 8)
-  #define CRT_MEMORY_PAGE_SIZE_LOG2 7
-  #define CRT_MEMORY_SIZE (CRT_MEMORY_NUM_PAGES * (1 << CRT_MEMORY_PAGE_SIZE_LOG2))
-  #define CRT_MEMORY_MAX_ALLOC_SIZE (1 << 10)
   static uint8_t *g_crt_memory = NULL;
-  static MemoryManagerInterface* g_memory_manager = NULL;
 #else
-  #define CRT_MEMORY_NUM_PAGES 65536
-  #define CRT_MEMORY_PAGE_SIZE_LOG2 10
-  #define CRT_MEMORY_SIZE (CRT_MEMORY_NUM_PAGES * (1 << CRT_MEMORY_PAGE_SIZE_LOG2))
   static uint8_t g_crt_memory[CRT_MEMORY_SIZE];
-  static MemoryManagerInterface* g_memory_manager;
 #endif
 
 
@@ -86,7 +83,7 @@ void    tvmcrt_exit(int ecode)
   do {                                                                               \
     tvm_crt_error_t ret = (func);                                                    \
     if (ret != kTvmErrorNoError) {                                                   \
-      fprintf(stderr, "%s: %d: error: %s\n", __FILE__, __LINE__, TVMGetLastError()); \
+      fprintf(stderr, "%s: %d: error: %s\n", __FILE__, __LINE__, CRT_TVMGetLastError()); \
       tvmcrt_exit(ret);                                                              \
     }                                                                                \
   } while (0)
@@ -282,6 +279,7 @@ tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLDevice dev, void**
     g_memory_manager->Allocate(g_memory_manager, num_bytes, dev, out_ptr);
   }
 
+#if defined(C7X_TARGET) && ! defined(HOST_EMULATION)
   // Tier 2: directly allocate from appMem, bookkeep (ptr, size) for Free() later
   if (*out_ptr == NULL && tvmcrt_alloc_size_map != NULL)
   {
@@ -302,6 +300,12 @@ tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLDevice dev, void**
       }
     }
   }
+#else
+  if (*out_ptr == NULL)
+  {
+    *out_ptr = malloc(num_bytes);
+  }
+#endif
 
   if (*out_ptr != NULL)
   {
@@ -316,12 +320,13 @@ tvm_crt_error_t TVMPlatformMemoryAllocate(size_t num_bytes, DLDevice dev, void**
 tvm_crt_error_t TVMPlatformMemoryFree(void* ptr, DLDevice dev) {
   tvm_crt_error_t err = kTvmErrorNoError;
 
-  if (ptr >= g_crt_memory && ptr < g_crt_memory + CRT_MEMORY_SIZE)
+  if ((uint8_t*)ptr >= g_crt_memory && (uint8_t*)ptr < g_crt_memory + CRT_MEMORY_SIZE)
   {
     err = g_memory_manager->Free(g_memory_manager, ptr, dev);
   }
   else
   {
+#if defined(C7X_TARGET) && ! defined(HOST_EMULATION)
     int i, size = 0;
     for (i = 0; i < tvmcrt_alloc_size_map->size; i++)
     {
@@ -342,6 +347,9 @@ tvm_crt_error_t TVMPlatformMemoryFree(void* ptr, DLDevice dev) {
     {
       printf("Warning: tvmcrt: Ptr %p size unknown, not freed\n", ptr);
     }
+#else
+    free(ptr);
+#endif
   }
 
   return err;
@@ -358,6 +366,7 @@ tvm_crt_error_t TVMPlatformTimerStop(double* elapsed_time_seconds) {
 static void
 tvmcrt_free_all()
 {
+#if defined(C7X_TARGET) && ! defined(HOST_EMULATION)
   if (tvmcrt_alloc_size_map != NULL)
   {
     int i = 0;
@@ -371,7 +380,6 @@ tvmcrt_free_all()
     appMemFree(APP_MEM_HEAP_DDR, tvmcrt_alloc_size_map, sizeof(AllocPtrSizeMap_t));
     tvmcrt_alloc_size_map = NULL;
   }
-#if defined(C7X_TARGET) && ! defined(HOST_EMULATION)
   if (g_crt_memory != NULL)
   {
     appMemFree(APP_MEM_HEAP_DDR, g_crt_memory, CRT_MEMORY_SIZE);

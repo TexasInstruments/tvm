@@ -18,11 +18,12 @@
  */
 
 
-/* This file provides TVM C runtime support for various 
+/* This file provides TVM C runtime support for various
    sort operations in TVM+TIDL generated code  */
 
 #include <stdio.h>
 #include <math.h>
+#include <algorithm>
 #include <dlpack/dlpack.h>
 #include <stdbool.h>
 #include "c7x_tvm_runtime.h"
@@ -153,7 +154,15 @@ void argsort(DLTensor* input, DLTensor* output, int32_t axis, bool is_ascend) {
       int64_t base_idx = i * input->shape[axis] * axis_mul_after + j;
       __SE0_OPEN((void *)(data + base_idx), SE_Config.params());
       for (int64_t k = 0; k < input->shape[axis]; ++k) {
+#if defined(HOST_EMULATION)  // temporary c7x compiler hostemu workaround
+        if (std::is_floating_point<DataType>::value) {
+          in_scratch[k] = __as_float(strm_eng<0, int>::get_adv());
+        } else {
+          in_scratch[k] = strm_eng<0, DataType>::get_adv();
+        }
+#else
         in_scratch[k] = strm_eng<0, DataType>::get_adv();
+#endif
       }
       __SE0_CLOSE();
       int sort_num = input->shape[axis];
@@ -220,7 +229,7 @@ void topk_impl(
   int len = sort_num;
 
   typedef std::pair<DataType, IndexType> val_ind_t;
-  
+
   // Use a heap to help keep the k largest values (and indices)
   val_ind_t * __restrict__ topk = (val_ind_t *) L2Context.allocate(k * sizeof(val_ind_t));
 
@@ -298,14 +307,14 @@ void topk(DLTensor* input, DLTensor* out_values, DLTensor* out_indices, int k, i
     axis = input->ndim + axis;
   }
 
-  std::pair<DataType, IndexType>* __restrict__ scratch = 
+  std::pair<DataType, IndexType>* __restrict__ scratch =
     (std::pair<DataType, IndexType> *) DDRContext.allocate(
       input->shape[axis] * sizeof (std::pair<DataType, IndexType>)
       );
   DataType* __restrict__ data = (DataType *) input->data;
   DataType* __restrict__ values_ptr = out_values == nullptr ? nullptr : (DataType *) out_values->data;
   IndexType* __restrict__ indices_ptr = out_indices == nullptr ? nullptr : (IndexType *) out_indices->data;
-  
+
   int axis_mul_before = 1;
   int axis_mul_after = 1;
   for (int i = 0; i < input->ndim; ++i) {
@@ -330,7 +339,15 @@ void topk(DLTensor* input, DLTensor* out_values, DLTensor* out_indices, int k, i
       #if 1
       __SE0_OPEN((void *)(data + src_base_idx), SE_Config.params());
       for (int64_t kk = 0; kk < input->shape[axis]; ++kk) {
-        scratch[kk] = std::make_pair(strm_eng<0, DataType>::get_adv(), kk); 
+#if defined(HOST_EMULATION)  // temporary c7x compiler hostemu workaround
+        if (std::is_floating_point<DataType>::value) {
+          scratch[kk] = std::make_pair(__as_float(strm_eng<0, int>::get_adv()), kk);
+        } else {
+          scratch[kk] = std::make_pair(strm_eng<0, DataType>::get_adv(), kk);
+        }
+#else
+        scratch[kk] = std::make_pair(strm_eng<0, DataType>::get_adv(), kk);
+#endif
       }
       __SE0_CLOSE();
       #else

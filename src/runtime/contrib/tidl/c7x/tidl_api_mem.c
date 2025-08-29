@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if (HOST_EMULATION)
+#if defined(HOST_EMULATION)
    #include <malloc.h>
 #endif
 #include "tidl_api.h"
@@ -47,11 +47,20 @@ static int32_t ddr_scratch_avail_size;
 static void   *g_ddr_scratch_mem_addr = NULL;
 static int32_t g_ddr_scratch_mem_size = 0;
 
+#if defined(HOST_EMULATION)
+uint8_t g_l2_mem[L2_MEM_SIZE];
+uint8_t g_l3_mem[L3_MEM_SIZE];
+uint32_t g_l3_mem_size;
+void    *g_l3_mem_addr;
+#endif
+
 EXTERN_C void tvm_tidl_l2_scratch_reset()
 {
-  #if (HOST_EMULATION)
-  if (!p_l2_scratch)  p_l2_scratch = tidl_memalign(L2_ALIGN_SIZE, L2_MEM_SIZE);
+  #if defined(HOST_EMULATION)
+  p_l2_scratch = &g_l2_mem[0];
   l2_scratch_avail_size = L2_MEM_SIZE;
+  g_l3_mem_addr = (void *) &g_l3_mem[0];
+  g_l3_mem_size = L3_MEM_SIZE;
   #else
   p_l2_scratch = (uint8_t *) g_l2_mem_addr;
   l2_scratch_avail_size = g_l2_mem_size;

@@ -32,8 +32,11 @@
 #include <string.h>
 #include <stdlib.h>
 
-#if (HOST_EMULATION)
+#ifdef HOST_EMULATION
    #define restrict __restrict__
+   // We serialize and store TIDL net data strucutre in .const, could use the pointer directly.
+   // However, TIDL will update this data strucutre during TIDL_init, so we make a copy.
+   #define TIDL_COPY_NETWORK_BUF 1
 #endif
 
 #ifdef __cplusplus
@@ -48,7 +51,7 @@
 #define TIDL_FLOW_CTRL_REF_STAT (0x00000002)
 #define TIDL_FLOW_CTRL_MMA_NATC (0x00000004)
 #define TIDL_FLOW_CTRL_DSP_NATC (0x00000008)
-#define TIDL_FLOW_CTRL_REF_COMP (0x00000010)
+#define TIDL_FLOW_CTRL_AVX_REF  (0x00000020)
 
 // When network statically linked into firmware, for some reason, TIDL
 // updates the network at TIDL_free() call.  Make a copy of the network.
@@ -116,7 +119,6 @@ EXTERN_C void* init_tidl_subgraph(void *network,
                                   void* in_rt_info)
 {
   int32_t status = IALG_EOK;
-
   // Setup L1/L2/L3/L4 system memory regions, for servicing memory requests.
   init_mem_regions();
 
@@ -160,10 +162,13 @@ EXTERN_C void* init_tidl_subgraph(void *network,
     createParams->coreId                        = rt_info->tvm_rt_core_num - 1;
   }
   createParams->reservedCtrl                  = 0;
-#if (HOST_EMULATION)
-  createParams->flowCtrl                      = TIDL_FLOW_CTRL_REF_ONLY;
+#ifdef HOST_EMULATION
+  createParams->flowCtrl                      = TIDL_FLOW_CTRL_REF_ONLY |
+                                                TIDL_FLOW_CTRL_AVX_REF;
+  createParams->TIDLVprintf                   = vprintf;
 #else
   createParams->flowCtrl                      = TIDL_FLOW_CTRL_DEFAULT ;
+  createParams->TIDLVprintf                   = printTIDLLog;
 #endif
   createParams->udmaDrvObj                    = udmaDrvObjPtr;
 
@@ -171,8 +176,6 @@ EXTERN_C void* init_tidl_subgraph(void *network,
 
   createParams->pFxnLock                      = TVM_lockInterrupts;
   createParams->pFxnUnLock                    = TVM_unlockInterrupts;
-  createParams->TIDLVprintf                   = printTIDLLog;
-  //createParams.TIDLVprintf                   = vprintf;
   createParams->tracePtr                      = NULL;
   createParams->TIDLWriteBinToFile            = NULL;
   createParams->TIDLReadBinFromFile           = NULL;
@@ -615,7 +618,7 @@ static void init_mem_regions()
   uint32_t  L1Size;
   uint32_t  L2Size;
   uint32_t  L3Size;
-#if HOST_EMULATION
+#ifdef HOST_EMULATION
   // Copied from test app, but seems suspicious. Align to total size
   // of internal memory block?
   L1Scratch = (uint8_t*)tidl_memalign(L1_TOTAL_MEMORY_SIZE, L1_MEM_SIZE);

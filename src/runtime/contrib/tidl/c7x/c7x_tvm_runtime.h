@@ -41,16 +41,18 @@
 #include <string>
 #include <sstream>
 #include <type_traits>
-#include "c7x.h"
+#include <c7x.h>
+#include <stddef.h>
 
 #define max(a, b) __max((a), (b))
 #define min(a, b) __min((a), (b))
 
-// If MODEL_DMA is true, the DMA utilities are stubbed out
-#if !MODEL_DMA
 #include "tidl_api_mem.h"
+#if !defined(HOST_EMULATION)
 #include "tvm_tidl_dmautils.h"
-#else
+#endif
+
+#if defined(HOST_EMULATION)
 // Define stubs for the DMA utility wrapper functions
 #include <stdlib.h>
 // from tvm_tidl_dmautils.h
@@ -67,27 +69,6 @@ typedef enum{
     TVMTIDL_DMAUTILSAUTOINC3D_SYNC_3D = 2,
     TVMTIDL_DMAUTILSAUTOINC3D_SYNC_4D = 3
   }tvmtidlDmaUtilsAutoInc3d_SyncType;
-
-uint8_t* tvm_tidl_l2_scratch_alloc(int32_t size)
-  { return (uint8_t*)malloc(size); }
-void tvm_tidl_l2_scratch_reset() {}
-uint8_t* tvm_tidl_dmautils_init(int32_t num_channels, uint8_t *pTrMem_chs[])
-  { return nullptr; }
-int32_t tvm_tidl_configure_channel(uint8_t *dmaUtilsContext,
-     int32_t ch, uint8_t *pTrMem_chs[],
-     uint8_t *srcPtr, uint8_t *dstPtr, tvmtidlDmaUtilsAutoInc3d_SyncType syncType,
-     uint16_t sicnt0, uint16_t sicnt1, uint16_t sicnt2, uint16_t sicnt3,
-                       int32_t sdim1,   int32_t sdim2,   int32_t sdim3,
-     uint16_t dicnt0, uint16_t dicnt1, uint16_t dicnt2, uint16_t dicnt3,
-                       int32_t ddim1,   int32_t ddim2,   int32_t ddim3)
-  { return 0; }
-int32_t tvm_tidl_dmautils_deinit(uint8_t *dmaUtilsContext,
-     int32_t num_channels, uint8_t *pTrMem_chs[])
-  { return 0; }
-void tvm_tidl_dmautils_trigger(uint8_t *dmaUtilscontext, int32_t channel)
-  {}
-void tvm_tidl_dmautils_wait(uint8_t *dmaUtilscontext, int32_t channel)
-  {}
 #endif
 
 extern "C" {
@@ -106,13 +87,17 @@ class DMAContext
 public:
   DMAContext(int n) : nchannels(n)
   {
+    #if !defined(HOST_EMULATION)
     if (nchannels > 0)
       dmaUtilsContext = tvm_tidl_dmautils_init(nchannels, pTrMem_chs);
+    #endif
   }
   ~DMAContext()
   {
+    #if !defined(HOST_EMULATION)
     if (nchannels > 0)
       tvm_tidl_dmautils_deinit(dmaUtilsContext, nchannels, pTrMem_chs);
+    #endif
   }
   int allocate_channel()
   {
@@ -201,6 +186,7 @@ public:
   // The constructor binds the buffer to an actual location.
   BufferBase(uint32_t num_elems, void *ptr) : num_elems_(num_elems), ptr_(ptr) {}
   void* get() { return ptr_; }
+  void* get_base() { return ptr_; }
   // This method is called after the DMA completes each block of a transfer.
   virtual void sync() {}
 protected:
@@ -250,10 +236,6 @@ class DoubleBuffer : public BufferBase<DoubleBuffer<ElemType_>>
 };
 
 //---------------------------------------------------------------------------------
-#if DEBUG && MODEL_DMA
-class APSim;  // forward declaration
-#endif
-
 // An AccessPattern is a canonical way of expressing the sequence of
 // accesses in a multidimensional array, a la streaming engine or DMA.
 class AccessPattern
@@ -282,10 +264,6 @@ public:
   int sync_axis = -1;
   // buffer offset where the transfer starts
   int offset = 0;
-  #if DEBUG && MODEL_DMA
-  // Access pattern simulator, for testing
-  APSim *sim = nullptr;
-  #endif
 
 public:
   AccessPattern() {}
@@ -304,61 +282,6 @@ public:
   }
 };
 
-//---------------------------------------------------------------------------------
-// APSim: simulate an access pattern, for testing
-#if DEBUG && MODEL_DMA
-class APSim
-{
-  int i0 = 0;
-  int i1 = 0;
-  int i2 = 0;
-  int i3 = 0;
-  const AccessPattern& AP;
-public:
-  APSim(const AccessPattern& AP) : AP(AP) { reset(); }
-  void reset() { i0=i1=i2=i3=0; }
-  int currpos()
-  {
-    return i3*AP.axes[3].stride +
-           i2*AP.axes[2].stride +
-           i1*AP.axes[1].stride +
-           i0*AP.axes[0].stride;
-  }
-  // Advance by one block
-  uint32_t advance()
-  {
-    uint32_t nbytes = 0;
-    bool sync = false;
-    for(;;)
-    {
-      // advance i0
-      if (i0++ < AP.axes[0].count)
-        nbytes += AP.axes[0].stride;
-      else
-      {
-        // advance i1
-        if (AP.sync_axis == 0) sync = true;
-          i0 = 0;
-        if (++i1 >= AP.axes[1].count)
-        {
-          // advance i2
-          if (AP.sync_axis == 1) sync = true;
-          i1 = 0;
-          if (++i2 >= AP.axes[2].count)
-          {
-            // advance i3
-            if (AP.sync_axis == 2) sync = true;
-            i2 = 0;
-            if (++i3 >= AP.axes[3].count)
-              sync = true;
-          }
-        }
-      }
-      if (sync) return nbytes;
-    }
-  }
-};
-#endif  // DEBUG && MODEL_DMA
 
 //---------------------------------------------------------------------------------
 // DMA represents an agent to transfer data from a SrcBuffer to a DstBuffer.
@@ -433,6 +356,7 @@ public:
         case 3: sync = TVMTIDL_DMAUTILSAUTOINC3D_SYNC_4D; break;
      }
 
+     #if !defined(HOST_EMULATION)
      tvm_tidl_configure_channel(
        context.get_dmaUtilsContext(), channel, context.get_pTrMem(),
        (uint8_t*)src->get() + srcAP.offset, (uint8_t*)dst->get() + dstAP.offset, sync,
@@ -451,28 +375,126 @@ public:
        dstAP.axes[2].stride,
        dstAP.axes[3].stride
      );
+     #endif
    }
+
+#if defined(HOST_EMULATION)
+   uint8_t *get_seq_ptr(void *base_ptr, AccessPattern AP)
+   {
+     uint8_t *curr_ptr = reinterpret_cast<uint8_t*>(base_ptr);
+
+     // relative to sync_axis, compute number of transfer inside each dim
+     int num_seqs[4] = {1, 1, 1, 1};
+     if (srcAP.sync_axis == 0) {
+      num_seqs[3] = AP.axes[1].count * AP.axes[2].count * AP.axes[3].count;
+      num_seqs[2] = AP.axes[1].count * AP.axes[2].count;
+      num_seqs[1] = AP.axes[1].count;
+     }
+     if (srcAP.sync_axis == 1) {
+      num_seqs[3] = AP.axes[2].count * AP.axes[3].count;
+      num_seqs[2] = AP.axes[2].count;
+     }
+     if (srcAP.sync_axis == 2) {
+      num_seqs[3] = AP.axes[3].count;
+     }
+     if (srcAP.sync_axis == 0) {
+      curr_ptr += ((seq / num_seqs[2]) % AP.axes[3].count) * AP.axes[3].stride
+                + ((seq / num_seqs[1]) % AP.axes[2].count) * AP.axes[2].stride
+                + ((seq / num_seqs[0]) % AP.axes[1].count) * AP.axes[1].stride;
+     }
+     if (srcAP.sync_axis == 1) {
+      curr_ptr += ((seq / num_seqs[2]) % AP.axes[3].count) * AP.axes[3].stride
+                + ((seq / num_seqs[1]) % AP.axes[2].count) * AP.axes[2].stride;
+     }
+     if (srcAP.sync_axis == 2) {
+      curr_ptr += ((seq / num_seqs[2]) % AP.axes[3].count) * AP.axes[3].stride;
+     }
+     #if DEBUG
+     printf("seq: %d, base_ptr: %p, seq_ptr: %p\n", seq, base_ptr, curr_ptr);
+     #endif
+     return curr_ptr;
+   }
+
+  void copy_with_memcpy(uint8_t* seq_dst_ptr, uint8_t* seq_src_ptr)
+  {
+    #if DEBUG
+    printf("seq: %d, copy from %p to %p\n", seq, seq_src_ptr, seq_dst_ptr);
+    #endif
+    if (srcAP.sync_axis == 0) {
+      memcpy(seq_dst_ptr, seq_src_ptr, srcAP.axes[0].count);
+    }
+    if (srcAP.sync_axis == 1) {
+      uint8_t* ptr1_dst = seq_dst_ptr;
+      uint8_t* ptr1_src = seq_src_ptr;
+      for (int i1 = 0; i1 < srcAP.axes[1].count; i1++) {
+        memcpy(ptr1_dst, ptr1_src, srcAP.axes[0].count);
+        ptr1_dst += dstAP.axes[1].stride;
+        ptr1_src += srcAP.axes[1].stride;
+      }
+    }
+    if (srcAP.sync_axis == 2) {
+      uint8_t* ptr2_dst = seq_dst_ptr;
+      uint8_t* ptr2_src = seq_src_ptr;
+      for (int i2 = 0; i2 < srcAP.axes[2].count; i2++) {
+        uint8_t* ptr1_dst = ptr2_dst;
+        uint8_t* ptr1_src = ptr2_src;
+        for (int i1 = 0; i1 < srcAP.axes[1].count; i1++) {
+          memcpy(ptr1_dst, ptr1_src, srcAP.axes[0].count);
+          ptr1_dst += dstAP.axes[1].stride;
+          ptr1_src += srcAP.axes[1].stride;
+        }
+        ptr2_dst += dstAP.axes[2].stride;
+        ptr2_src += srcAP.axes[2].stride;
+      }
+    }
+    if (srcAP.sync_axis == 3) {
+      uint8_t* ptr3_dst = seq_dst_ptr;
+      uint8_t* ptr3_src = seq_src_ptr;
+      for (int i3 = 0; i3 < srcAP.axes[3].count; i3++) {
+        uint8_t* ptr2_dst = ptr3_dst;
+        uint8_t* ptr2_src = ptr2_src;
+        for (int i2 = 0; i2 < srcAP.axes[2].count; i2++) {
+          uint8_t* ptr1_dst = ptr2_dst;
+          uint8_t* ptr1_src = ptr2_src;
+          for (int i1 = 0; i1 < srcAP.axes[1].count; i1++) {
+            memcpy(ptr1_dst, ptr1_src, srcAP.axes[0].count);
+            ptr1_dst += dstAP.axes[1].stride;
+            ptr1_src += srcAP.axes[1].stride;
+          }
+          ptr2_dst += dstAP.axes[2].stride;
+          ptr2_src += srcAP.axes[2].stride;
+        }
+        ptr3_dst += dstAP.axes[3].stride;
+        ptr3_src += srcAP.axes[3].stride;
+      }
+    }
+  }
+#endif
 
    // Trigger transfer of next block
    void trigger()
    {
-     #if DEBUG && MODEL_DMA
-     printf("trigger %s[%d]: %d --> %d, channel=%d\n",
-            name, seq, srcAP.sim->currpos(), dstAP.sim->currpos(), channel);
-     #endif
+     #if !defined(HOST_EMULATION)
      tvm_tidl_dmautils_trigger(context.get_dmaUtilsContext(), channel);
+     #else
+     // use memcpy for host emulation
+     // from src_ptr: up to sync_axis dimensions
+     // to   dst_ptr: up to sync_axis dimensions
+     // if SB, src_ptr/dst_ptr not changing
+     // if DB, either src_ptr or dst_ptr is alternating between two buffers
+     // hostemu: need to keep track of updated SB/DB pointers, or use seq to get the pointer
+     // get_src_ptr(seq), get_dst_ptr(seq), then copy up to sync_axis dim
+     copy_with_memcpy(get_seq_ptr((uint8_t*)dst->get_base() + dstAP.offset, dstAP),
+                      get_seq_ptr((uint8_t*)src->get_base() + srcAP.offset, srcAP));
+     #endif
      ++seq;
    }
 
    // Wait for transfer of last-triggered block to finish
    void wait()
    {
+     #if !defined(HOST_EMULATION)
      tvm_tidl_dmautils_wait(context.get_dmaUtilsContext(), channel);
-     #if DEBUG && MODEL_DMA
-     auto src_bytes = srcAP.sim->advance();
-     auto dst_bytes = dstAP.sim->advance();
-     assert(src_bytes == dst_bytes);
-     printf("wait %s[%d]: ... copied %d bytes\n", name, seq-1, src_bytes);
      #endif
    }
 
@@ -650,7 +672,7 @@ public:
     se_params.DIM4     = dim4;
     se_params.DIM5     = dim5;
   }
-  __SE_TEMPLATE_v1 params() const { return se_params; }
+  __SE_TEMPLATE_v1& params() { return se_params; }
 private:
   __SE_TEMPLATE_v1 se_params;
 };
@@ -679,7 +701,7 @@ public:
     sa_params.DIM4     = dim4;
     sa_params.DIM5     = dim5;
   }
-  __SA_TEMPLATE_v1 params() const { return sa_params; }
+  __SA_TEMPLATE_v1& params() { return sa_params; }
 private:
   __SA_TEMPLATE_v1 sa_params;
 };

@@ -78,7 +78,13 @@ message("-- Build with contrib.tidl.c7x libs, path= ${build_env_paths}")
 add_custom_target(tidl_c7x_libs_j721e
                   COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tvm_crt
                   COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.dsp_syms
-                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tidl_api 
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7100 -f Makefile.tidl_api
+                  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+                 )
+
+add_custom_target(tidl_c7x_libs_j721e_hostemu
+                 COMMAND make ${build_env_paths} SILICON_VERSION=7100 TARGET_PLATFORM=PC -f Makefile.tvm_crt
+                 COMMAND make ${build_env_paths} SILICON_VERSION=7100 TARGET_PLATFORM=PC -f Makefile.tidl_api
                   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                  )
 
@@ -89,10 +95,22 @@ add_custom_target(tidl_c7x_libs_j721s2
                   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                  )
 
+add_custom_target(tidl_c7x_libs_j721s2_hostemu
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7120_j721s2 TARGET_PLATFORM=PC -f Makefile.tvm_crt
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7120_j721s2 TARGET_PLATFORM=PC -f Makefile.tidl_api
+                  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+                 )
+
 add_custom_target(tidl_c7x_libs_j784s4
                   COMMAND make ${build_env_paths} SILICON_VERSION=7120_j784s4 -f Makefile.tvm_crt
                   COMMAND make ${build_env_paths} SILICON_VERSION=7120_j784s4 -f Makefile.dsp_syms
                   COMMAND make ${build_env_paths} SILICON_VERSION=7120_j784s4 -f Makefile.tidl_api
+                  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+                 )
+
+add_custom_target(tidl_c7x_libs_j784s4_hostemu
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7120_j784s4 TARGET_PLATFORM=PC -f Makefile.tvm_crt
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7120_j784s4 TARGET_PLATFORM=PC -f Makefile.tidl_api
                   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                  )
 
@@ -103,10 +121,22 @@ add_custom_target(tidl_c7x_libs_am62a
                   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                  )
 
+add_custom_target(tidl_c7x_libs_am62a_hostemu
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7504 TARGET_PLATFORM=PC -f Makefile.tvm_crt
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7504 TARGET_PLATFORM=PC -f Makefile.tidl_api
+                  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+                 )
+
 add_custom_target(tidl_c7x_libs_j722s
                   COMMAND make ${build_env_paths} SILICON_VERSION=7524 -f Makefile.tvm_crt
                   COMMAND make ${build_env_paths} SILICON_VERSION=7524 -f Makefile.dsp_syms
                   COMMAND make ${build_env_paths} SILICON_VERSION=7524 -f Makefile.tidl_api
+                  WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
+                 )
+
+add_custom_target(tidl_c7x_libs_j722s_hostemu
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7524 TARGET_PLATFORM=PC -f Makefile.tvm_crt
+                  COMMAND make ${build_env_paths} SILICON_VERSION=7524 TARGET_PLATFORM=PC -f Makefile.tidl_api
                   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                  )
 
@@ -116,30 +146,45 @@ list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/dsp_syms.out)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/dsp_syms.out.obj)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/tvm_crt.lib)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/build_hostemu)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/libtvm_crt.a)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/libtidl_api.a)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7100/)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/build)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/dsp_syms.out)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/dsp_syms.out.obj)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/tvm_crt.lib)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/build_hostemu)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/libtvm_crt.a)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/libtidl_api.a)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j721s2/)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/build)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/dsp_syms.out)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/dsp_syms.out.obj)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/tvm_crt.lib)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/build_hostemu)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/libtvm_crt.a)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/libtidl_api.a)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7120_j784s4/)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/build)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/dsp_syms.out)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/dsp_syms.out.obj)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/tvm_crt.lib)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/build_hostemu)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/libtvm_crt.a)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/libtidl_api.a)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7504/)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/build)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/dsp_syms.out)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/dsp_syms.out.obj)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/tvm_crt.lib)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/tidl_api.lib)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/build_hostemu)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/libtvm_crt.a)
+list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/libtidl_api.a)
 list(APPEND clean_files ${CMAKE_CURRENT_LIST_DIR}/7524/)
 
 set_property(DIRECTORY APPEND PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${clean_files})

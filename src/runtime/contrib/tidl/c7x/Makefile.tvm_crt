@@ -17,12 +17,16 @@
 
 include make.inc
 
-LIB_NAME = $(SILICON_VERSION)/tvm_crt.lib
+ifeq ($(TARGET_PLATFORM), PC)
+  LIB_NAME = $(SILICON_VERSION)/libtvm_crt.a
+else
+  LIB_NAME = $(SILICON_VERSION)/tvm_crt.lib
+endif
 
 CRT_ROOT    ?= $(TVM_ROOT)/src/runtime/crt
 CRT_CONFIG  ?= .
 DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
-BUILD_DIR   ?= $(SILICON_VERSION)/build
+BUILD_DIR   ?= $(SILICON_VERSION)/$(BUILD_DIR_NAME)
 
 CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
 CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG)
@@ -35,15 +39,15 @@ all: $(LIB_NAME)
 
 $(BUILD_DIR)/common/%.o: $(CRT_ROOT)/common/%.c
 	$(QUIET)$(MKDIR_P) $(dir $@)
-	$(QUIET)$(CC) $(CFLAGS) -c --output_file "$@" "$<"
+	$(QUIET)$(CC) $(CFLAGS) -c $(OPTION_OUTFILE) "$@" "$<"
 
 $(BUILD_DIR)/graph_executor/%.o: $(CRT_ROOT)/graph_executor/%.c
 	$(QUIET)$(MKDIR_P) $(dir $@)
-	$(QUIET)$(CC) $(CFLAGS) -c --output_file "$@" "$<"
+	$(QUIET)$(CC) $(CFLAGS) -c $(OPTION_OUTFILE) "$@" "$<"
 
 $(BUILD_DIR)/memory/%.o: $(CRT_ROOT)/memory/%.c
 	$(QUIET)$(MKDIR_P) $(dir $@)
-	$(QUIET)$(CC) $(CFLAGS) -c --output_file "$@" "$<"
+	$(QUIET)$(CC) $(CFLAGS) -c $(OPTION_OUTFILE) "$@" "$<"
 
 $(LIB_NAME): $(COMMON_O_FILES) $(GRAPHRT_O_FILES) $(MEMORY_O_FILES)
 	$(QUIET)$(AR) -r "$@" $^

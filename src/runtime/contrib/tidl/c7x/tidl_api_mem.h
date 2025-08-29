@@ -25,7 +25,7 @@ extern "C"
 {
 #endif
 
-#if (HOST_EMULATION)
+#if defined(HOST_EMULATION)
   #include <malloc.h>
   #define EXTRA_MEM_FOR_ALIGN (1024)
   #define L1_TOTAL_MEMORY_SIZE  (16 * 1024)

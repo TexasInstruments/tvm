@@ -115,16 +115,12 @@ def compile_model(platform: str,
   import copy
   delegate_options_copy = copy.deepcopy(delegate_options)
 
-  enable_c7x_codegen = 0
+  enable_c7x_codegen = False
   if "advanced_options:c7x_codegen" in delegate_options_copy:
     c7x_codegen = delegate_options_copy["advanced_options:c7x_codegen"]
     enable_c7x_codegen = (c7x_codegen > 0)
-    if((enable_c7x_codegen) and (not compile_for_device)):
-      enable_c7x_codegen = False
-      delegate_options_copy["advanced_options:c7x_codegen"] = 0
-      print("\n\n*** WARNING: 'c7x_codegen' > 0 is applicable only for target device build and not for PC build \n\
-Setting 'c7x_codegen' = 0 for PC artifacts generation\n")
 
+  model_type = None
   if mod is None or params is None:
     mod, params, model_type = convert_model_to_relay_IR(model_path, input_shape_dict)
   
@@ -164,6 +160,7 @@ Setting 'c7x_codegen' = 0 for PC artifacts generation\n")
                                    platform=platform, # TI device category (E.g. J7)
                                    tidl_tools_path=tidl_tools_path,
                                    enable_tidl_offload=enable_tidl_offload,
+                                   compile_for_device=(1 if compile_for_device else 0),
                                    reuse_tidl_artifacts = reuse_tidl_artifacts,
                                    delegate_options=delegate_options_copy)
     # Perform partitioning

@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <tvm/runtime/c_runtime_api.h>
+#include <tvm/runtime/crt_runtime_api.h>
 #include <tvm/runtime/crt/module.h>
 #include <tvm/runtime/crt/platform.h>
 

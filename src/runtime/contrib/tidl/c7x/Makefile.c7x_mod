@@ -18,41 +18,85 @@
 cur_mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
 include $(dir $(cur_mkfile_path))/make.inc
 
-EXE_NAME = c7x_deploy_tvm.out
-
 DLPACK_ROOT ?= $(TVM_ROOT)/3rdparty/dlpack
+
+
+ifeq ($(TARGET_PLATFORM), PC)
+### Begin host emulation setup
+
+  EXE_NAME = libc7x_deploy_tvm_hostemu.so
+	ASCXXFLAGS =
+
+  ASM_SOURCES = $(wildcard *_embed.s)
+  OBJS = $(patsubst %.s,%.obj,$(ASM_SOURCES))
+
+  # 7120_{j721s2, _j784s4a} use the 7120 lib, remove substring after 7120
+  # 7524 uses 7524-MMA2_256 for now (vs 7524-MMA_256F, floating point version)
+  TMP_RTS_LIB = $(patsubst 7120%,7120,$(SILICON_VERSION))
+  RTS_LIB = C$(patsubst 7524,7524-MMA2_256,$(TMP_RTS_LIB))-host-emulation
+
+### End host emulation setup
+else
+### Begin c7x cross compilation setup
+
+  EXE_NAME = c7x_deploy_tvm.out
+	ASCXXFLAGS = --cpp_default
+
+  ASM_SOURCES = $(wildcard *_embed.asm)
+  OBJS = $(patsubst %.asm,%.obj,$(ASM_SOURCES))
+
+  # 7120_{j721s2, _j784s4a} use the 7120 lib, remove substring after 7120
+  RTS_LIB = rts$(patsubst 7120%,7120,$(SILICON_VERSION))_le.lib
+
+### End c7x cross compilation setup
+endif
+
 
 CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
 CFLAGS += -I $(TVM_C7X_ROOT)
 
 SOURCES  = func_registry.c tvm_main.c
 SOURCES += $(wildcard model_*.c)
-ASM_SOURCES = $(wildcard *_embed.asm)
-OBJS     =$(patsubst %.c,%.obj,$(SOURCES))
-OBJS    +=$(patsubst %.asm,%.obj,$(ASM_SOURCES))
+OBJS    +=$(patsubst %.c,%.obj,$(SOURCES))
 
-ifeq (7120_j721s2, $(SILICON_VERSION))
-  RTS_LIB = rts7120_le.lib
-else ifeq (7120_j784s4, $(SILICON_VERSION))
-  RTS_LIB = rts7120_le.lib
-else
-  RTS_LIB = rts$(SILICON_VERSION)_le.lib
-endif
 
 CGT7X_EXT_LIBS ?=
 
 all: $(EXE_NAME)
 
 model_%.obj: model_%.c
-	$(QUIET)$(CC) $(CFLAGS) --cpp_default -c --output_file $@ $<
+	$(QUIET)$(CXX) $(CFLAGS) $(CXXFLAGS) $(ASCXXFLAGS) -c $(OPTION_OUTFILE) $@ $<
 
 %.obj: %.c
-	$(QUIET)$(CC) $(CFLAGS) -c --output_file $@ $<
+	$(QUIET)$(CC) $(CFLAGS) -c $(OPTION_OUTFILE) $@ $<
 
 %.obj: %.asm
-	$(QUIET)$(CC) $(CFLAGS) -c --output_file $@ $<
+	$(QUIET)$(CC) $(CFLAGS) -c $(OPTION_OUTFILE) $@ $<
 
-$(EXE_NAME): $(OBJS)
+%.obj: %.s
+	$(QUIET)$(CC) $(CFLAGS) -c $(OPTION_OUTFILE) $@ $<
+
+#### host emulation target
+%.so: $(OBJS)
+	$(QUIET)$(CC) -shared $(OBJS) \
+            -L $(TVM_C7X_ROOT)/$(SILICON_VERSION) \
+            -L $(CGT7X_ROOT)/host_emulation \
+            -L $(TIDL_TOOLS_PATH) \
+               -l tidl_api \
+               -l tvm_crt \
+               $(CGT7X_EXT_LIBS) \
+            -o $@ -Wl,-soname,$@
+	$(QUIET)$(STRIP) $@
+
+# No need to include RTS_LIB, it is already linked into libvx_tidl_rt.so
+#     otherwise, we run into double free problem in some cases
+#               -l $(RTS_LIB) \
+# By not linking in vx_tidl_rt, we reduce dependency for compilation, runtime will load vx_tidl_rt
+#               -l vx_tidl_rt \
+
+
+#### c7x cross compilation target
+%.out: $(OBJS)
 	$(QUIET)$(CC) $(CFLAGS) $(OBJS) \
                   $(TVM_C7X_ROOT)/$(SILICON_VERSION)/dsp_syms.out.obj \
             -z -i $(TVM_C7X_ROOT)/$(SILICON_VERSION) \

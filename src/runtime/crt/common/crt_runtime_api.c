@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tvm/runtime/c_runtime_api.h>
+#include <tvm/runtime/crt_runtime_api.h>
 #include <tvm/runtime/crt/crt.h>
 #include <tvm/runtime/crt/func_registry.h>
 #include <tvm/runtime/crt/internal/common/ndarray.h>
@@ -64,7 +65,7 @@ __attribute__((format(printf, 1, 2))) int TVMAPIErrorf(const char* msg, ...) {
   return to_return;
 }
 
-const char* TVMGetLastError(void) { return g_last_error; }
+const char* CRT_TVMGetLastError(void) { return g_last_error; }
 
 // Manipulate NDArray on target device
 
@@ -153,7 +154,7 @@ int TVMSynchronize(int device_type, int device_id, TVMStreamHandle stream) { ret
 
 static TVMMutableFuncRegistry global_func_registry;
 
-int TVMFuncRegisterGlobal(const char* name, TVMFunctionHandle f, int override) {
+int CRT_TVMFuncRegisterGlobal(const char* name, TVMFunctionHandle f, int override) {
   return TVMMutableFuncRegistry_Set(&global_func_registry, name, f, override != 0);
 }
 
@@ -276,7 +277,7 @@ tvm_crt_error_t RunTimeEvaluator(tvm_function_index_t function_index, TVMValue* 
                                  int* type_codes, int num_args, TVMValue* ret_val,
                                  int* ret_type_code);
 
-int TVMFuncCall(TVMFunctionHandle func_handle, TVMValue* arg_values, int* type_codes, int num_args,
+int CRT_TVMFuncCall(TVMFunctionHandle func_handle, TVMValue* arg_values, int* type_codes, int num_args,
                 TVMValue* ret_val, int* ret_type_code) {
   tvm_module_index_t module_index;
   tvm_function_index_t function_index;
@@ -322,7 +323,7 @@ static tvm_crt_error_t FindFunctionOrSetAPIError(tvm_module_index_t module_index
   return kTvmErrorNoError;
 }
 
-int TVMFuncGetGlobal(const char* name, TVMFunctionHandle* out) {
+int CRT_TVMFuncGetGlobal(const char* name, TVMFunctionHandle* out) {
   tvm_crt_error_t to_return =
       FindFunctionOrSetAPIError(kGlobalFuncModuleIndex, &global_func_registry.registry, name, out);
   // For compatibility with the C++ runtime equivalent, in src/runtime/registry.cc.
@@ -333,7 +334,7 @@ int TVMFuncGetGlobal(const char* name, TVMFunctionHandle* out) {
   return to_return;
 }
 
-int TVMModGetFunction(TVMModuleHandle mod, const char* func_name, int query_imports,
+int CRT_TVMModGetFunction(TVMModuleHandle mod, const char* func_name, int query_imports,
                       TVMFunctionHandle* out) {
   tvm_module_index_t module_index;
   if (DecodeModuleHandle(mod, &module_index) != 0) {
@@ -375,7 +376,7 @@ int ModuleGetFunction(TVMValue* args, int* type_codes, int num_args, TVMValue* r
 
   mod = (TVMModuleHandle)args[0].v_handle;
   name = args[1].v_str;
-  to_return = TVMModGetFunction(mod, name, query_imports, &ret_value->v_handle);
+  to_return = CRT_TVMModGetFunction(mod, name, query_imports, &ret_value->v_handle);
 
   if (to_return == 0) {
     ret_type_codes[0] = kTVMPackedFuncHandle;
@@ -465,23 +466,23 @@ tvm_crt_error_t TVMInitializeRuntime() {
   }
 
   if (error == kTvmErrorNoError) {
-    error = TVMFuncRegisterGlobal("runtime.SystemLib", &SystemLibraryCreate, 0);
+    error = CRT_TVMFuncRegisterGlobal("runtime.SystemLib", &SystemLibraryCreate, 0);
   }
 
   if (error == kTvmErrorNoError) {
-    error = TVMFuncRegisterGlobal("tvm.rpc.server.ModuleGetFunction", &ModuleGetFunction, 0);
+    error = CRT_TVMFuncRegisterGlobal("tvm.rpc.server.ModuleGetFunction", &ModuleGetFunction, 0);
   }
 
   if (error == kTvmErrorNoError) {
-    error = TVMFuncRegisterGlobal("runtime.RPCTimeEvaluator", &RPCTimeEvaluator, 0);
+    error = CRT_TVMFuncRegisterGlobal("runtime.RPCTimeEvaluator", &RPCTimeEvaluator, 0);
   }
 
   if (error == kTvmErrorNoError) {
-    error = TVMFuncRegisterGlobal("tvm.rpc.server.GetCRTMaxPacketSize", &RPCGetCRTMaxPacketSize, 0);
+    error = CRT_TVMFuncRegisterGlobal("tvm.rpc.server.GetCRTMaxPacketSize", &RPCGetCRTMaxPacketSize, 0);
   }
 
   if (error == kTvmErrorNoError) {
-    error = TVMFuncRegisterGlobal("tvm.contrib.random.random_fill", &RandomFill, 0);
+    error = CRT_TVMFuncRegisterGlobal("tvm.contrib.random.random_fill", &RandomFill, 0);
   }
 
   if (error != kTvmErrorNoError) {
@@ -534,7 +535,7 @@ int RPCTimeEvaluator(TVMValue* args, int* type_codes, int num_args, TVMValue* re
   g_time_evaluator_state.repeats_to_cooldown = args[9].v_int64;
 
   int ret_code =
-      TVMModGetFunction(mod, name, /* query_imports */ 0, &g_time_evaluator_state.func_to_time);
+      CRT_TVMModGetFunction(mod, name, /* query_imports */ 0, &g_time_evaluator_state.func_to_time);
   if (ret_code != 0) {
     return ret_code;
   }
@@ -570,7 +571,7 @@ tvm_crt_error_t RunTimeEvaluator(tvm_function_index_t function_index, TVMValue* 
   result_byte_arr->size = data_size;
 
   // skip first time call, to activate lazy compilation components.
-  err = TVMFuncCall(g_time_evaluator_state.func_to_time, args, type_codes, num_args, ret_val,
+  err = CRT_TVMFuncCall(g_time_evaluator_state.func_to_time, args, type_codes, num_args, ret_val,
                     ret_type_code);
   if (err != kTvmErrorNoError) {
     goto release_and_return;
@@ -599,7 +600,7 @@ tvm_crt_error_t RunTimeEvaluator(tvm_function_index_t function_index, TVMValue* 
       }
 
       for (int j = 0; j < g_time_evaluator_state.number; j++) {
-        err = TVMFuncCall(g_time_evaluator_state.func_to_time, args, type_codes, num_args, ret_val,
+        err = CRT_TVMFuncCall(g_time_evaluator_state.func_to_time, args, type_codes, num_args, ret_val,
                           ret_type_code);
         if (err != kTvmErrorNoError) {
           goto release_and_return;

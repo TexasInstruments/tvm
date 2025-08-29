@@ -708,7 +708,7 @@ std::string CodeGenC7x::CastFromTo(std::string value, DataType from, DataType ta
     this->PrintType(target, os);
     os << ")";
   } else {
-    os << "convert_";
+    os << "__convert_";
     this->PrintType(target, os);
     os << "(";
   }
@@ -1248,11 +1248,21 @@ void CodeGenC7x::VisitExpr_(const BufferLoadNode* op, std::ostream& os) {  // NO
     // work around: pout[i] = (t = __SE1ADV(float16), t) != (float16)0.0f ? p2[i] : (float16)0.0f;
     if (in_vector_cond)  os << "(vse_t" << se_in_vec_cond_count << " = ";
     // example: __SE0ADV(float16)
+    // temporary c7x hostemu workaround: __SE0ADV(float) => __as_float(__SE0ADV(int))
+    int for_device = (*runtime::Registry::Get("tidl.CompileForDevice"))();
+    bool hostemu_workaround = (for_device == 0) && op->dtype.is_float() &&
+                              (op->dtype.bits() == 32) && (op->dtype.lanes() == 1);
+    if (hostemu_workaround) os << "__as_float(";
     os << "__" << access.engine;
     if (access.adv) os << "ADV";
     os << "(";
-    PrintType(op->dtype, os);
+    if (hostemu_workaround) {
+      os << "int";
+    } else {
+      PrintType(op->dtype, os);
+    }
     os << ")";
+    if (hostemu_workaround) os << ")";
     if (in_vector_cond)  os << ", vse_t" << se_in_vec_cond_count++ << ")";
     return;
   }
