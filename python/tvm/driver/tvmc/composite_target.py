@@ -89,6 +89,11 @@ REGISTERED_CODEGEN = {
         "pass_default": True,
         "pass_pipeline": partition_for_mrvl,
     },
+    "ti-c7x": {
+        "config_key": "relay.ext.tic7x.options",
+        "pass_default": False,
+        "pass_pipeline": partition_for_tic7x,
+    },
 }
 
 
