@@ -84,7 +84,10 @@ def visualize(root, mod):
         elif isinstance(node, relay.expr.Call):
             arg_dests = [node] * len(node.args)
             if isinstance(node.op, relay.Function):
-                dot.node(node_idx, f'Call(Function({node_dict[node.op.body]}))')
+                if hasattr(node.op, "attrs") and "Composite" in node.op.attrs:
+                    dot.node(node_idx, f'Call(Function({node.op.attrs["Composite"]}))')
+                else:
+                    dot.node(node_idx, f'Call(Function({node_dict[node.op.body]}))')
             elif isinstance(node.op, tvm.ir.op.Op):
                 dot.node(node_idx, f'Call(op={str(node.op)})')
             elif isinstance(node.op, relay.expr.GlobalVar):

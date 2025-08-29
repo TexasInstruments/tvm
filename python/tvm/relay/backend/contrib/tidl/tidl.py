@@ -67,6 +67,33 @@ def get_all_nodes(mod_func):
     relay.analysis.post_order_visit(mod_func, traverse_func)
     return all_nodes_main
 
+
+class SkipLocalFunctionsVisitor(ExprMutator):
+    def __init__(self, target):
+        super().__init__()
+        self.tidl_target = target
+        self.nodes = {}
+
+    def visit_call(self, call):
+        # Call to a local function
+        if isinstance(call.op, relay.Function) and hasattr(call.op, "attrs") and \
+        "Composite" in call.op.attrs and self.tidl_target in call.op.attrs["Composite"]:
+            self.nodes[call] = len(self.nodes)
+            for arg in call.args:
+                self.nodes[arg] = len(self.nodes)
+                self.visit(arg)
+            return
+        # Otherwise, normal call: record and recurse
+        self.nodes[call] = len(self.nodes)
+        super().visit_call(call)
+
+    def visit(self, expr):
+        # Catch-all record
+        if expr not in self.nodes:
+            self.nodes[expr] = len(self.nodes)
+        super().visit(expr)
+
+
 def find_data_layout(mod):
     all_nodes = get_all_nodes(mod['main'])
     data_layout = "NCHW"
@@ -87,7 +114,7 @@ def find_data_layout(mod):
 
 def find_qnn_ops(mod):
     all_nodes = get_all_nodes(mod['main'])
-    return any(isinstance(node, relay.expr.Call) and node.op.name.startswith('qnn.')
+    return any(isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.Op) and node.op.name.startswith('qnn.')
                for node in all_nodes)
 
 def get_tidl_subgraphs(mod, tidl_target):
@@ -132,7 +159,7 @@ def check_dynamism(args, op_name):
 
 def find_dynamic_shape(mod):
     all_nodes = get_all_nodes(mod['main'])
-    return any(isinstance(node, relay.expr.Call) and check_dynamism(node.args, node.op.name)
+    return any(isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.Op) and check_dynamism(node.args, node.op.name)
                for node in all_nodes)
 
 def get_default_quantization():
@@ -167,16 +194,15 @@ def find_in_nodes(all_nodes, this_node, input_prefix):
         A list of all input nodes' names of the given node. For call node, the name is the node
         index in all_nodes dictionary. For input tensors, the name is the tensor's name.
     """
-
     def _get_result(node):
         """ Return the name or names of the tensor produced by a node as a flattened list.
             Tuples are "flattened" so that each result in the list represents a single tensor.
         """
         result = []
-        node_name = str(all_nodes[node])
         # N is Call w/one output --> result is "N"
         # N is Call w/tuple output --> result is ["N", "N:1", ...]
         if isinstance(node, relay.expr.Call):
+            node_name = str(all_nodes[node])
             result.append(node_name)
             if isinstance(node.checked_type, tvm.ir.TupleType):
                for i in range(1, len(node.checked_type.fields)):
@@ -482,18 +508,19 @@ class VarReplacer(ExprMutator):
             return self.var_map[var]
         return super().visit_var(var)
 
-def unpack_composites(mod):
+def unpack_composites(mod, target):
     """Unpack all composite functions in the module by replacing composite call nodes with the
     ops inside the composite function."""
 
     class Unpacker(ExprMutator):
         """Unpacks composite functions."""
-        def __init__(self):
+        def __init__(self, target):
+            self.target = target
             ExprMutator.__init__(self)
 
         def visit_call(self, call):
             if isinstance(call.op, Function):
-                if call.op.attrs and call.op.attrs['Composite'] != "":
+                if call.op.attrs and call.op.attrs['Composite'] != "" and self.target in call.op.attrs['Composite']:
                     # unpack the function back into new main function.
                     var_map = {}
                     for arg, param in zip(call.args, call.op.params):
@@ -502,7 +529,7 @@ def unpack_composites(mod):
             return super().visit_call(call)
 
     for func in mod.get_global_vars():
-        mod[func.name_hint] = Unpacker().visit(mod[func.name_hint])
+        mod[func.name_hint] = Unpacker(target).visit(mod[func.name_hint])
     return mod
 
 def flatten_tuple_params(mod, compiler):
@@ -885,6 +912,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
     # From partitioned module, create a "calibration model" which can be
     # executed on CPU and will give additional outputs for boundary tensors.
     mod_tvm = relay.transform.InferType()(mod)
+    mod_tvm = unpack_composites(mod_tvm, tidl_target)
     mod_tvm = relay.transform.Inline()(mod_tvm)
     mod_tvm = relay.transform.InferType()(mod_tvm)
     calib_mutator = CalibrationGraphMutator(tidl_target)
@@ -1598,7 +1626,7 @@ class TIDLImport:
             # If subgraph contains "tidl_odpostproc" layer, only import up to the inputs
             #   of this layer, TIDL will add the postprocessing layers using MetaArch info
             def find_tidl_odpostproc(node, node_list):
-                if isinstance(node, relay.expr.Call) and node.op.name == "tidl_odpostproc":
+                if isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.Op) and node.op.name == "tidl_odpostproc":
                     node_list.append(node)
             tidl_odpostproc_nodes = []
             traverse_func = functools.partial(find_tidl_odpostproc, node_list=tidl_odpostproc_nodes)
@@ -1614,7 +1642,11 @@ class TIDLImport:
                         self.tidl_od_num_graph_outputs, self.tidl_od_meta_layers_names_list)
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
-            all_nodes_tidl = get_all_nodes(subgraph_body)
+            all_nodes_tidl = {}
+            # Skip traversing into function body if marked with Composite="tidl.<Op>"
+            visitor = SkipLocalFunctionsVisitor(self.tidl_target)
+            visitor.visit(subgraph_body)
+            all_nodes_tidl = visitor.nodes
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, params, output_names,
@@ -2277,6 +2309,19 @@ class TIOffloadCompiler:
         # Skip when not performing TIDL offload (max_num_tidl_subgraphs == 0)
         if self.max_num_tidl_subgraphs > 0:
             mod = tidl_annotation.merge_sequential_ops(mod)
+
+            # Invoking TIDL Relay Import allow function for Composite Functions
+            allow_fn = tvm.get_global_func("TIDL_relayAllowNode")
+            all_nodes = get_all_nodes(mod['main'])
+            for node in all_nodes:
+                if isinstance(node, relay.expr.Call) and isinstance(node.op, relay.Function):
+                    func = node.op
+                    if hasattr(func, "attrs") and "Composite" in func.attrs and self.tidl_target in func.attrs["Composite"]:
+                        result = allow_fn(node)
+                        if(result == False):
+                            # Inline local function by unpacking the composite
+                            mod = unpack_composites(mod, self.tidl_target)
+
             mod = relay.transform.AnnotateTarget(self.tidl_target)(mod)
             with open(os.path.join(self.temp_folder, "relay_graph.annotated.txt"), "w") as relay_txt:
                 print(mod.astext(show_meta_data=False), file=relay_txt)
@@ -2289,7 +2334,8 @@ class TIOffloadCompiler:
             mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
                                                                 compiler=self.tidl_target)
 
-            mod = unpack_composites(mod) # part of partitioning - unwind partition
+            # part of partitioning - unwind partition but leave "tidl" marked Composites as is
+            mod = unpack_composites(mod, "no_tidl")
             mod = relay.transform.InferType()(mod)
             # If more than 16 TIDL subgraphs, pull functions back into main function
             # and out of TIDL offload

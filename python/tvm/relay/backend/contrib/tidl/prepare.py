@@ -24,6 +24,11 @@ from tvm.relay.expr_functor import ExprMutator
 #from tvm.relay.expr import Tuple, GlobalVar
 #from tvm.relay.function import Function
 
+def get_call_op_name(call):
+  if isinstance(call, relay.Call) and isinstance(call.op, tvm.ir.Op):
+    return call.op.name
+  return None
+
 class RemoveMultiplyByOne(ExprMutator):
     """
     Removes multiply by 1.0f. This pass when followed by
@@ -32,7 +37,7 @@ class RemoveMultiplyByOne(ExprMutator):
     PyTorch's addmm operator.
     """
     def visit_call(self, call):
-        if call.op.name == "multiply":
+        if get_call_op_name(call) == "multiply":
             if isinstance(call.args[1], tvm.relay.expr.Constant):
                 data = call.args[1].data.asnumpy()
                 if data.shape == () and data.item() == 1.0:
@@ -50,7 +55,7 @@ class RemovePadByZero(ExprMutator):
     Cases seen in dmnet after coverted to .onnx.
     """
     def visit_call(self, call):
-        if call.op.name == "nn.pad":
+        if get_call_op_name(call) == "nn.pad":
             if (all([ x[0] == 0 and x[1] == 0 for x in call.attrs.pad_width])):
                 return super().visit(call.args[0])
         return super().visit_call(call)
@@ -60,7 +65,7 @@ class RemoveCopy(ExprMutator):
     Removes copy operator 
     """
     def visit_call(self,call):
-        if(call.op.name == "copy"):
+        if get_call_op_name(call) == "copy":
             return super().visit(call.args[0])
         return super().visit_call(call)
     
@@ -71,7 +76,7 @@ class RemoveIdentityReshape(ExprMutator):
     Cases seen in dmnet after coverted to .onnx.
     """
     def visit_call(self, call):
-        if (call.op.name == "reshape"):
+        if get_call_op_name(call) == "reshape":
             # Extract shape from first arg
             orig_shape = call.args[0].checked_type.shape
             desired_shape = call.attrs.newshape
@@ -89,9 +94,7 @@ class RemoveTrainingOperators(ExprMutator):
     # Dropout layer produces a tuple
     def visit_tuple_getitem(self, t):
         expr = t.tuple_value
-        if t.index == 0  and \
-           isinstance(expr, relay.expr.Call) and \
-           expr.op.name in ["nn.dropout", "nn.dropout_raw"]:
+        if t.index == 0  and get_call_op_name(expr) in ["nn.dropout", "nn.dropout_raw"]:
             return super().visit(expr.args[0])
         return super().visit_tuple_getitem(t)
 
@@ -101,7 +104,7 @@ class RemoveIdentityResize(ExprMutator):
     Removes resize2d to the same size as input
     """
     def visit_call(self, call):
-        if call.op.name == "image.resize2d":
+        if get_call_op_name(call) == "image.resize2d":
             new_h, new_w = call.attrs.size
             old_shape = call.args[0].checked_type.shape
             old_h, old_w = old_shape[2:4] if call.attrs.layout == "NCHW" else old_shape[1:3]
@@ -120,10 +123,9 @@ class ConvertMaxMinToClip(ExprMutator):
     Convert the above example to %3 = clip(%x.1, -4f, 4f)
     """
     def visit_call(self, call):
-        if call.op.name == "minimum" and isinstance(call.args[1], relay.expr.Constant):
+        if get_call_op_name(call) == "minimum" and isinstance(call.args[1], relay.expr.Constant):
             arg0 = call.args[0]
-            if isinstance(arg0, relay.expr.Call) and \
-               arg0.op.name == "maximum" and isinstance(arg0.args[1], relay.expr.Constant):
+            if get_call_op_name(arg0) == "maximum" and isinstance(arg0.args[1], relay.expr.Constant):
                 max_val = call.args[1].data.asnumpy()
                 min_val = arg0.args[1].data.asnumpy()
                 if min_val.shape == () and max_val.shape == ():
@@ -170,7 +172,7 @@ class ConvertBroadcastAddtoBiasAdd(ExprMutator):
         return None, None
 
     def visit_call(self, call):
-        if call.op.name == "add":
+        if get_call_op_name(call) == "add":
             val, axis = self.get_broadcasting_constant_axis(call)
             if val is not None and axis is not None:
                 return relay.nn.bias_add(super().visit(call.args[0]), val, axis=axis)
@@ -189,7 +191,7 @@ class ConvertArgMaxToKeepDims(ExprMutator):
       squeeze(%204, axis=[3]) /* ty=Tensor[(1, 512, 512), int32] */
     """
     def visit_call(self, call):
-        if call.op.name == "argmax" and \
+        if get_call_op_name(call) == "argmax" and \
            (not call.attrs.keepdims) and (not call.attrs.exclude) and \
            call.attrs.axis != None and len(call.attrs.axis) == 1:
             argmax = tvm.relay.argmax(super().visit(call.args[0]), axis=call.attrs.axis,
@@ -202,7 +204,7 @@ class RemoveIdentityClip(ExprMutator):
     Removes clip operators that clip uint8 input to uint8 range (0, 255), which is identity op
     """
     def visit_call(self, call):
-        if call.op.name == 'clip':
+        if get_call_op_name(call) == 'clip':
             if call.args[0].checked_type.dtype == 'uint8' and \
                call.checked_type.dtype == 'uint8' and \
                call.attrs.a_min == 0 and call.attrs.a_max == 255:
@@ -218,7 +220,7 @@ class ConvertConvStride(ExprMutator):
     Converts a conv2d with stride=[1,2] to conv2d with stride=[1,1], followed by a maxpool with stride [1,2].
     """
     def visit_call(self, call):
-        if call.op.name == 'nn.conv2d':
+        if get_call_op_name(call) == 'nn.conv2d':
             if list(call.attrs.strides) == [1,2]:
                 attrs = {key: call.attrs[key] for key in call.attrs.keys() if key != 'strides'}
                 attrs["strides"] = [1,1]
@@ -231,7 +233,7 @@ class Power2ToMultiply(ExprMutator):
     Converts all instances of power(in, 2) to multiply(in, in)
     """
     def visit_call(self, call):
-        if call.op.name == 'power':
+        if get_call_op_name(call) == 'power':
             if isinstance(call.args[1], tvm.relay.expr.Constant):
                 data = call.args[1].data.asnumpy()
                 if data.shape == () and data.item() == 2.0:
@@ -246,8 +248,7 @@ class TransposeScatterND(ExprMutator):
     scatter_nd(..., a, ...) to tidl_scatter_nd(..., in, ...)
     """
     def visit_call(self, call):
-        if call.op.name == 'scatter_nd' and isinstance(call.args[1], relay.expr.Call) and \
-                                            call.args[1].op.name == 'transpose':
+        if get_call_op_name(call) == 'scatter_nd' and get_call_op_name(call.args[1]) == 'transpose':
             for i, axis in enumerate(call.args[1].attrs.axes[1:]):
                 if axis != i:
                     return super().visit_call(call)
@@ -265,8 +266,8 @@ class MergePadLayer(ExprMutator):
     Merges pad layer with the following conv2d layer
     """
     def visit_call(self, call):
-        if call.op.name == 'nn.conv2d':
-            if isinstance(call.args[0], relay.expr.Call) and call.args[0].op.name == 'nn.pad':
+        if get_call_op_name(call) == 'nn.conv2d':
+            if get_call_op_name(call.args[0]) == 'nn.pad':
                 pad_width = call.args[0].attrs.pad_width
                 attrs = {key: call.attrs[key] for key in call.attrs.keys()}
                 attrs['padding'] = (pad_width[2][0], pad_width[3][0], pad_width[2][1], pad_width[3][1]) # tlbr

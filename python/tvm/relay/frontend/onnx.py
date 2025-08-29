@@ -161,6 +161,54 @@ def dimension_picker(prefix, suffix=""):
 
     return _impl
 
+# Begin TI
+# This is a helper function used to derive the inputs required to form the
+# TIDL composite function. It takes the original inputs passed to an operator
+# and returns func_inputs, and body inputs lists.
+# func_inputs are passed as relay function parameters
+# body_inputs are used to form the body of the relay function
+# There are 3 types of inputs handled here:
+# ‘Variable’ input: Call arg and function parameter/body cannot have the same input name
+# Keep a new variable in function params and function body, pass the corresponding input variable as call arg
+# ‘Constant’ input: Backend (TIDL) needs to know all the inputs information from call args / function params
+# Fetching constant information from function body in backend is not scalable and clean
+# Keep a new variable in function params, retain constant in function body and pass the constant as call arg
+# ‘Call’ input: Wrapping function around a call will wrap all the connected previous operators
+# Keep a new variable in function params and function body, pass the corresponding call input as call arg
+
+def get_func_inputs(inputs):
+    func_inputs = [] # func_inputs should be variables
+    body_inputs = [] # body_inputs should be variable: local variable, call: local variable, const: const
+    status = True
+    for i, inp in enumerate(inputs):
+        if isinstance(inp, relay.Var):
+            # Create a new variable with same type
+            new_var = relay.var(f"var_{inp.name_hint}", type_annotation=inp.type_annotation)
+            func_inputs.append(new_var)
+            body_inputs.append(new_var)
+
+        elif isinstance(inp, relay.Constant):
+            # Extract dtype and shape from constant
+            const_value = inp.data.asnumpy()
+            dtype = str(const_value.dtype)
+            shape = list(const_value.shape)
+            # Create a new var with same shape/dtype
+            new_var = relay.var(f"const_input_{i}", shape=shape, dtype=dtype)
+            func_inputs.append(new_var)
+            body_inputs.append(inp)
+
+        elif isinstance(inp, relay.Call):
+            call_type = infer_type(inp).checked_type
+            new_var = relay.var(f"call_input_{i}", type_annotation=call_type)
+            func_inputs.append(new_var)
+            body_inputs.append(new_var)
+        else:
+            status = False
+            warnings.warn(f"TIDL composite function will not be formed, unhandled input type: {type(inp)}")
+            return status, inputs, inputs
+
+    return status, body_inputs, func_inputs
+# End TI
 
 def revert_caffe2_pad(pads):
     """Caffe2 requires two times the normal padding."""
@@ -1212,6 +1260,10 @@ class Mish(OnnxOpConverter):
 
     @classmethod
     def _impl_v18(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         x = inputs[0]
         # Declare const
         const_dtype = infer_type(x).checked_type.dtype
@@ -1219,7 +1271,15 @@ class Mish(OnnxOpConverter):
 
         # Compute Mish
         term1 = _op.log(one + _op.exp(x))
-        return _op.multiply(x, _op.tanh(term1))
+        out = _op.multiply(x, _op.tanh(term1))
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out).with_attr("Composite", "tidl.mish")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class LayerNormalization(OnnxOpConverter):
@@ -1878,6 +1938,10 @@ class Gemm(OnnxOpConverter):
         assert (
             len(inputs) == 3 or len(inputs) == 2
         ), f"Gemm op take 2 or 3 inputs, {len(inputs)} given"
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         input0_state = infer_type(inputs[0])
         dtype = input0_state.checked_type.dtype
         # Y = alpha * A * B + beta * C
@@ -1901,7 +1965,15 @@ class Gemm(OnnxOpConverter):
                 out += _expr.const(float(beta), dtype=dtype) * inputs[2]
             else:
                 out += inputs[2]
-        return out
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.gemm")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class MatMul(OnnxOpConverter):
