@@ -1872,6 +1872,9 @@ class TIDLAnnotation:
         self._register_constrained_op("erf")
         self._register_constrained_op("exp")
         self._register_constrained_op("squeeze")
+        self._register_constrained_op("sinh")
+        self._register_constrained_op("sqrt")
+        self._register_constrained_op("tan")
 
         tidl_annotations_registered = True
 
