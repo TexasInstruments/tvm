@@ -79,6 +79,7 @@ static uint32_t Shape_Accumulate(int64_t* shape, uint32_t ndim) {
 void GraphExecutor::Run() {
   // Begin TI
   run_start_ts = _TSC_read();
+  this->getDDRStats(run_start_ddr_read, run_start_ddr_write);
   // End TI
 
   int tvm_rt_debug_level = 0;
@@ -136,6 +137,7 @@ void GraphExecutor::Run() {
   // Begin TI
   // get end timestamp
   run_end_ts = _TSC_read();
+  this->getDDRStats(run_end_ddr_read, run_end_ddr_write);
   // End TI
 }
 
@@ -746,6 +748,23 @@ std::pair<std::function<void()>, std::shared_ptr<GraphExecutor::OpArgs>> GraphEx
   return {fexec, arg_ptr};
 }
 
+// Begin TI
+void GraphExecutor::getDDRStats(uint64_t& ddr_bw_read, uint64_t& ddr_bw_write)
+{
+  PackedFunc func = module_.GetFunction("tidl_get_custom_data_ddrstats", true);
+  ICHECK(func != nullptr) << "no such function in module: tidl_get_custom_data_ddrstats";
+  TVMRetValue result = func();
+  if (result.type_code() == kTVMNullptr) {
+      return;
+  }
+
+  std::pair<uint64_t, uint64_t>* v = static_cast<std::pair<uint64_t, uint64_t> *>(result.operator void*());
+  ddr_bw_read = v->first;
+  ddr_bw_write = v->second;
+  delete v;
+}
+//End TI
+
 PackedFunc GraphExecutor::GetFunction(const String& name, const ObjectPtr<Object>& sptr_to_self) {
   // Return member functions during query.
   // Begin TI
@@ -897,6 +916,12 @@ PackedFunc GraphExecutor::GetFunction(const String& name, const ObjectPtr<Object
       // run duration timestamps
       benchmark_data.Set("ts:run_start", String(std::to_string(run_start_ts)));
       benchmark_data.Set("ts:run_end", String(std::to_string(run_end_ts)));
+
+      /* get the ddr b/w numbers */
+      benchmark_data.Set("ddr:read_start", String(std::to_string(run_start_ddr_read)));
+      benchmark_data.Set("ddr:read_end", String(std::to_string(run_end_ddr_read)));
+      benchmark_data.Set("ddr:write_start", String(std::to_string(run_start_ddr_write)));
+      benchmark_data.Set("ddr:write_end", String(std::to_string(run_end_ddr_write)));
 
       // get subgraph timestamps
       int subgraph_id = 0;

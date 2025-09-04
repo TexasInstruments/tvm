@@ -241,6 +241,13 @@ class TVM_DLL GraphExecutor : public ModuleNode {
 
   std::string GetNodeName(uint32_t nid) const { return nodes_[nid].name; }
 
+  // Begin TI
+  /*!
+   * \brief Get DDR bandwidth .
+   */
+  void getDDRStats(uint64_t& run_end_ddr_read, uint64_t& run_end_ddr_write);
+  // End TI
+
  protected:
   // Memory pool entry.
   struct PoolEntry {
@@ -531,6 +538,12 @@ class TVM_DLL GraphExecutor : public ModuleNode {
   uint64_t run_start_ts{0};
   /*! \brief End time of model execution in nanoseconds. */
   uint64_t run_end_ts{0};
+  /*! \brief Start and end read/write statistics for DDR bandwidth */
+  uint64_t run_start_ddr_read{0};
+  uint64_t run_start_ddr_write{0};
+  uint64_t run_end_ddr_read{0};
+  uint64_t run_end_ddr_write{0};
+
   // End TI
 };
 
