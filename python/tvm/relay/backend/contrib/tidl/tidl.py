@@ -2109,7 +2109,8 @@ class TIOffloadCompiler:
             self.tidl_calib_tool = os.path.join(self.tidl_tools_path, "PC_dsp_test_dl_algo.out")
             self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
 
-            self.max_num_tidl_subgraphs = (delegate_options['max_num_subgraphs'] if 'max_num_subgraphs' in delegate_options else self.max_num_tidl_subgraphs)
+            if self.max_num_tidl_subgraphs != 0:
+                self.max_num_tidl_subgraphs = (delegate_options['max_num_subgraphs'] if 'max_num_subgraphs' in delegate_options else self.max_num_tidl_subgraphs)
 
             # Tensor bits known here - update default calibration options with defaults based on tensor bits
             self.default_advanced_options_for_calibration.update(self.default_calib_options_based_on_tensor_bits[self.tensor_bits])
