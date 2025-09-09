@@ -1750,34 +1750,6 @@ class TIDLAnnotation:
         if tidl_annotations_registered:
             return
 
-        # Register common operators which are supported with same constraints
-        @tvm.ir.register_op_attr("reshape", "target.tidl")
-        def reshape_allow_fn(expr):
-            """Register standalone reshape if it is a flattening function """
-            attrs, args = expr.attrs, expr.args
-            if len(attrs.newshape) != 2:
-                return False
-            inshape = args[0].checked_type.shape
-            newshape = [attrs.newshape[0], attrs.newshape[1]]
-            # Find total size of input tensor
-            total_size = 1
-            for dim in inshape:
-                total_size = total_size * dim
-            for i in range(len(newshape)):
-                # If newshape[i] is 0, copy this dimension from the input to the output shape
-                if newshape[i] == 0:
-                    newshape[i] = inshape[i]
-            for i in range(len(newshape)):
-                # If newshape[i] is -1: infers the dimension of the output shape by using the
-                # remainder of input dimensions and keeping the size of output same as input.
-                # At most one dimension of shape can be -1.
-                if newshape[i] == -1:
-                    newshape[i] = tvm.te.div(total_size, newshape[(i+1)%2])
-            if newshape[0] == 1 and newshape[1] == total_size: # reshape op performs flattening
-                return True
-            else:
-                return False
-
         # Register common operators which are supported with different constraints
         self._register_constrained_op("nn.relu")
         self._register_constrained_op("argmax")
