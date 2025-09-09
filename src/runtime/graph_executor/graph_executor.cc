@@ -752,16 +752,18 @@ std::pair<std::function<void()>, std::shared_ptr<GraphExecutor::OpArgs>> GraphEx
 void GraphExecutor::getDDRStats(uint64_t& ddr_bw_read, uint64_t& ddr_bw_write)
 {
   PackedFunc func = module_.GetFunction("tidl_get_custom_data_ddrstats", true);
-  ICHECK(func != nullptr) << "no such function in module: tidl_get_custom_data_ddrstats";
-  TVMRetValue result = func();
-  if (result.type_code() == kTVMNullptr) {
-      return;
-  }
+  if(func != nullptr)  // Subgraph stats collection pass runs without TIDL context, bypass
+  {
+    TVMRetValue result = func();
+    if (result.type_code() == kTVMNullptr) {
+        return;
+    }
 
-  std::pair<uint64_t, uint64_t>* v = static_cast<std::pair<uint64_t, uint64_t> *>(result.operator void*());
-  ddr_bw_read = v->first;
-  ddr_bw_write = v->second;
-  delete v;
+    std::pair<uint64_t, uint64_t>* v = static_cast<std::pair<uint64_t, uint64_t> *>(result.operator void*());
+    ddr_bw_read = v->first;
+    ddr_bw_write = v->second;
+    delete v;
+  }
 }
 //End TI
 
