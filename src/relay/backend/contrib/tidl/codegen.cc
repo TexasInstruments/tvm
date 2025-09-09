@@ -28,6 +28,8 @@
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/object.h>
 #include <tvm/ir/module.h>
+
+#include "compiler_attrs.h"
 #include <tvm/runtime/registry.h>
 #include <dmlc/thread_local.h>
 

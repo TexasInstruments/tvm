@@ -52,6 +52,151 @@ from .workspace_pools import generate_workspace_pools_args, workspace_pools_reco
 logger = logging.getLogger("TVMC")
 
 
+# Begin TI
+def load_tidl_calibration_data(calibration_path: str) -> List[Dict[str, Any]]:
+    """Load calibration data from NPZ file for TIDL quantization.
+
+    Parameters
+    ----------
+    calibration_path : str
+        Path to .npz file containing calibration data
+
+    Returns
+    -------
+    List[Dict[str, Any]]
+        List of dictionaries where each dict maps input names to NDArrays
+    """
+    import numpy as np
+    import tvm
+    from tvm.runtime import NDArray
+
+    if not os.path.exists(calibration_path):
+        raise TVMCException(f"Calibration data file '{calibration_path}' does not exist.")
+
+    if not calibration_path.endswith('.npz'):
+        raise TVMCException(f"Calibration data file must be .npz format, got '{calibration_path}'.")
+
+    try:
+        # Load NPZ file
+        calib_data = np.load(calibration_path)
+
+        # Convert to list of dictionaries format expected by TIDL
+        calibration_list = []
+
+        # Get all array names from the NPZ file
+        array_names = list(calib_data.files)
+
+        if not array_names:
+            raise TVMCException("NPZ file contains no calibration data arrays.")
+
+        # Determine number of samples (assume all arrays have same first dimension)
+        first_array = calib_data[array_names[0]]
+        if len(first_array.shape) == 0:
+            num_samples = 1
+        else:
+            num_samples = first_array.shape[0]
+
+        # Create calibration samples
+        for sample_idx in range(num_samples):
+            sample_dict = {}
+            for array_name in array_names:
+                array_data = calib_data[array_name]
+                if len(array_data.shape) == 0 or num_samples == 1:
+                    # Single sample case
+                    sample_data = array_data
+                else:
+                    # Multiple samples case - extract one sample
+                    sample_data = array_data[sample_idx]
+
+                # Convert to TVM NDArray
+                sample_dict[array_name] = tvm.nd.array(sample_data)
+
+            calibration_list.append(sample_dict)
+
+        logger.info(f"Loaded {len(calibration_list)} calibration samples from {calibration_path}")
+        return calibration_list
+
+    except Exception as e:
+        raise TVMCException(f"Failed to load calibration data from '{calibration_path}': {e}")
+
+
+def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
+    """Compile model using TIDL backend through TVM composite target system.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Command line arguments containing TIDL-specific options
+    tvmc_model : TVMCModel
+        The model to compile
+
+    Returns
+    -------
+    int
+        Zero if successful
+    """
+    # Validate required TIDL arguments
+    if not hasattr(args, 'tidl_platform') or args.tidl_platform is None:
+        raise TVMCException("--tidl-platform is required when using tidl target.")
+
+    # Load calibration data if provided
+    calibration_input_list = []
+    if hasattr(args, 'tidl_calibration_data') and args.tidl_calibration_data:
+        calibration_input_list = load_tidl_calibration_data(args.tidl_calibration_data)
+    else:
+        logger.warning("No calibration data provided. TIDL quantization may be suboptimal.")
+
+    # Build TIDL configuration for pass context and store it globally for partition function
+    # Get TIDL tools path from environment variable
+    import os
+    tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
+    if tidl_tools_path is None:
+        raise TVMCException("Environment variable TIDL_TOOLS_PATH is not set!")
+
+    tidl_config = {
+        "platform": args.tidl_platform,
+        "calibration_data": getattr(args, 'tidl_calibration_data', ''),
+        "artifacts_folder": getattr(args, 'tidl_artifacts_folder', './tidl_artifacts'),
+        "tensor_bits": getattr(args, 'tidl_tensor_bits', 8),
+        "enable_offload": getattr(args, 'tidl_enable_offload', False),
+        "enable_c7x_codegen": getattr(args, 'tidl_enable_c7x_codegen', False),
+        "compile_for_device": getattr(args, 'tidl_compile_for_device', False),
+        "deny_list": getattr(args, 'tidl_deny_list', ''),
+        "tidl_tools_path": tidl_tools_path,
+        "graph_input_list": calibration_input_list,
+    }
+
+    # Store tidl_config globally so partition_for_c7x can access it
+    import tvm.relay.op.contrib.tidl.tidl as tidl_module
+    tidl_module._global_tidl_config = tidl_config
+
+    # Set up the target - include tidl composite target
+    base_targets = []
+
+    # Always include tidl composite target for partitioning
+    base_targets.append("tidl")
+
+    # Use C codegen target for cl7x compiler when c7x codegen is enabled
+    if getattr(args, 'tidl_enable_c7x_codegen', False):
+        if getattr(args, 'tidl_compile_for_device', False):
+            base_targets.append("c -march=aarch64")
+        else:
+            base_targets.append("c")
+    else:
+        # Use llvm when not using c7x codegen
+        if getattr(args, 'tidl_compile_for_device', False):
+            base_targets.append("llvm -mtriple=aarch64-linux-gnu")
+        else:
+            base_targets.append("llvm")
+
+    # Override the target args to use our computed target
+    args.target = ", ".join(base_targets)
+
+    # Continue with standard TVM compilation pipeline which will use our tidl composite target
+    return None  # Signal to continue with normal compilation
+# End TI
+
+
 @register_parser
 def add_compile_parser(subparsers, _, json_params):
     """Include parser for 'compile' subcommand"""
@@ -174,6 +319,52 @@ def add_compile_parser(subparsers, _, json_params):
         "e.g. '--print-ir-after [tir.SplitHostDevice,tir.ConvertSSA]' ",
         default="",
     )
+
+    # Begin TI
+    # TIDL-specific arguments for TI C7x target
+    parser.add_argument(
+        "--tidl-platform",
+        choices=["am68pa", "am68a", "am69a", "am67a", "am62a"],
+        help="TI platform for TIDL compilation. Required when using tidl target.",
+    )
+    parser.add_argument(
+        "--tidl-calibration-data",
+        help="path to .npz file containing calibration data for quantization.",
+    )
+    parser.add_argument(
+        "--tidl-artifacts-folder",
+        default="./tidl_artifacts",
+        help="output directory for TIDL compilation artifacts. Defaults to './tidl_artifacts'.",
+    )
+    parser.add_argument(
+        "--tidl-tensor-bits",
+        type=int,
+        choices=[8, 16, 32],
+        default=8,
+        help="number of bits for TIDL tensor quantization. Defaults to 8.",
+    )
+    parser.add_argument(
+        "--tidl-enable-offload",
+        action="store_true",
+        help="enable TIDL acceleration offloading.",
+    )
+    parser.add_argument(
+        "--tidl-enable-c7x-codegen",
+        action="store_true",
+        help="enable C7x code generation for layers not offloaded to TIDL.",
+    )
+    parser.add_argument(
+        "--tidl-compile-for-device",
+        action="store_true",
+        help="compile for target device (aarch64) instead of host (x86).",
+    )
+    parser.add_argument(
+        "--tidl-deny-list",
+        default="",
+        help="comma-separated list of operations to exclude from TIDL offloading.",
+    )
+    # End TI
+
     for one_entry in json_params:
         parser.set_defaults(**one_entry)
 
@@ -201,6 +392,15 @@ def drive_compile(args):
         )
 
     tvmc_model = frontends.load_model(args.FILE, args.model_format, args.input_shapes)
+
+    # Begin TI
+    # Check if target is TIDL and handle TIDL-specific configuration
+    if "tidl" in args.target.lower():
+        result = _compile_tidl_model(args, tvmc_model)
+        if result is not None:
+            return result
+        # If result is None, continue with normal compilation using the updated args
+    # End TI
 
     dump_code = [x.strip() for x in args.dump_code.split(",")] if args.dump_code else None
 

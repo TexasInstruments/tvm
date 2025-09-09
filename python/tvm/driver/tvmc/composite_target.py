@@ -30,6 +30,7 @@ from tvm.relay.op.contrib.bnns import partition_for_bnns
 from tvm.relay.op.contrib.vitis_ai import partition_for_vitis_ai
 from tvm.relay.op.contrib.clml import partition_for_clml
 from tvm.relay.op.contrib.mrvl import partition_for_mrvl
+from tvm.relay.op.contrib.tidl.tidl import partition_for_c7x
 
 
 from tvm.driver.tvmc import TVMCException
@@ -89,10 +90,10 @@ REGISTERED_CODEGEN = {
         "pass_default": True,
         "pass_pipeline": partition_for_mrvl,
     },
-    "ti-c7x": {
-        "config_key": "relay.ext.tic7x.options",
+    "tidl": {
+        "config_key": "relay.ext.tidl.options",
         "pass_default": False,
-        "pass_pipeline": partition_for_tic7x,
+        "pass_pipeline": partition_for_c7x,
     },
 }
 

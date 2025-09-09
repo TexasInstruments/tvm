@@ -43,7 +43,9 @@ INTERNAL_TO_HELP = {"runtime.String": " string", "IntImm": "", "Array": " option
 
 def _valid_target_kinds():
     codegen_names = tvmc.composite_target.get_codegen_names()
-    return filter(lambda target: target not in codegen_names, Target.list_kinds())
+    # Hide c7x target from CLI - it's used internally by TIDL but not exposed to users
+    excluded_targets = {"c7x"}
+    return filter(lambda target: target not in codegen_names and target not in excluded_targets, Target.list_kinds())
 
 
 def _generate_target_kind_args(parser, kind_name):
@@ -73,15 +75,18 @@ def _generate_codegen_args(parser, codegen_name):
 
                     # Retrieve the default value string from attrs(field) of config node
                     # Eg: "default=target_cpu_name"
-                    target_option_default_str = field.type_info.split("default=")[1]
+                    target_option_default_str = ""
+                    if "default=" in field.type_info:
+                        target_option_default_str = field.type_info.split("default=")[1]
 
                     # Extract the defalut value based on the tvm type
                     if target_option_default_str and tvm_type == "runtime.String":
                         default_value = target_option_default_str
                     elif target_option_default_str and tvm_type == "IntImm":
                         # Extract the numeric value from the python Int string, Eg: T.int64(8)
-                        str_slice = target_option_default_str.split("(")[1]
-                        default_value = str_slice.split(")")[0]
+                        if "(" in target_option_default_str and ")" in target_option_default_str:
+                            str_slice = target_option_default_str.split("(")[1]
+                            default_value = str_slice.split(")")[0]
 
                     if codegen["pass_default"] is False:
                         default_value = None

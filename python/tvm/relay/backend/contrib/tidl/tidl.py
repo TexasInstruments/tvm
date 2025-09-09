@@ -1400,7 +1400,7 @@ class TIDLImport:
                 is_nchw = 1
                 # input is a vector - expand (x,y,z) to (1,1,1,x,y,z) - and respectively for other dims < TIDL_DIM_MAX
                 in_shape = (1,)*(TIDL_DIM_MAX-len(input_shape)) + input_shape
-            elif self.data_layout in ["NHWC", "NWC"]: 
+            elif self.data_layout in ["NHWC", "NWC"]:
                 # Populate shapes consistent with TI-TfLiteRT
                 is_nchw = 0
                 if len(input_shape) == 2:
@@ -1415,8 +1415,8 @@ class TIDLImport:
                         in_shape = (in_shape[0], 1, 1, in_shape[3], in_shape[1], in_shape[2])
             else:
                 print('data layout ' + self.data_layout + ' is not supported')
-                return False            
-            
+                return False
+
             input_shapes.append(in_shape)
 
         descr = (TensorDescriptor * (len(input_zps) + len(output_zps)))()
@@ -2052,7 +2052,7 @@ class TIOffloadCompiler:
             'bias_calibration'             : None,
             'channel_wise_quantization'    : None,
             }
-    
+
     # Subset of calibration options corresponding to quantized tensor bits
     default_calib_options_based_on_tensor_bits = {
       8 : {
@@ -2171,9 +2171,19 @@ class TIOffloadCompiler:
             sys.exit("Unsupported TIDL platform: " + platform)
         assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
         self.temp_folder = os.path.join(self.artifacts_folder, 'tempDir/')
+        # Set environment variable for C++ codegen to find temp folder
+        os.environ["TIDL_ARTIFACTS_TEMP_FOLDER"] = self.temp_folder
+
+        # Create and set up the TIDL context for C++ codegen
+        CreateTIDLContext = tvm.get_global_func("tidl.CreateTIDLContext")
+        self.tidl_context = CreateTIDLContext(self.artifacts_folder, self.tidl_platform, self.c7x_codegen, 0)
+        # Enter the context to make it active
+        EnterTIDLContext = tvm.get_global_func("tidl.EnterTIDLContext")
+        EnterTIDLContext(self.tidl_context)
+
         if self.debug_level:
             os.environ["TIDL_RELAY_IMPORT_DEBUG"] = str(self.debug_level)
-        
+
         # Deny list needs to be passed to TIDL as part of TIDL_relayAllowNode function.
         # Vector data cannot be passed across packedFunc, so preserve the original string as well (denyListStr) to be 
         # split inside TIDL. deny_list contains individual operator names to be used within TVM code
@@ -2182,8 +2192,7 @@ class TIOffloadCompiler:
             self.denyListStr = self.deny_list
             import re
             self.deny_list = re.split(r',\s*', self.deny_list) # Separates comma (+ space) separated operator names
-        
-        
+
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
         self.reuse_tidl_artifacts = reuse_tidl_artifacts
 
@@ -2280,10 +2289,58 @@ class TIOffloadCompiler:
             graph_input_list = [ graph_input_list ]
         # Ensure calibration image parameter names are same names as parameters in model
         mod_params_names = [ var.name_hint for var in mod_orig['main'].params ]
+
+        # Auto-map calibration data input names to model parameter names if needed
+        mapped_graph_input_list = []
         for name_val_dict in graph_input_list:
-            for name in name_val_dict.keys():
-                if name not in mod_params_names:
-                    raise Exception(f"Specified input name, {name}, is not found in the model.")
+            calib_names = list(name_val_dict.keys())
+
+            # Check if calibration data names match model parameter names
+            if all(name in mod_params_names for name in calib_names):
+                # Names match - use as is
+                mapped_graph_input_list.append(name_val_dict)
+            elif len(mod_params_names) == 1:
+                # Single input model - auto-map all calibration data to the single model input
+                model_name = mod_params_names[0]
+
+                if len(calib_names) == 1:
+                    # Single calibration sample
+                    calib_name = calib_names[0]
+                    mapped_dict = {model_name: name_val_dict[calib_name]}
+                    mapped_graph_input_list.append(mapped_dict)
+                    print(f"Auto-mapped calibration input '{calib_name}' to model input '{model_name}'")
+                else:
+                    # Multiple calibration samples - combine them into batch dimension or use first matching pattern
+                    # Look for frame_N_<input_name> pattern and map to model input
+                    mapped_found = False
+                    for calib_name in calib_names:
+                        # Check if this looks like a frame-based naming pattern
+                        if calib_name.startswith('frame_') and '_' in calib_name:
+                            # Try to extract the base input name
+                            parts = calib_name.split('_', 2)  # Split on first 2 underscores: frame_0_input.1Net_IN
+                            if len(parts) >= 3:
+                                base_input_name = '_'.join(parts[2:])  # input.1Net_IN
+                                if base_input_name == model_name or not mapped_found:
+                                    # Use this calibration sample
+                                    mapped_dict = {model_name: name_val_dict[calib_name]}
+                                    mapped_graph_input_list.append(mapped_dict)
+                                    print(f"Auto-mapped calibration input '{calib_name}' to model input '{model_name}'")
+                                    mapped_found = True
+
+                    if not mapped_found:
+                        # Fallback: use first calibration sample
+                        calib_name = calib_names[0]
+                        mapped_dict = {model_name: name_val_dict[calib_name]}
+                        mapped_graph_input_list.append(mapped_dict)
+                        print(f"Auto-mapped calibration input '{calib_name}' (first sample) to model input '{model_name}'")
+            else:
+                # Multiple model inputs - require exact name matching
+                raise Exception(f"Input name mismatch: calibration data contains {calib_names} but model expects {mod_params_names}. "
+                                f"For multiple-input models, calibration data must use exact model input names. "
+                                f"Please recreate the calibration NPZ file with the correct input names.")
+
+        # Use the mapped calibration data
+        graph_input_list = mapped_graph_input_list
 
         #============= Find data layout of the original graph =============
         data_layout = find_data_layout(mod_orig)
