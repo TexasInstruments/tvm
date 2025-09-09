@@ -66,6 +66,9 @@ REQUIREMENTS_BY_PIECE: RequirementsByPieceType = [
                 "attrs",
                 "cloudpickle",
                 "decorator",
+                # Begin TI
+                "graphviz",
+                # End TI    
                 "ml_dtypes",
                 "numpy",
                 "packaging",
