@@ -1267,6 +1267,8 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_et
                 input_quant_vec[i].astype('int8').tofile(fid)
             elif (input_etypes[i] == 6):
                 input_quant_vec[i].astype('float32').tofile(fid)
+            elif (input_etypes[i] == 8):
+                input_quant_vec[i].astype('int64').tofile(fid)
             else:
                 assert False, f'Unsupported TIDL calibration data type: {input_etypes[i]}'
     fid.close()
@@ -1875,6 +1877,7 @@ class TIDLAnnotation:
         self._register_constrained_op("sinh")
         self._register_constrained_op("sqrt")
         self._register_constrained_op("tan")
+        self._register_constrained_op("scatter_elements")
 
         tidl_annotations_registered = True
 
@@ -2259,7 +2262,8 @@ class TIOffloadCompiler:
             element_type_map = {
                 0: "uint8",
                 1: "int8",
-                6: "float32"
+                6: "float32",
+                8: "int64"
             }
             tidl_od_output_dtypes = [element_type_map[node.element_type] for node
                                      in od_postproc_info.out_nodes[:od_postproc_info.num_out_nodes]]
