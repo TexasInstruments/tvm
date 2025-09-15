@@ -136,13 +136,13 @@ def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
         Zero if successful
     """
     # Validate required TIDL arguments
-    if not hasattr(args, 'tidl_platform') or args.tidl_platform is None:
-        raise TVMCException("--tidl-platform is required when using tidl target.")
+    if not hasattr(args, 'target_tidl_platform') or args.target_tidl_platform is None:
+        raise TVMCException("--target-tidl-platform is required when using tidl target.")
 
     # Load calibration data if provided
     calibration_input_list = []
-    if hasattr(args, 'tidl_calibration_data') and args.tidl_calibration_data:
-        calibration_input_list = load_tidl_calibration_data(args.tidl_calibration_data)
+    if hasattr(args, 'target_tidl_calibration_data') and args.target_tidl_calibration_data:
+        calibration_input_list = load_tidl_calibration_data(args.target_tidl_calibration_data)
     else:
         logger.warning("No calibration data provided. TIDL quantization may be suboptimal.")
 
@@ -154,14 +154,14 @@ def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
         raise TVMCException("Environment variable TIDL_TOOLS_PATH is not set!")
 
     tidl_config = {
-        "platform": args.tidl_platform,
-        "calibration_data": getattr(args, 'tidl_calibration_data', ''),
-        "artifacts_folder": getattr(args, 'tidl_artifacts_folder', './tidl_artifacts'),
-        "tensor_bits": getattr(args, 'tidl_tensor_bits', 8),
-        "enable_offload": getattr(args, 'tidl_enable_offload', False),
-        "enable_c7x_codegen": getattr(args, 'tidl_enable_c7x_codegen', False),
-        "compile_for_device": getattr(args, 'tidl_compile_for_device', False),
-        "deny_list": getattr(args, 'tidl_deny_list', ''),
+        "platform": args.target_tidl_platform,
+        "calibration_data": getattr(args, 'target_tidl_calibration_data', ''),
+        "artifacts_folder": getattr(args, 'target_tidl_artifacts_folder', './tidl_artifacts'),
+        "tensor_bits": getattr(args, 'target_tidl_tensor_bits', 8),
+        "enable_offload": getattr(args, 'target_tidl_enable_offload', False),
+        "enable_c7x_codegen": getattr(args, 'target_tidl_enable_c7x_codegen', False),
+        "compile_for_device": getattr(args, 'target_tidl_compile_for_device', False),
+        "deny_list": getattr(args, 'target_tidl_deny_list', ''),
         "tidl_tools_path": tidl_tools_path,
         "graph_input_list": calibration_input_list,
     }
@@ -177,14 +177,14 @@ def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
     base_targets.append("tidl")
 
     # Use C codegen target for cl7x compiler when c7x codegen is enabled
-    if getattr(args, 'tidl_enable_c7x_codegen', False):
-        if getattr(args, 'tidl_compile_for_device', False):
+    if getattr(args, 'target_tidl_enable_c7x_codegen', False):
+        if getattr(args, 'target_tidl_compile_for_device', False):
             base_targets.append("c -march=aarch64")
         else:
             base_targets.append("c")
     else:
         # Use llvm when not using c7x codegen
-        if getattr(args, 'tidl_compile_for_device', False):
+        if getattr(args, 'target_tidl_compile_for_device', False):
             base_targets.append("llvm -mtriple=aarch64-linux-gnu")
         else:
             base_targets.append("llvm")
@@ -320,50 +320,6 @@ def add_compile_parser(subparsers, _, json_params):
         default="",
     )
 
-    # Begin TI
-    # TIDL-specific arguments for TI C7x target
-    parser.add_argument(
-        "--tidl-platform",
-        choices=["am68pa", "am68a", "am69a", "am67a", "am62a"],
-        help="TI platform for TIDL compilation. Required when using tidl target.",
-    )
-    parser.add_argument(
-        "--tidl-calibration-data",
-        help="path to .npz file containing calibration data for quantization.",
-    )
-    parser.add_argument(
-        "--tidl-artifacts-folder",
-        default="./tidl_artifacts",
-        help="output directory for TIDL compilation artifacts. Defaults to './tidl_artifacts'.",
-    )
-    parser.add_argument(
-        "--tidl-tensor-bits",
-        type=int,
-        choices=[8, 16, 32],
-        default=8,
-        help="number of bits for TIDL tensor quantization. Defaults to 8.",
-    )
-    parser.add_argument(
-        "--tidl-enable-offload",
-        action="store_true",
-        help="enable TIDL acceleration offloading.",
-    )
-    parser.add_argument(
-        "--tidl-enable-c7x-codegen",
-        action="store_true",
-        help="enable C7x code generation for layers not offloaded to TIDL.",
-    )
-    parser.add_argument(
-        "--tidl-compile-for-device",
-        action="store_true",
-        help="compile for target device (aarch64) instead of host (x86).",
-    )
-    parser.add_argument(
-        "--tidl-deny-list",
-        default="",
-        help="comma-separated list of operations to exclude from TIDL offloading.",
-    )
-    # End TI
 
     for one_entry in json_params:
         parser.set_defaults(**one_entry)

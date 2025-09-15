@@ -91,8 +91,10 @@ def _generate_codegen_args(parser, codegen_name):
                     if codegen["pass_default"] is False:
                         default_value = None
 
+                    # Convert underscores to hyphens for user-friendly CLI argument names
+                    cli_option_name = target_option.replace('_', '-')
                     target_group.add_argument(
-                        f"--target-{codegen_name}-{target_option}",
+                        f"--target-{codegen_name}-{cli_option_name}",
                         type=python_type,
                         help=field.description,
                         default=default_value,
@@ -135,8 +137,10 @@ def _reconstruct_codegen_args(args, codegen_name):
             for tvm_type in INTERNAL_TO_NATIVE_TYPE:
                 if field.type_info.startswith(tvm_type):
                     target_option = field.name
+                    # Convert underscores to hyphens for CLI argument lookup
+                    cli_option_name = target_option.replace('_', '-')
                     var_name = (
-                        f"target_{codegen_name.replace('-', '_')}_{target_option.replace('-', '_')}"
+                        f"target_{codegen_name.replace('-', '_')}_{cli_option_name.replace('-', '_')}"
                     )
                     option_value = getattr(args, var_name)
                     if option_value is not None:
