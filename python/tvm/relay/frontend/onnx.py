@@ -821,6 +821,8 @@ class BatchNorm(OnnxOpConverter):
     def _impl_v1(cls, inputs, attr, params):
         # TODO(zhreshold): 'spatial' is not properly handled here.
         # TODO(vvchernov): 'training_mode' (onnx tag) is not correctly handled, ignore for now
+        if "epsilon" not in attr:
+            attr["epsilon"] = 1e-5
         out = AttrCvt(
             op_name="batch_norm",
             ignores=["spatial", "is_test", "consumed_inputs", "momentum", "training_mode"],
