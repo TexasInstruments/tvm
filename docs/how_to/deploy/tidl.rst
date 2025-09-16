@@ -67,16 +67,16 @@ The simplest way to compile models for TIDL is using TVM's command-line interfac
     # Basic TIDL compilation
     tvmc compile model.onnx \
         --target tidl \
-        --tidl-platform am69a \
-        --tidl-enable-offload
+        --target-tidl-platform am69a \
+        --target-tidl-enable-offload
 
     # With calibration data for quantization
     tvmc compile model.onnx \
         --target tidl \
-        --tidl-platform am69a \
-        --tidl-calibration-data calibration.npz \
-        --tidl-enable-offload \
-        --tidl-tensor-bits 8
+        --target-tidl-platform am69a \
+        --target-tidl-calibration-data calibration.npz \
+        --target-tidl-enable-offload \
+        --target-tidl-tensor-bits 8
 
 TVMC TIDL Options
 -----------------
@@ -84,30 +84,30 @@ TVMC TIDL Options
 Required Options
 ~~~~~~~~~~~~~~~~
 
-* ``--tidl-platform`` - Target TI platform (am68pa, am68a, am69a, am67a, am62a)
+* ``--target-tidl-platform`` - Target TI platform (am68pa, am68a, am69a, am67a, am62a)
 
 Acceleration Options
 ~~~~~~~~~~~~~~~~~~~
 
-* ``--tidl-enable-offload`` - Enable TIDL acceleration for supported layers
-* ``--tidl-enable-c7x-codegen`` - Generate C7x code for unsupported layers (instead of ARM)
+* ``--target-tidl-enable-offload`` - Enable TIDL acceleration for supported layers
+* ``--target-tidl-enable-c7x-codegen`` - Generate C7x code for unsupported layers (instead of ARM)
 
 Quantization Options
 ~~~~~~~~~~~~~~~~~~~
 
-* ``--tidl-calibration-data`` - Path to .npz calibration file for quantization
-* ``--tidl-tensor-bits`` - Quantization precision: 8, 16, or 32 bits (default: 8)
+* ``--target-tidl-calibration-data`` - Path to .npz calibration file for quantization
+* ``--target-tidl-tensor-bits`` - Quantization precision: 8, 16, or 32 bits (default: 8)
 
 Output and Build Options
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-* ``--tidl-artifacts-folder`` - Output directory for compilation artifacts (default: ./tidl_artifacts)
-* ``--tidl-compile-for-device`` - Compile for target device (aarch64) vs host (x86)
+* ``--target-tidl-artifacts-folder`` - Output directory for compilation artifacts (default: ./tidl_artifacts)
+* ``--target-tidl-compile-for-device`` - Compile for target device (aarch64) vs host (x86)
 
 Advanced Options
 ~~~~~~~~~~~~~~~
 
-* ``--tidl-deny-list`` - Comma-separated list of operations to exclude from TIDL offloading
+* ``--target-tidl-deny-list`` - Comma-separated list of operations to exclude from TIDL offloading
 
 Preparing Calibration Data
 ---------------------------
@@ -141,13 +141,13 @@ Here's a complete example compiling a ResNet-50 model for AM69A with 8-bit quant
     # Compile ResNet-50 with TIDL
     tvmc compile resnet50.onnx \
         --target tidl \
-        --tidl-platform am69a \
-        --tidl-calibration-data calibration.npz \
-        --tidl-artifacts-folder ./resnet50_artifacts \
-        --tidl-tensor-bits 8 \
-        --tidl-enable-offload \
-        --tidl-enable-c7x-codegen \
-        --tidl-compile-for-device
+        --target-tidl-platform am69a \
+        --target-tidl-calibration-data calibration.npz \
+        --target-tidl-artifacts-folder ./resnet50_artifacts \
+        --target-tidl-tensor-bits 8 \
+        --target-tidl-enable-offload \
+        --target-tidl-enable-c7x-codegen \
+        --target-tidl-compile-for-device
 
     # Compilation artifacts will be generated in ./resnet50_artifacts/
 
@@ -212,7 +212,7 @@ Common Issues
 ~~~~~~~~~~~~~
 
 **"Platform not supported" error**
-    Ensure ``--tidl-platform`` matches your target hardware exactly
+    Ensure ``--target-tidl-platform`` matches your target hardware exactly
 
 **"Calibration file not found" error**
     Verify the path to your .npz file and ensure it exists and is readable
@@ -227,10 +227,10 @@ Common Issues
 Debug Strategies
 ~~~~~~~~~~~~~~~
 
-* Use ``--tidl-deny-list`` to exclude specific problematic operations and narrow down issues
+* Use ``--target-tidl-deny-list`` to exclude specific problematic operations and narrow down issues
 * Check the generated artifacts in the output folder for detailed compilation logs
 * Verify calibration data shapes match your model's expected input dimensions
-* Start with ``--tidl-tensor-bits 32`` to isolate quantization-related issues
+* Start with ``--target-tidl-tensor-bits 32`` to isolate quantization-related issues
 
 For comprehensive documentation and troubleshooting, refer to the official
 `TI TVM User's Guide <https://software-dl.ti.com/codegen/docs/tvm/tvm_tidl_users_guide/index.html>`_.

@@ -51,7 +51,7 @@ def partition_for_c7x(mod, params=None, mod_name="default", **opts):
     global _global_tidl_config
     if _global_tidl_config is None:
         raise TVMCException(
-            "TIDL configuration not found. Make sure to use tvmc with --tidl-* options."
+            "TIDL configuration not found. Make sure to use tvmc with --target-tidl-* options."
         )
 
     config = _global_tidl_config.copy()
