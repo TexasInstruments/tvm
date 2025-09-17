@@ -56,6 +56,10 @@ logger = logging.getLogger("TVMC")
 def load_tidl_calibration_data(calibration_path: str) -> List[Dict[str, Any]]:
     """Load calibration data from NPZ file for TIDL quantization.
 
+    Expected NPZ format (simple format):
+    - Keys: input tensor names (e.g., 'input', 'input1', 'input2')
+    - Values: arrays with shape (num_samples, ...) where first dimension is sample count
+
     Parameters
     ----------
     calibration_path : str
@@ -80,37 +84,37 @@ def load_tidl_calibration_data(calibration_path: str) -> List[Dict[str, Any]]:
         # Load NPZ file
         calib_data = np.load(calibration_path)
 
-        # Convert to list of dictionaries format expected by TIDL
-        calibration_list = []
-
-        # Get all array names from the NPZ file
-        array_names = list(calib_data.files)
-
-        if not array_names:
+        # Get input names
+        input_names = list(calib_data.files)
+        if not input_names:
             raise TVMCException("NPZ file contains no calibration data arrays.")
 
-        # Determine number of samples (assume all arrays have same first dimension)
-        first_array = calib_data[array_names[0]]
-        if len(first_array.shape) == 0:
-            num_samples = 1
-        else:
-            num_samples = first_array.shape[0]
+        # Determine number of samples from first input
+        first_input = calib_data[input_names[0]]
+        if len(first_input.shape) == 0:
+            raise TVMCException("Calibration data must have at least one dimension for samples.")
 
-        # Create calibration samples
+        num_samples = first_input.shape[0]
+        if num_samples == 0:
+            raise TVMCException("Calibration data contains no samples.")
+
+        # Validate all inputs have same number of samples
+        for input_name in input_names:
+            input_data = calib_data[input_name]
+            if len(input_data.shape) == 0 or input_data.shape[0] != num_samples:
+                raise TVMCException(
+                    f"All inputs must have same number of samples. "
+                    f"Expected {num_samples}, got {input_data.shape[0] if len(input_data.shape) > 0 else 0} "
+                    f"for input '{input_name}'."
+                )
+
+        # Convert to list of dictionaries format expected by TIDL
+        calibration_list = []
         for sample_idx in range(num_samples):
             sample_dict = {}
-            for array_name in array_names:
-                array_data = calib_data[array_name]
-                if len(array_data.shape) == 0 or num_samples == 1:
-                    # Single sample case
-                    sample_data = array_data
-                else:
-                    # Multiple samples case - extract one sample
-                    sample_data = array_data[sample_idx]
-
-                # Convert to TVM NDArray
-                sample_dict[array_name] = tvm.nd.array(sample_data)
-
+            for input_name in input_names:
+                sample_data = calib_data[input_name][sample_idx]
+                sample_dict[input_name] = tvm.nd.array(sample_data)
             calibration_list.append(sample_dict)
 
         logger.info(f"Loaded {len(calibration_list)} calibration samples from {calibration_path}")

@@ -2290,48 +2290,32 @@ class TIOffloadCompiler:
         # Ensure calibration image parameter names are same names as parameters in model
         mod_params_names = [ var.name_hint for var in mod_orig['main'].params ]
 
-        # Auto-map calibration data input names to model parameter names if needed
-        def extract_input_name_from_frame_key(frame_key):
-            """Extract input name from frame_N_inputname format"""
-            if frame_key.startswith('frame_') and '_' in frame_key:
-                parts = frame_key.split('_', 2)  # Split into ['frame', 'N', 'inputname']
-                return parts[2] if len(parts) >= 3 else frame_key
-            return frame_key
-
+        # Validate calibration data input names match model parameter names
         mapped_graph_input_list = []
         for name_val_dict in graph_input_list:
             calib_names = list(name_val_dict.keys())
 
-            # Case 1: Perfect match - calibration names exactly match model parameter names
+            # Check if calibration names match model parameter names
             if all(name in mod_params_names for name in calib_names):
                 mapped_graph_input_list.append(name_val_dict)
                 continue
 
-            # Case 2: NPZ file format - try to map frame_N_inputname to model inputs
-            mapped_dict = {}
-            for calib_name, tensor_data in name_val_dict.items():
-                extracted_name = extract_input_name_from_frame_key(calib_name)
-
-                if extracted_name in mod_params_names:
-                    # Found exact match after extracting from frame format
-                    mapped_dict[extracted_name] = tensor_data
-                elif len(mod_params_names) == 1:
-                    # Single input model - map any calibration data to the single model input
-                    model_input_name = mod_params_names[0]
+            # For single-input models, auto-map any calibration input to the model input
+            if len(mod_params_names) == 1:
+                model_input_name = mod_params_names[0]
+                mapped_dict = {}
+                for calib_name, tensor_data in name_val_dict.items():
                     mapped_dict[model_input_name] = tensor_data
-                    print(f"Auto-mapped calibration input '{calib_name}' to model input '{model_input_name}'")
-                else:
-                    # Multiple model inputs but no clear mapping - fail with helpful message
-                    raise Exception(f"Input name mismatch: calibration data contains '{calib_name}' "
-                                    f"(extracted: '{extracted_name}') but model expects {mod_params_names}. "
-                                    f"For multiple-input models, calibration data names must match model input names.")
-
-            if mapped_dict:
+                    if calib_name != model_input_name:
+                        print(f"Auto-mapped calibration input '{calib_name}' to model input '{model_input_name}'")
                 mapped_graph_input_list.append(mapped_dict)
             else:
-                raise Exception(f"Failed to map any calibration inputs {calib_names} to model inputs {mod_params_names}")
+                # Multiple model inputs require exact name matching
+                raise Exception(f"Input name mismatch: calibration data contains {calib_names} "
+                                f"but model expects {mod_params_names}. "
+                                f"For multiple-input models, calibration data names must match model input names exactly.")
 
-        # Use the mapped calibration data
+        # Use the validated calibration data
         graph_input_list = mapped_graph_input_list
 
         #============= Find data layout of the original graph =============
