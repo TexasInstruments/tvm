@@ -630,6 +630,48 @@ def compile_model(
                 for smod in lib.imported_modules:
                     dumps[smod.type_key] = smod.get_source()
 
+        # TIDL parameter optimization: remove redundant parameters for TIDL targets
+        tvmc_model._optimized_params = None
+
+        # Check if this is a TIDL compilation
+        is_tidl_compilation = False
+
+        # Check for TIDL-related imported modules
+        if hasattr(graph_module, 'get_lib'):
+            lib = graph_module.get_lib()
+            imported_modules = lib.imported_modules if hasattr(lib, 'imported_modules') else []
+            for mod in imported_modules:
+                if hasattr(mod, 'type_key') and 'tidl' in mod.type_key.lower():
+                    is_tidl_compilation = True
+                    break
+
+        # Check original target string
+        if "tidl" in target.lower():
+            is_tidl_compilation = True
+
+        # Apply TIDL parameter optimization
+        if is_tidl_compilation:
+            logger.info("Applying TIDL parameter optimization...")
+            if hasattr(graph_module, 'get_params'):
+                params = graph_module.get_params().copy()
+                param_count_before = len(params)
+                total_size_before = sum(p.numpy().nbytes for p in params.values()) / (1024*1024)
+
+                # Remove TIDL parameters (already embedded in TIDL artifacts)
+                import tvm.relay.backend.contrib.tidl.tidl as tidl_module
+                tidl_module.remove_tidl_params(params)
+
+                param_count_after = len(params)
+                total_size_after = sum(p.numpy().nbytes for p in params.values()) / (1024*1024)
+                size_saved = total_size_before - total_size_after
+
+                # Store optimized params for use during export
+                tvmc_model._optimized_params = params
+
+                if size_saved > 0:
+                    logger.info(f"TIDL optimization: removed {param_count_before - param_count_after} parameters, "
+                               f"saved {size_saved:.1f}MB")
+
         # Create a new tvmc model package object from the graph definition.
         package_path = tvmc_model.export_package(
             graph_module, package_path, cross, cross_options, output_format

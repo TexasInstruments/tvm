@@ -276,7 +276,11 @@ class TVMCModel(object):
             graph_file.write(executor_factory.get_graph_json())
 
         with open(temp.relpath(param_name), "wb") as params_file:
-            params_file.write(relay.save_param_dict(executor_factory.get_params()))
+            # Use optimized parameters if available (for TIDL optimization)
+            if hasattr(self, '_optimized_params') and self._optimized_params is not None:
+                params_file.write(relay.save_param_dict(self._optimized_params))
+            else:
+                params_file.write(relay.save_param_dict(executor_factory.get_params()))
 
         # Package up all the temp files into a tar file.
         with tarfile.open(package_path, "w") as tar:
