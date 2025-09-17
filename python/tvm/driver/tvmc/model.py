@@ -249,9 +249,9 @@ class TVMCModel(object):
         package_path : str
             The path that the package was saved to.
         """
-        lib_name = "mod." + lib_format
-        graph_name = "mod.json"
-        param_name = "mod.params"
+        lib_name = "deploy_lib." + lib_format
+        graph_name = "deploy_graph.json"
+        param_name = "deploy_param.params"
 
         temp = self._tmp_dir
         if package_path is None:
