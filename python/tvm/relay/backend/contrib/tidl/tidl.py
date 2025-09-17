@@ -532,6 +532,29 @@ def unpack_composites(mod, target):
         mod[func.name_hint] = Unpacker(target).visit(mod[func.name_hint])
     return mod
 
+def unpack_specific_composites(mod, op_name, span_name):
+    """Unpack a specific composite function in the module by replacing composite call node with the
+    ops inside the composite function."""
+    class Unpacker(ExprMutator):
+        """Unpacks composite functions."""
+        def __init__(self):
+            ExprMutator.__init__(self)
+
+        def visit_call(self, call):
+            if isinstance(call.op, Function):
+                if call.op.attrs and call.op.attrs['Composite'] == op_name and call.span.source_name.name == span_name:
+                    # unpack the function back into new main function.
+                    var_map = {}
+                    for arg, param in zip(call.args, call.op.params):
+                        var_map[param] = super().visit(arg)
+                    super().visit_call(call)
+                    return VarReplacer(var_map).visit(call.op.body)
+            return super().visit_call(call)
+
+    for func in mod.get_global_vars():
+        mod[func.name_hint] = Unpacker().visit(mod[func.name_hint])
+    return mod
+
 def flatten_tuple_params(mod, compiler):
     """ TIDL can't handle passing Tuples as arguments to a subgraph. This pass
         flattens them into their constituent components.
@@ -2312,6 +2335,7 @@ class TIOffloadCompiler:
 
             # Invoking TIDL Relay Import allow function for Composite Functions
             allow_fn = tvm.get_global_func("TIDL_relayAllowNode")
+            denylist_update_fn = tvm.get_global_func("TIDL_relayUpdateDenyList")
             all_nodes = get_all_nodes(mod['main'])
             for node in all_nodes:
                 if isinstance(node, relay.expr.Call) and isinstance(node.op, relay.Function):
@@ -2319,8 +2343,10 @@ class TIOffloadCompiler:
                     if hasattr(func, "attrs") and "Composite" in func.attrs and self.tidl_target in func.attrs["Composite"]:
                         result = allow_fn(node)
                         if(result == False):
-                            # Inline local function by unpacking the composite
-                            mod = unpack_composites(mod, self.tidl_target)
+                            # Unpack the composite function
+                            mod = unpack_specific_composites(mod, func.attrs["Composite"], node.span.source_name.name)
+                            # add span name to the deny list, to avoid TIDL offload of the relay decomposed operators
+                            denylist_update_fn(node.span.source_name.name)
 
             mod = relay.transform.AnnotateTarget(self.tidl_target)(mod)
             with open(os.path.join(self.temp_folder, "relay_graph.annotated.txt"), "w") as relay_txt:
