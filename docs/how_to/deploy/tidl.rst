@@ -112,24 +112,98 @@ Advanced Options
 Preparing Calibration Data
 ---------------------------
 
-For optimal quantization performance, provide representative calibration data as a NumPy .npz archive:
+For optimal quantization performance, provide representative calibration data as a NumPy .npz archive.
+TIDL quantization requires real-world data samples to determine optimal quantization parameters.
+
+Automatic Calibration Data Generation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The TVM TIDL integration includes a calibration data generation script that automatically handles
+preprocessing and format conversion. Located at the repository root as ``generate_calibration_data.py``:
+
+.. code-block:: bash
+
+    # Basic usage - generates calibration data from image directory
+    python generate_calibration_data.py \
+        --model model.onnx \
+        --images ./calibration_images \
+        --output calibration.npz \
+        --num-frames 20
+
+    # Advanced usage with custom preprocessing
+    python generate_calibration_data.py \
+        --model model.onnx \
+        --images ./calibration_images \
+        --output calibration.npz \
+        --num-frames 50 \
+        --input-mean 123.675 116.28 103.53 \
+        --input-scale 0.017125 0.017507 0.017429
+
+    # List models with predefined preprocessing configurations
+    python generate_calibration_data.py --list-models
+
+    # Verify existing calibration data
+    python generate_calibration_data.py --verify calibration.npz
+
+Features:
+
+* **Automatic Model Support**: Detects ONNX (.onnx) and TensorFlow Lite (.tflite) models
+* **Smart Preprocessing**: Uses model-specific preprocessing when available, falls back to ImageNet defaults
+* **Layout Handling**: Automatically converts between NCHW (ONNX) and NHWC (TensorFlow Lite) formats
+* **Batch Processing**: Handles different batch sizes and multi-input models
+* **Image Loading**: Supports JPG, PNG, BMP, TIFF formats with recursive directory search
+
+NPZ File Format
+~~~~~~~~~~~~~~~
+
+The calibration data uses a simple format where each input maps to a multi-sample array:
+
+.. code-block:: python
+
+    # NPZ file structure:
+    # Key: input tensor name
+    # Value: array with shape (num_samples, height, width, channels) or (num_samples, ...)
+    {
+        'input': array([...]),    # Shape: (num_samples, 3, 224, 224) for ONNX
+                                  # Shape: (num_samples, 224, 224, 3) for TensorFlow Lite
+        'input2': array([...]),   # Additional inputs for multi-input models
+    }
+
+Manual Calibration Data Creation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For custom preprocessing requirements, create calibration data manually:
 
 .. code-block:: python
 
     import numpy as np
 
-    # Example: Create calibration data with multiple samples
-    # Keys should match your model's input tensor names
+    # Create calibration data with multiple samples
+    # Keys must match your model's input tensor names
     calibration_data = {
-        'input_1': np.random.randn(10, 3, 224, 224).astype(np.float32),  # 10 samples
-        'input_2': np.random.randn(10, 100).astype(np.float32)           # if multi-input
+        'input': np.random.randn(10, 3, 224, 224).astype(np.float32),  # 10 ONNX samples
+        # OR for TensorFlow Lite:
+        # 'input': np.random.randn(10, 224, 224, 3).astype(np.float32),  # 10 TFLite samples
     }
 
-    # Save as NPZ file
-    np.savez('calibration_data.npz', **calibration_data)
+    # For multi-input models
+    calibration_data = {
+        'input1': np.random.randn(10, 3, 224, 224).astype(np.float32),
+        'input2': np.random.randn(10, 100).astype(np.float32),
+    }
 
-The calibration data should contain multiple representative samples (typically 10-100) that cover
-the expected input distribution for your model.
+    # Save as compressed NPZ file
+    np.savez_compressed('calibration.npz', **calibration_data)
+
+Calibration Data Guidelines
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* **Sample Count**: Use 10-100 representative samples for good quantization quality
+* **Data Distribution**: Include diverse samples covering expected input variations
+* **Preprocessing**: Ensure data preprocessing matches inference preprocessing exactly
+* **Data Types**: Use float32 for calibration data regardless of final quantization precision
+* **Real Data**: Use actual application data rather than synthetic/random data when possible
+* **Layout Consistency**: Match your model's expected input layout (NCHW vs NHWC)
 
 Complete Example
 ---------------
