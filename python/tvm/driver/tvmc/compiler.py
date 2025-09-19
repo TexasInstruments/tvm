@@ -22,6 +22,7 @@ import logging
 import os.path
 import re
 import itertools
+import glob
 from copy import deepcopy
 from typing import Any, Optional, Dict, List, Union, Callable, Sequence
 from pathlib import Path
@@ -53,75 +54,164 @@ logger = logging.getLogger("TVMC")
 
 
 # Begin TI
-def load_tidl_calibration_data(calibration_path: str) -> List[Dict[str, Any]]:
-    """Load calibration data from NPZ file for TIDL quantization.
+def find_images_in_directory(directory: str, extensions: List[str] = None) -> List[str]:
+    """Find all image files in the given directory."""
+    if extensions is None:
+        extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff', '*.tif']
 
-    Expected NPZ format (simple format):
-    - Keys: input tensor names (e.g., 'input', 'input1', 'input2')
-    - Values: arrays with shape (num_samples, ...) where first dimension is sample count
+    image_files = []
+    for ext in extensions:
+        pattern = os.path.join(directory, '**', ext)
+        image_files.extend(glob.glob(pattern, recursive=True))
+        pattern = os.path.join(directory, '**', ext.upper())
+        image_files.extend(glob.glob(pattern, recursive=True))
 
-    Parameters
-    ----------
-    calibration_path : str
-        Path to .npz file containing calibration data
+    return list(set(image_files))
 
-    Returns
-    -------
-    List[Dict[str, Any]]
-        List of dictionaries where each dict maps input names to NDArrays
-    """
-    import numpy as np
-    import tvm
-    from tvm.runtime import NDArray
 
-    if not os.path.exists(calibration_path):
-        raise TVMCException(f"Calibration data file '{calibration_path}' does not exist.")
-
-    if not calibration_path.endswith('.npz'):
-        raise TVMCException(f"Calibration data file must be .npz format, got '{calibration_path}'.")
-
+def get_onnx_input_details(model_path: str) -> List[Dict[str, Any]]:
+    """Get ONNX model input tensor details."""
     try:
-        # Load NPZ file
-        calib_data = np.load(calibration_path)
+        import onnxruntime
+        sess_options = onnxruntime.SessionOptions()
 
-        # Get input names
-        input_names = list(calib_data.files)
-        if not input_names:
-            raise TVMCException("NPZ file contains no calibration data arrays.")
+        ep_list = ['CPUExecutionProvider']
+        # there is also TIDLExecutionProvider, since we are running
+        # this on host to figure out the input tensor details, it is
+        # probably okay to use CPUExecutionprovider.
 
-        # Determine number of samples from first input
-        first_input = calib_data[input_names[0]]
-        if len(first_input.shape) == 0:
-            raise TVMCException("Calibration data must have at least one dimension for samples.")
+        interpreter = onnxruntime.InferenceSession(
+            model_path, providers=ep_list, provider_options=[{}], sess_options=sess_options
+        )
+        model_tensor_details = interpreter.get_inputs()
+        del interpreter
 
-        num_samples = first_input.shape[0]
-        if num_samples == 0:
-            raise TVMCException("Calibration data contains no samples.")
+        # create a list of dicts to store tensor name, shape and type.
+        tensor_details = []
+        for tensor_d in model_tensor_details:
+            tensor_dict = {
+                'name': tensor_d.name,
+                'shape': list(tensor_d.shape),
+                'type': tensor_d.type
+            }
+            tensor_details.append(tensor_dict)
+        return tensor_details
 
-        # Validate all inputs have same number of samples
-        for input_name in input_names:
-            input_data = calib_data[input_name]
-            if len(input_data.shape) == 0 or input_data.shape[0] != num_samples:
-                raise TVMCException(
-                    f"All inputs must have same number of samples. "
-                    f"Expected {num_samples}, got {input_data.shape[0] if len(input_data.shape) > 0 else 0} "
-                    f"for input '{input_name}'."
-                )
+    except ImportError:
+        raise TVMCException("onnxruntime is required for ONNX model calibration")
 
-        # Convert to list of dictionaries format expected by TIDL
-        calibration_list = []
-        for sample_idx in range(num_samples):
-            sample_dict = {}
-            for input_name in input_names:
-                sample_data = calib_data[input_name][sample_idx]
-                sample_dict[input_name] = tvm.nd.array(sample_data)
-            calibration_list.append(sample_dict)
 
-        logger.info(f"Loaded {len(calibration_list)} calibration samples from {calibration_path}")
-        return calibration_list
+def generate_calibration_data_from_images(
+    model_path: str,
+    image_directory: str,
+    num_frames: int = 10,
+    input_mean: Optional[List[float]] = None,
+    input_scale: Optional[List[float]] = None
+) -> List[Dict[str, Any]]:
+    """Generate calibration data from images directory for ONNX models."""
+    import numpy as np
+    import PIL
+    from PIL import Image
 
-    except Exception as e:
-        raise TVMCException(f"Failed to load calibration data from '{calibration_path}': {e}")
+    # Verify model is ONNX
+    if not model_path.lower().endswith('.onnx'):
+        raise TVMCException("Only ONNX models are supported for image-based calibration")
+
+    # Find images
+    image_files = find_images_in_directory(image_directory)
+    if not image_files:
+        raise TVMCException(f"No image files found in directory: {image_directory}")
+
+    logger.info(f"Found {len(image_files)} images in {image_directory}")
+
+    # Get model input details
+    input_details = get_onnx_input_details(model_path)
+    logger.info(f"Model input details: {input_details}")
+
+    # Set default preprocessing values from model-specific configurations
+    if input_mean is None or input_scale is None:
+        from .model_preprocessing import get_model_preprocessing_config
+        config_mean, config_scale = get_model_preprocessing_config(model_path)
+
+        if input_mean is None:
+            input_mean = config_mean if config_mean is not None else [123.675, 116.28, 103.53]  # Default to ImageNet
+        if input_scale is None:
+            input_scale = config_scale if config_scale is not None else [0.017125, 0.017507, 0.017429]  # Default to ImageNet
+
+    logger.info(f"Using input_mean: {input_mean}")
+    logger.info(f"Using input_scale: {input_scale}")
+
+    # Validate num_frames
+    if num_frames is None or num_frames <= 0:
+        num_frames = 10
+
+    # Generate calibration data
+    calib_data_list = []
+    batch_size = input_details[0]['shape'][0]
+    actual_num_frames = min(num_frames, len(image_files))
+
+    logger.info(f"Generating calibration data for {actual_num_frames} frames...")
+
+    for i in range(actual_num_frames):
+        frame_data = {}
+
+        for input_detail in input_details:
+            input_name = input_detail['name']
+            shape = input_detail['shape']
+
+            # ONNX uses NCHW format
+            batch, channel, height, width = shape[0], shape[1], shape[2], shape[3]
+
+            # Determine if floating point model
+            floating_model = input_detail['type'] == "tensor(float)"
+
+            # Select images for this batch
+            start_index = i % len(image_files)
+            selected_images = [
+                image_files[(start_index + j) % len(image_files)]
+                for j in range(batch)
+            ]
+
+            # Load and preprocess images
+            processed_images = []
+            for img_path in selected_images:
+                try:
+                    img = Image.open(img_path).convert("RGB").resize(
+                        (width, height), PIL.Image.LANCZOS
+                    )
+                    processed_images.append(img)
+                except Exception as e:
+                    logger.warning(f"Failed to load {img_path}: {e}")
+                    # Use first valid image as fallback
+                    if processed_images:
+                        processed_images.append(processed_images[0])
+                    else:
+                        raise TVMCException(f"Failed to load calibration image: {img_path}")
+
+            # Prepare input tensor in NCHW format
+            input_data = np.zeros([batch, channel, height, width])
+
+            for idx, img in enumerate(processed_images):
+                img_array = np.expand_dims(np.array(img), axis=0)
+                img_array = np.transpose(img_array, (0, 3, 1, 2))  # NHWC -> NCHW
+                input_data[idx] = img_array[0]
+
+            # Apply preprocessing
+            if floating_model:
+                input_data = np.float32(input_data)
+                for ch_idx, (mean_val, scale_val) in enumerate(zip(input_mean, input_scale)):
+                    input_data[:, ch_idx, :, :] = (input_data[:, ch_idx, :, :] - mean_val) * scale_val
+            else:
+                input_data = np.uint8(input_data)
+
+            # Convert to TVM NDArray
+            frame_data[input_name] = tvm.nd.array(input_data)
+
+        calib_data_list.append(frame_data)
+        logger.info(f"Processed frame {i+1}/{actual_num_frames}")
+
+    logger.info(f"Generated {len(calib_data_list)} calibration samples")
+    return calib_data_list
 
 
 def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
@@ -143,12 +233,32 @@ def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
     if not hasattr(args, 'target_tidl_platform') or args.target_tidl_platform is None:
         raise TVMCException("--target-tidl-platform is required when using tidl target.")
 
-    # Load calibration data if provided
-    calibration_input_list = []
-    if hasattr(args, 'target_tidl_calibration_data') and args.target_tidl_calibration_data:
-        calibration_input_list = load_tidl_calibration_data(args.target_tidl_calibration_data)
-    else:
-        logger.warning("No calibration data provided. TIDL quantization may be suboptimal.")
+    # Validate required calibration images directory
+    calibration_images = getattr(args, 'target_tidl_calibration_images', '')
+    if not calibration_images:
+        raise TVMCException("--target-tidl-calibration-images is required when using tidl target.")
+
+    # Generate calibration data from images
+    input_mean = getattr(args, 'target_tidl_input_mean', None)
+    input_scale = getattr(args, 'target_tidl_input_scale', None)
+
+    # Convert from list arguments if provided
+    if input_mean and isinstance(input_mean, list) and len(input_mean) == 3:
+        input_mean = [float(x) for x in input_mean]
+    if input_scale and isinstance(input_scale, list) and len(input_scale) == 3:
+        input_scale = [float(x) for x in input_scale]
+
+    num_frames = getattr(args, 'target_tidl_calibration_frames', 10)
+    if num_frames is None:
+        num_frames = 10
+
+    calibration_input_list = generate_calibration_data_from_images(
+        model_path=args.FILE,
+        image_directory=calibration_images,
+        num_frames=num_frames,
+        input_mean=input_mean,
+        input_scale=input_scale
+    )
 
     # Build TIDL configuration for pass context and store it globally for partition function
     # Get TIDL tools path from environment variable
@@ -159,7 +269,7 @@ def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
 
     tidl_config = {
         "platform": args.target_tidl_platform,
-        "calibration_data": getattr(args, 'target_tidl_calibration_data', ''),
+        "calibration_images": calibration_images,
         "artifacts_folder": getattr(args, 'target_tidl_artifacts_folder', './tidl_artifacts'),
         "tensor_bits": getattr(args, 'target_tidl_tensor_bits', 8),
         "enable_offload": getattr(args, 'target_tidl_enable_offload', False),

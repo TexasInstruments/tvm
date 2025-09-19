@@ -39,7 +39,10 @@ Target CreateTarget(const tvm::transform::PassContext& ctx) {
   }
 
   String platform = cfg.value()->platform;
-  String calibration_data = cfg.value()->calibration_data;
+  String calibration_images = cfg.value()->calibration_images;
+  Integer calibration_frames = cfg.value()->calibration_frames;
+  Array<FloatImm> input_mean = cfg.value()->input_mean;
+  Array<FloatImm> input_scale = cfg.value()->input_scale;
   String artifacts_folder = cfg.value()->artifacts_folder;
   Integer tensor_bits = cfg.value()->tensor_bits;
   runtime::Bool enable_offload = cfg.value()->enable_offload->value;
@@ -50,7 +53,10 @@ Target CreateTarget(const tvm::transform::PassContext& ctx) {
   Target tidl_target(TargetJSON{
       {"kind", String("tidl")},
       {"platform", platform},
-      {"calibration_data", calibration_data},
+      {"calibration_images", calibration_images},
+      {"calibration_frames", calibration_frames},
+      {"input_mean", input_mean},
+      {"input_scale", input_scale},
       {"artifacts_folder", artifacts_folder},
       {"tensor_bits", tensor_bits},
       {"enable_offload", enable_offload},

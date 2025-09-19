@@ -425,7 +425,7 @@ class TVMCPackage(object):
 
         else:
             # Classic format
-            classic_lib_name_so = "mod.so"
+            classic_lib_name_so = "deploy_lib.so"
             classic_lib_name_tar = "mod.tar"
 
             # VM format
@@ -452,8 +452,8 @@ class TVMCPackage(object):
             graph, params = None, None
             self.executor_type = "vm"
             if self.type == "classic":
-                graph = temp.relpath("mod.json")
-                params = temp.relpath("mod.params")
+                graph = temp.relpath("deploy_graph.json")
+                params = temp.relpath("deploy_param.params")
                 self.executor_type = "graph"
 
         if params is not None:

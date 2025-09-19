@@ -36,7 +36,10 @@ namespace tidl {
 /*! \brief Attributes to store the compiler options for TIDL. */
 struct TIDLCompilerConfigNode : public tvm::AttrsNode<TIDLCompilerConfigNode> {
   String platform;
-  String calibration_data;
+  String calibration_images;
+  Integer calibration_frames;
+  Array<FloatImm> input_mean;
+  Array<FloatImm> input_scale;
   String artifacts_folder;
   Integer tensor_bits;
   Bool enable_offload{Bool(false)};
@@ -48,9 +51,18 @@ struct TIDLCompilerConfigNode : public tvm::AttrsNode<TIDLCompilerConfigNode> {
     TVM_ATTR_FIELD(platform)
         .describe("TI platform for TIDL compilation (am68pa, am68a, am69a, am67a, am62a)")
         .set_default("");
-    TVM_ATTR_FIELD(calibration_data)
-        .describe("path to .npz file containing calibration data for quantization")
+    TVM_ATTR_FIELD(calibration_images)
+        .describe("directory containing calibration images for quantization")
         .set_default("");
+    TVM_ATTR_FIELD(calibration_frames)
+        .describe("number of calibration frames to generate from images (default: 10)")
+        .set_default(10);
+    TVM_ATTR_FIELD(input_mean)
+        .describe("input mean values for RGB channels [R, G, B]")
+        .set_default(Array<FloatImm>());
+    TVM_ATTR_FIELD(input_scale)
+        .describe("input scale values for RGB channels [R, G, B]")
+        .set_default(Array<FloatImm>());
     TVM_ATTR_FIELD(artifacts_folder)
         .describe("output directory for TIDL compilation artifacts")
         .set_default("./tidl_artifacts");
