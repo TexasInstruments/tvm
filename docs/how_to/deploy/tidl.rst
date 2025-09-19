@@ -50,12 +50,10 @@ Prerequisites
 
 Before using the TIDL backend, ensure you have:
 
-* TI Processor SDK RTOS installation
-* TIDL tools (edgeai-tidl-tools) properly configured
-* Target hardware/EVM setup
-* Model in supported format (ONNX, TensorFlow Lite, etc.)
-
-For detailed installation instructions, refer to the `TI TVM User's Guide <https://software-dl.ti.com/codegen/docs/tvm/tvm_tidl_users_guide/building.html>`_.
+* TI Processor SDK RTOS installation.
+* edgeai-tidl-tools repo built from source.
+* Target hardware/EVM setup.
+* Model in supported format (ONNX or TFLite).
 
 Basic Usage with TVMC
 ---------------------
@@ -70,11 +68,11 @@ The simplest way to compile models for TIDL is using TVM's command-line interfac
         --target-tidl-platform am69a \
         --target-tidl-enable-offload
 
-    # With calibration data for quantization
+    # With calibration images for quantization
     tvmc compile model.onnx \
         --target tidl \
         --target-tidl-platform am69a \
-        --target-tidl-calibration-data calibration.npz \
+        --target-tidl-calibration-images ./calibration_images \
         --target-tidl-enable-offload \
         --target-tidl-tensor-bits 8
 
@@ -95,7 +93,10 @@ Acceleration Options
 Quantization Options
 ~~~~~~~~~~~~~~~~~~~
 
-* ``--target-tidl-calibration-data`` - Path to .npz calibration file for quantization
+* ``--target-tidl-calibration-images`` - Directory containing calibration images for quantization
+* ``--target-tidl-calibration-frames`` - Number of calibration frames to generate from images (default: 10)
+* ``--target-tidl-input-mean`` - Input mean values for RGB channels [R, G, B] (auto-detected if not specified)
+* ``--target-tidl-input-scale`` - Input scale values for RGB channels [R, G, B] (auto-detected if not specified)
 * ``--target-tidl-tensor-bits`` - Quantization precision: 8, 16, or 32 bits (default: 8)
 
 Output and Build Options
@@ -109,114 +110,51 @@ Advanced Options
 
 * ``--target-tidl-deny-list`` - Comma-separated list of operations to exclude from TIDL offloading
 
+Object Detection Options
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+* ``--target-tidl-od-meta-arch-type`` - Object detection meta architecture type (e.g., 3 for SSD, required for OD models)
+* ``--target-tidl-od-meta-layers-names-list`` - Path to prototxt file containing object detection layer metadata (required for OD models)
+
 Preparing Calibration Data
 ---------------------------
 
-For optimal quantization performance, provide representative calibration data as a NumPy .npz archive.
-TIDL quantization requires real-world data samples to determine optimal quantization parameters.
+TVM assumes certain calibration data, but for more accurage
+performance, provide a set of calibration images in a directory.
 
-Automatic Calibration Data Generation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Image Directory Setup
+~~~~~~~~~~~~~~~~~~~~~~
 
-The TVM TIDL integration includes a calibration data generation script that automatically handles
-preprocessing and format conversion. Located at the repository root as ``generate_calibration_data.py``:
+The TVM TIDL integration automatically generates calibration data from image directories during compilation:
 
 .. code-block:: bash
 
-    # Basic usage - generates calibration data from image directory
-    python generate_calibration_data.py \
-        --model model.onnx \
-        --images ./calibration_images \
-        --output calibration.npz \
-        --num-frames 20
+    # Create a directory with representative images
+    mkdir calibration_images
+    # Copy images to be used for calibration (jpg)
+    cp dataset/image1.jpg calibration_images/
+    cp dataset/image2.png calibration_images/
+    # ... add more images
 
-    # Advanced usage with custom preprocessing
-    python generate_calibration_data.py \
-        --model model.onnx \
-        --images ./calibration_images \
-        --output calibration.npz \
-        --num-frames 50 \
-        --input-mean 123.675 116.28 103.53 \
-        --input-scale 0.017125 0.017507 0.017429
+    # TVMC will automatically process these images during compilation
+    tvmc compile model.onnx \
+        --target tidl \
+        --target-tidl-platform am69a \
+        --target-tidl-calibration-images ./calibration_images \
+        --target-tidl-calibration-frames 20
 
-    # List models with predefined preprocessing configurations
-    python generate_calibration_data.py --list-models
-
-    # Verify existing calibration data
-    python generate_calibration_data.py --verify calibration.npz
-
-Features:
-
-* **Automatic Model Support**: Detects ONNX (.onnx) and TensorFlow Lite (.tflite) models
-* **Smart Preprocessing**: Uses model-specific preprocessing when available, falls back to ImageNet defaults
-* **Layout Handling**: Automatically converts between NCHW (ONNX) and NHWC (TensorFlow Lite) formats
-* **Batch Processing**: Handles different batch sizes and multi-input models
-* **Image Loading**: Supports JPG, PNG, BMP, TIFF formats with recursive directory search
-
-NPZ File Format
-~~~~~~~~~~~~~~~
-
-The calibration data uses a simple format where each input maps to a multi-sample array:
-
-.. code-block:: python
-
-    # NPZ file structure:
-    # Key: input tensor name
-    # Value: array with shape (num_samples, height, width, channels) or (num_samples, ...)
-    {
-        'input': array([...]),    # Shape: (num_samples, 3, 224, 224) for ONNX
-                                  # Shape: (num_samples, 224, 224, 3) for TensorFlow Lite
-        'input2': array([...]),   # Additional inputs for multi-input models
-    }
-
-Manual Calibration Data Creation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-For custom preprocessing requirements, create calibration data manually:
-
-.. code-block:: python
-
-    import numpy as np
-
-    # Create calibration data with multiple samples
-    # Keys must match your model's input tensor names
-    calibration_data = {
-        'input': np.random.randn(10, 3, 224, 224).astype(np.float32),  # 10 ONNX samples
-        # OR for TensorFlow Lite:
-        # 'input': np.random.randn(10, 224, 224, 3).astype(np.float32),  # 10 TFLite samples
-    }
-
-    # For multi-input models
-    calibration_data = {
-        'input1': np.random.randn(10, 3, 224, 224).astype(np.float32),
-        'input2': np.random.randn(10, 100).astype(np.float32),
-    }
-
-    # Save as compressed NPZ file
-    np.savez_compressed('calibration.npz', **calibration_data)
-
-Calibration Data Guidelines
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-* **Sample Count**: Use 10-100 representative samples for good quantization quality
-* **Data Distribution**: Include diverse samples covering expected input variations
-* **Preprocessing**: Ensure data preprocessing matches inference preprocessing exactly
-* **Data Types**: Use float32 for calibration data regardless of final quantization precision
-* **Real Data**: Use actual application data rather than synthetic/random data when possible
-* **Layout Consistency**: Match your model's expected input layout (NCHW vs NHWC)
-
-Complete Example
----------------
+Complete Examples
+-----------------
 
 Here's a complete example compiling a ResNet-50 model for AM69A with 8-bit quantization:
 
 .. code-block:: bash
 
     # Compile ResNet-50 with TIDL
-    tvmc compile resnet50.onnx \
+    tvmc compile path/to/resnet50.onnx \
         --target tidl \
         --target-tidl-platform am69a \
-        --target-tidl-calibration-data calibration.npz \
+        --target-tidl-calibration-images ./calibration_images \
         --target-tidl-artifacts-folder ./resnet50_artifacts \
         --target-tidl-tensor-bits 8 \
         --target-tidl-enable-offload \
@@ -224,6 +162,32 @@ Here's a complete example compiling a ResNet-50 model for AM69A with 8-bit quant
         --target-tidl-compile-for-device
 
     # Compilation artifacts will be generated in ./resnet50_artifacts/
+
+Object Detection Model Example
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For object detection models that require prototxt metadata, use the additional OD options:
+
+.. code-block:: bash
+
+    # Compile SSD MobileNet object detection model
+    tvmc compile path/to/ssd_mobilenet.onnx \
+        --target tidl \
+        --target-tidl-platform am69a \
+        --target-tidl-calibration-images ./od_calibration_images \
+        --target-tidl-artifacts-folder ./ssd_artifacts \
+        --target-tidl-tensor-bits 8 \
+        --target-tidl-enable-offload \
+        --target-tidl-enable-c7x-codegen \
+        --target-tidl-compile-for-device \
+        --target-tidl-od-meta-arch-type 3 \
+        --target-tidl-od-meta-layers-names-list path/to/model_metadata.prototxt
+
+    # The meta architecture type depends on your OD model:
+    # TODO: document possible meta-arch-type values
+
+    # The prototxt file contains layer metadata specific to the OD model
+    # Refer to TI documentation for the exact format and requirements
 
 Programming Interface
 --------------------
@@ -253,6 +217,9 @@ edgeai-tidl-tools for an example), use the Python API directly:
         'artifacts_folder': './artifacts',
         'tensor_bits': 8,
         'deny_list': '',
+        # For object detection models, add:
+        # 'od_meta_arch_type': 3,  # SSD architecture
+        # 'od_meta_layers_names_list': './model_metadata.prototxt',
     }
 
     # Compile with TIDL
@@ -270,41 +237,3 @@ edgeai-tidl-tools for an example), use the Python API directly:
     if success:
         print("TIDL compilation completed successfully!")
 
-Performance Considerations
--------------------------
-
-* **Quantization**: 8-bit typically provides the best performance vs accuracy trade-off
-* **Layer Support**: Check TIDL documentation for supported operations list
-* **Memory Layout**: TIDL prefers NCHW layout for optimal performance
-* **Batch Size**: Single batch inference is typically optimal for edge deployment
-* **Calibration Quality**: Use diverse, representative calibration data for best quantization results
-
-Troubleshooting
---------------
-
-Common Issues
-~~~~~~~~~~~~~
-
-**"Platform not supported" error**
-    Ensure ``--target-tidl-platform`` matches your target hardware exactly
-
-**"Calibration file not found" error**
-    Verify the path to your .npz file and ensure it exists and is readable
-
-**"No layers offloaded to TIDL" warning**
-    Your model may not contain TIDL-supported operations. Check the model architecture
-    against TIDL's supported operator list in the TI documentation.
-
-**Compilation fails with "missing tools" error**
-    Verify your TI Processor SDK installation and environment setup are correct
-
-Debug Strategies
-~~~~~~~~~~~~~~~
-
-* Use ``--target-tidl-deny-list`` to exclude specific problematic operations and narrow down issues
-* Check the generated artifacts in the output folder for detailed compilation logs
-* Verify calibration data shapes match your model's expected input dimensions
-* Start with ``--target-tidl-tensor-bits 32`` to isolate quantization-related issues
-
-For comprehensive documentation and troubleshooting, refer to the official
-`TI TVM User's Guide <https://software-dl.ti.com/codegen/docs/tvm/tvm_tidl_users_guide/index.html>`_.
