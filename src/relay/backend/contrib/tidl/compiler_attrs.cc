@@ -49,6 +49,8 @@ Target CreateTarget(const tvm::transform::PassContext& ctx) {
   runtime::Bool enable_c7x_codegen = cfg.value()->enable_c7x_codegen->value;
   runtime::Bool compile_for_device = cfg.value()->compile_for_device->value;
   String deny_list = cfg.value()->deny_list;
+  Integer od_meta_arch_type = cfg.value()->od_meta_arch_type;
+  String od_meta_layers_names_list = cfg.value()->od_meta_layers_names_list;
 
   Target tidl_target(TargetJSON{
       {"kind", String("tidl")},
@@ -63,6 +65,8 @@ Target CreateTarget(const tvm::transform::PassContext& ctx) {
       {"enable_c7x_codegen", enable_c7x_codegen},
       {"compile_for_device", compile_for_device},
       {"deny_list", deny_list},
+      {"od_meta_arch_type", od_meta_arch_type},
+      {"od_meta_layers_names_list", od_meta_layers_names_list},
   });
 
   return tidl_target;

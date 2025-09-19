@@ -68,13 +68,20 @@ def partition_for_c7x(mod, params=None, mod_name="default", **opts):
     # create TI offload compiler with configuration
     # Separate constructor parameters from delegate_options
     constructor_params = {"platform", "tidl_tools_path", "enable_tidl_offload", "reuse_tidl_artifacts"}
-    delegate_params = {"artifacts_folder", "tensor_bits", "enable_c7x_codegen", "compile_for_device", "deny_list"}
+    delegate_params = {"artifacts_folder", "tensor_bits", "enable_c7x_codegen", "compile_for_device", "deny_list", "od_meta_arch_type", "od_meta_layers_names_list"}
 
     # Build constructor arguments
     constructor_args = {k: v for k, v in config.items() if k in constructor_params}
 
     # Build delegate_options from remaining parameters
     delegate_options = {k: v for k, v in config.items() if k in delegate_params}
+
+    # Convert object detection target attributes to the format expected by TIOffloadCompiler
+    if "od_meta_arch_type" in delegate_options and delegate_options["od_meta_arch_type"] != -1:
+        delegate_options["object_detection:meta_arch_type"] = delegate_options.pop("od_meta_arch_type")
+    if "od_meta_layers_names_list" in delegate_options and delegate_options["od_meta_layers_names_list"]:
+        delegate_options["object_detection:meta_layers_names_list"] = delegate_options.pop("od_meta_layers_names_list")
+
     if delegate_options:
         constructor_args["delegate_options"] = delegate_options
 

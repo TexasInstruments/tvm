@@ -278,6 +278,8 @@ def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
         "deny_list": getattr(args, 'target_tidl_deny_list', ''),
         "tidl_tools_path": tidl_tools_path,
         "graph_input_list": calibration_input_list,
+        "od_meta_arch_type": getattr(args, 'target_tidl_od_meta_arch_type', -1),
+        "od_meta_layers_names_list": getattr(args, 'target_tidl_od_meta_layers_names_list', ''),
     }
 
     # Store tidl_config globally so partition_for_c7x can access it

@@ -2242,7 +2242,9 @@ class TIOffloadCompiler:
         print(f"Total Nodes - {total_nodes_original}")
 
         # TIDL-specific handling of object detection specifics. Skip if user doesn't want TIDL offload
-        if (self.max_num_tidl_subgraphs > 0 and self.od_options):
+        if (self.max_num_tidl_subgraphs > 0 and self.od_options and
+            'object_detection:meta_layers_names_list' in self.od_options and
+            'object_detection:meta_arch_type' in self.od_options):
             tidl_od_meta_layers_names_list = self.od_options['object_detection:meta_layers_names_list']
             tidl_od_meta_arch_type = self.od_options['object_detection:meta_arch_type']
             tidl_od_num_graph_outputs = len(mod_orig['main'].body.fields) \

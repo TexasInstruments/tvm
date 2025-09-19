@@ -46,6 +46,8 @@ struct TIDLCompilerConfigNode : public tvm::AttrsNode<TIDLCompilerConfigNode> {
   Bool enable_c7x_codegen{Bool(false)};
   Bool compile_for_device{Bool(false)};
   String deny_list;
+  Integer od_meta_arch_type;
+  String od_meta_layers_names_list;
 
   TVM_DECLARE_ATTRS(TIDLCompilerConfigNode, "ext.attrs.TIDLCompilerConfigNode") {
     TVM_ATTR_FIELD(platform)
@@ -80,6 +82,12 @@ struct TIDLCompilerConfigNode : public tvm::AttrsNode<TIDLCompilerConfigNode> {
         .set_default(Bool(false));
     TVM_ATTR_FIELD(deny_list)
         .describe("comma-separated list of operations to exclude from TIDL offloading")
+        .set_default("");
+    TVM_ATTR_FIELD(od_meta_arch_type)
+        .describe("object detection meta architecture type (e.g., 3 for SSD)")
+        .set_default(-1);
+    TVM_ATTR_FIELD(od_meta_layers_names_list)
+        .describe("path to prototxt file containing object detection metadata")
         .set_default("");
   }
 };
