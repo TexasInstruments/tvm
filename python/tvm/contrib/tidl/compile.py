@@ -24,7 +24,7 @@ import tvm
 from tvm import relay
 from tvm.runtime import NDArray
 from tvm.contrib.tidl.c7x import supported_platform
-from tvm.relay.backend.contrib.tidl.tidl import find_dynamic_shape
+from tvm.relay.backend.contrib.tidl.tidl import find_dynamic_shape,unpack_composites
 
 def convert_model_to_relay_IR(model_path: str, 
                               input_shape_dict: List[Dict[str, Any]]) -> Tuple[Optional[tvm.IRModule], Optional[Dict[str, NDArray]], Optional[str]]:
@@ -186,6 +186,7 @@ Setting 'c7x_codegen' = 0 for PC artifacts generation\n")
       if find_dynamic_shape(mod):
         print("\n\nDynamic shape/network not supported by TVM+TIDL yet!!!\n\n")
         return False
+    mod = unpack_composites(mod,"tidl")
     fmod = relay.build(mod, target=target, params=params)
     params = fmod.get_params()
 

@@ -1815,7 +1815,7 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.batch_norm")
         self._register_constrained_op("nn.conv2d")
         #self._register_supported_op("nn.conv2d")    # use this for debugging
-        self._register_constrained_op("nn.dense")
+        # self._register_constrained_op("nn.dense")
         self._register_constrained_op("nn.conv2d_transpose")
         self._register_constrained_op("nn.global_avg_pool2d")
         self._register_constrained_op("nn.adaptive_avg_pool1d") # 1d global average pool

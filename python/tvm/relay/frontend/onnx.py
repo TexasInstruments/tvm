@@ -1986,9 +1986,20 @@ class MatMul(OnnxOpConverter):
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
         assert len(inputs) == 2, f"MatMul op take 2 inputs, {len(inputs)} given"
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         # Need to check input shape as batch matmul must be supported.
-        return matmul_out_dtype(inputs, out_dtype=infer_type(inputs[0]).checked_type.dtype)
-
+        #Begin TI
+        out = matmul_out_dtype(inputs, out_dtype=infer_type(inputs[0]).checked_type.dtype)
+        if status:
+            func = relay.Function(new_inputs, out).with_attr("Composite", "tidl.matmul")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 class MatMulInteger16(OnnxOpConverter):
     """Operator converter for MatMulInteger16 from Microsoft onnxruntime contrib opset."""
