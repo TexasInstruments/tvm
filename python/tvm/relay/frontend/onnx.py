@@ -862,6 +862,8 @@ class Conv(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        inputsOrig = copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
         # Use shape of input to determine convolution type.
         data = inputs[0]
         kernel = inputs[1]
@@ -910,10 +912,19 @@ class Conv(OnnxOpConverter):
             custom_check=dimension_constraint(),
         )([data, kernel], attr, params)
 
+        custom_attrs = {k: out.attrs[k] for k in out.attrs.keys()}
+
         use_bias = len(inputs) == 3
         if use_bias:
             out = _op.nn.bias_add(out, inputs[2])
-        return out
+
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **custom_attrs))
+            func = func.with_attr("Composite", "tidl.conv2d")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
 
 
 def is_ort_version_greater_than(ver):
