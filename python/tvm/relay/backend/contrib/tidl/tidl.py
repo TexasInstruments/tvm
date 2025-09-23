@@ -80,8 +80,9 @@ class SkipLocalFunctionsVisitor(ExprMutator):
         "Composite" in call.op.attrs and self.tidl_target in call.op.attrs["Composite"]:
             self.nodes[call] = len(self.nodes)
             for arg in call.args:
-                self.nodes[arg] = len(self.nodes)
-                self.visit(arg)
+                if arg not in self.nodes:
+                    self.nodes[arg] = len(self.nodes)
+                    self.visit(arg)
             return
         # Otherwise, normal call: record and recurse
         self.nodes[call] = len(self.nodes)

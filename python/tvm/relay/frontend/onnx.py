@@ -167,14 +167,16 @@ def dimension_picker(prefix, suffix=""):
 # and returns func_inputs, and body inputs lists.
 # func_inputs are passed as relay function parameters
 # body_inputs are used to form the body of the relay function
-# There are 3 types of inputs handled here:
-# ‘Variable’ input: Call arg and function parameter/body cannot have the same input name
+# There are 4 types of inputs handled here:
+# 'Variable' input: Call arg and function parameter/body cannot have the same input name
 # Keep a new variable in function params and function body, pass the corresponding input variable as call arg
-# ‘Constant’ input: Backend (TIDL) needs to know all the inputs information from call args / function params
+# 'Constant' input: Backend (TIDL) needs to know all the inputs information from call args / function params
 # Fetching constant information from function body in backend is not scalable and clean
 # Keep a new variable in function params, retain constant in function body and pass the constant as call arg
-# ‘Call’ input: Wrapping function around a call will wrap all the connected previous operators
+# 'Call' input: Wrapping function around a call will wrap all the connected previous operators
 # Keep a new variable in function params and function body, pass the corresponding call input as call arg
+# 'TupleGetItem' input: Handle tuple type input
+# Keep a new variable in function params and function body, pass the corresponding tuple element as call arg
 
 def get_func_inputs(inputs):
     func_inputs = [] # func_inputs should be variables
@@ -202,6 +204,13 @@ def get_func_inputs(inputs):
             new_var = relay.var(f"call_input_{i}", type_annotation=call_type)
             func_inputs.append(new_var)
             body_inputs.append(new_var)
+
+        elif isinstance(inp, relay.TupleGetItem):
+            tuple_type = infer_type(inp).checked_type
+            new_var = relay.var(f"tuple_input_{i}", type_annotation=tuple_type)
+            func_inputs.append(new_var)
+            body_inputs.append(new_var)
+
         else:
             status = False
             warnings.warn(f"TIDL composite function will not be formed, unhandled input type: {type(inp)}")
