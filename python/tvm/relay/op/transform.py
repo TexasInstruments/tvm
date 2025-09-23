@@ -225,10 +225,10 @@ def squeeze(data, axis=None):
         else:
             axis = [axis.data.numpy().item()]
     if isinstance(axis, Expr):
-        #Begin TI
+        # Begin TI
         raise NotImplementedError(f"Variable axis is not supported")
         # return _dyn_make.squeeze(data, axis)
-        #END TI
+        # End TI
     if isinstance(axis, int):
         axis = [axis]
     if isinstance(axis, (tuple, list)):

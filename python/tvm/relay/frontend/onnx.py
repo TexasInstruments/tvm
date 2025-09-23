@@ -824,7 +824,7 @@ class BatchNorm(OnnxOpConverter):
         # Begin TI: 
         if "epsilon" not in attr:
             attr["epsilon"] = 1e-5
-        #End TI
+        # End TI
         out = AttrCvt(
             op_name="batch_norm",
             ignores=["spatial", "is_test", "consumed_inputs", "momentum", "training_mode"],
@@ -2786,6 +2786,10 @@ class Slice(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         if isinstance(attr["starts"], int):
             attr["starts"] = (attr["starts"],)
             attr["ends"] = (attr["ends"],)
@@ -2802,11 +2806,23 @@ class Slice(OnnxOpConverter):
             pass
         begin = list(attr["starts"])
         end = list(attr["ends"])
-
-        return _op.strided_slice(inputs[0], begin=begin, end=end)
+        # Begin TI
+        out = _op.strided_slice(inputs[0], begin=begin, end=end)
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.slice")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
     @classmethod
     def _impl_v10(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         starts = inputs[1]
         ends = inputs[2]
         axes = inputs[3]
@@ -2841,10 +2857,18 @@ class Slice(OnnxOpConverter):
             else:
                 strides_np = steps.data.numpy().astype("int64")
             if all([isinstance(ishape[i], int) for i in axes_np]):
-                return _op.strided_slice(
+                # Begin TI
+                out = _op.strided_slice(
                     inputs[0], list(begin_np), list(end_np), list(strides_np), axes=list(axes_np)
                 )
-
+                if status:
+                    func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+                    func = func.with_attr("Composite", "tidl.slice")
+                    call = relay.Call(func, inputsOrig)
+                    return call
+                else:
+                    return out
+                # End TI
         # Update the starts and ends according to axes if required.
         if axes is not None:
             data_shape = shape_of(inputs[0], dtype=infer_type(ends).checked_type.dtype)
@@ -2865,10 +2889,18 @@ class Slice(OnnxOpConverter):
 
         if steps is None:
             steps = _op.const([1] * data_rank, dtype=infer_type(starts).checked_type.dtype)
-
-        return _op.strided_slice(
+        # Begin TI
+        out = _op.strided_slice(
             inputs[0], fold_constant(starts), fold_constant(ends), fold_constant(steps)
         )
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.slice")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 def normalize_gather_indices(data, indices, axis):

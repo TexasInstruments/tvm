@@ -1877,7 +1877,6 @@ class TIDLAnnotation:
         self._register_constrained_op("sinh")
         self._register_constrained_op("sqrt")
         self._register_constrained_op("tan")
-        self._register_constrained_op("scatter_elements")
 
         tidl_annotations_registered = True
 
