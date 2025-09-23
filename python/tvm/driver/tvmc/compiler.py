@@ -24,6 +24,7 @@ import re
 import itertools
 import glob
 from copy import deepcopy
+import argparse
 from typing import Any, Optional, Dict, List, Union, Callable, Sequence
 from pathlib import Path
 from collections import defaultdict
@@ -214,8 +215,8 @@ def generate_calibration_data_from_images(
     return calib_data_list
 
 
-def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
-    """Compile model using TIDL backend through TVM composite target system.
+def _configure_tidl_target(args: argparse.Namespace, tvmc_model: TVMCModel) -> None:
+    """Configure TIDL target settings through TVM composite target system.
 
     Parameters
     ----------
@@ -226,8 +227,8 @@ def _compile_tidl_model(args, tvmc_model: TVMCModel) -> int:
 
     Returns
     -------
-    int
-        Zero if successful
+    None
+        Returns None to signal continuation with normal compilation
     """
     # Validate required TIDL arguments
     if not hasattr(args, 'target_tidl_platform') or args.target_tidl_platform is None:
@@ -468,7 +469,7 @@ def drive_compile(args):
     # Begin TI
     # Check if target is TIDL and handle TIDL-specific configuration
     if "tidl" in args.target.lower():
-        result = _compile_tidl_model(args, tvmc_model)
+        result = _configure_tidl_target(args, tvmc_model)
         if result is not None:
             return result
         # If result is None, continue with normal compilation using the updated args
