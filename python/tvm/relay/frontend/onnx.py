@@ -2828,15 +2828,14 @@ class Slice(OnnxOpConverter):
 
     @classmethod
     def _impl_v10(cls, inputs, attr, params):
-        # Begin TI
-        inputsOrig=copy.copy(inputs)
-        status, inputs, new_inputs = get_func_inputs(inputs)
-        # End TI
         starts = inputs[1]
         ends = inputs[2]
         axes = inputs[3]
         steps = inputs[4]
-
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         ishape = infer_shape(inputs[0])
         data_rank = len(ishape)
 

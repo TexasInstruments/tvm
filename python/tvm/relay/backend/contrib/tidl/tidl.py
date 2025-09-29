@@ -74,19 +74,10 @@ class SkipLocalFunctionsVisitor(ExprMutator):
         self.tidl_target = target
         self.nodes = {}
 
-    def visit_call(self, call):
-        # Call to a local function
-        if isinstance(call.op, relay.Function) and hasattr(call.op, "attrs") and \
-        "Composite" in call.op.attrs and self.tidl_target in call.op.attrs["Composite"]:
-            self.nodes[call] = len(self.nodes)
-            for arg in call.args:
-                if arg not in self.nodes:
-                    self.nodes[arg] = len(self.nodes)
-                    self.visit(arg)
+    def visit_function(self, fn):
+        if(hasattr(fn, "attrs") and "Composite" in fn.attrs and self.tidl_target in fn.attrs["Composite"]):
             return
-        # Otherwise, normal call: record and recurse
-        self.nodes[call] = len(self.nodes)
-        super().visit_call(call)
+        return super().visit_function(fn)
 
     def visit(self, expr):
         # Catch-all record
