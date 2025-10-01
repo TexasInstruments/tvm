@@ -68,7 +68,13 @@ class AnnotateTargetRewriter : public ExprRewriter {
     std::string ref_target = "";
     Array<Expr> compiler_begins;
     Array<Expr> compiler_ends;
+    // Begin TI
+    int args_present = 0; /* Begin annotation is added only if at least one arg is present */
+    // End TI
     for (auto arg : args) {
+      // Begin TI
+      args_present = 1;
+      // End TI
       std::string arg_target = default_target;
       const CallNode* call = arg.as<CallNode>();
 
@@ -98,13 +104,30 @@ class AnnotateTargetRewriter : public ExprRewriter {
         }
       } else {
         // Input vars.
+        // Begin TI
+        // CODEGEN-14572
+        /** Input vars are assigned default_target ("default"). 
+         * 2 possible cases arise in this function :
+         * 1. "target" != "" in function arguments - 
+         *    Current expression's target passed as function argument is assigned to all input vars (refer op_target below)
+         * 2. "target" == "" in function arguments (typically occurs in case of Tuple)
+         *    In this case, op_target (current expression's target) needs to be determined. It is determined as follows:
+         *    Each args target is set as "ref_target", in case of mismatch between args targets, ref_target = "default"
+         *    So effectively, input vars (this else condition) are always assigned "default" target which is in turn used to determine op_target
+         *    ==> Tuple with input vars will always get "default" target (irrespective of other inputs) --> incorrect
+         * Solution to case 2: 
+         *    Remove input vars from target determination process altogether by setting their target as "", exclude "" from relevant targets for 
+         *    op_target determination
+        */
+        arg_target = "";
+        // End TI
         compiler_ends.push_back(arg);
       }
 
       // Maintain reference target in case the target of the current node is unassigned.
       if (ref_target == "") {
         ref_target = arg_target;
-      } else if (ref_target != arg_target) {
+      } else if ((ref_target != arg_target) /* Begin TI */ && (arg_target != "") /* End TI */) {
         ref_target = default_target;
       }
     }
@@ -112,7 +135,13 @@ class AnnotateTargetRewriter : public ExprRewriter {
     // Determine compiler begin target.
     std::string op_target = (target == "") ? ref_target : target;
 
+    // Begin TI
+    #if 0
     if (ref_target != "") {
+    #else
+    if (args_present) {
+    #endif
+    // End TI
       for (const auto& end : compiler_ends) {
         compiler_begins.push_back(InsertAnnotation(end, op_target, make_begin_op));
       }
