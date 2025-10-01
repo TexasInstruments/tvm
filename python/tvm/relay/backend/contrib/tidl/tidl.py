@@ -1753,10 +1753,9 @@ class TIDLImport:
         return CallMarker(subgraph_id, all_nodes_tidl, layer_info).visit(subgraph)
 
 class TIDLAnnotation:
-    def __init__(self, platform, import_lib, denylist=None):
+    def __init__(self, platform, import_lib):
         self.tidl_platform = platform
         self.import_lib = import_lib
-        self.denylist = denylist
 
     def register_allowed_ops(self):
         """ TIDL operators registration """
@@ -1847,7 +1846,7 @@ class TIDLAnnotation:
             reshape_out = is_op('reshape')(squeeze_out)
             return reshape_out
         def _squeeze_reshape_checker(extract):
-            return not self._user_denied('squeeze', 'reshape')
+            return True
 
         #transpose has to be preceded and followed by reshape
         def _transpose_reshape_pattern():
@@ -1856,8 +1855,6 @@ class TIDLAnnotation:
             reshape_out2 = is_op('reshape')(transpose_out)
             return reshape_out2
         def _transpose_reshape_checker(extract):
-            if self._user_denied('reshape', 'transpose'):
-                return False
             reshape_2 = extract
             transpose = extract.args[0]
             reshape_1 = extract.args[0].args[0]
@@ -1886,14 +1883,6 @@ class TIDLAnnotation:
         return relay.transform.MergeComposite(pattern_table)(mod)
 
     # Helper functions
-    def _user_denied(self, *args):
-        """ The arguments are operator names. Return true if any of the operators
-            are in the user-specified denylist (e.g. via the --deny option to the
-            unit test program).  """
-        for op in args:
-            if self.denylist and op in self.denylist:
-                return True
-        return False
 
     # This function is to be used only for debug purpose to force support a layer
     # Every operator should be constrained with TIDL determining whether supported or not
@@ -1970,8 +1959,6 @@ class TIOffloadCompiler:
             Bits for import TIDL tensor and weights, default is 8
         debug_level : int
             0, 1, 2, 3, 4 for various debug info, default is 0
-        deny_list : string
-            Force-annotate Relay operators as unsupported, comma-separated string, default is ""
         accuracy_level: int
             0 for simple calibration, 1 for advanced bias calibration, 9 for user defined,
             default is 1
@@ -2022,7 +2009,6 @@ class TIOffloadCompiler:
             self.debug_level = None
             self.tensor_bits = 8
             self.max_num_tidl_subgraphs = (16 if enable_tidl_offload else 0)
-            self.deny_list = []
             self.c7x_codegen = 0
             self.compile_for_device = compile_for_device
             self.od_options = {}
@@ -2033,7 +2019,10 @@ class TIOffloadCompiler:
                     self.od_options[k] = v
 
             for key in delegate_options.keys():
-                setattr(self, key, delegate_options[key])
+                key_updated = key
+                if ':' in key:
+                    key_updated = key.replace(':','_')
+                setattr(self, key_updated, delegate_options[key])
 
             if enable_tidl_offload:
                 self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
@@ -2058,16 +2047,7 @@ class TIOffloadCompiler:
 
         if self.debug_level:
             os.environ["TIDL_RELAY_IMPORT_DEBUG"] = str(self.debug_level)
-
-        # Deny list needs to be passed to TIDL as part of TIDL_relayAllowNode function.
-        # Vector data cannot be passed across packedFunc, so preserve the original string as well (denyListStr) to be
-        # split inside TIDL. deny_list contains individual operator names to be used within TVM code
-        self.denyListStr = ''
-        if self.deny_list:
-            self.denyListStr = self.deny_list
-            import re
-            self.deny_list = re.split(r',\s*', self.deny_list) # Separates comma (+ space) separated operator names
-
+        
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
         self.reuse_tidl_artifacts = reuse_tidl_artifacts
 
@@ -2193,8 +2173,7 @@ class TIOffloadCompiler:
                 import_lib = None # Continue with graph annotation and partition for CI testing
 
             # Register TIDL annotation functions
-            tidl_annotation = TIDLAnnotation(self.tidl_platform, import_lib,
-                                             self.deny_list)
+            tidl_annotation = TIDLAnnotation(self.tidl_platform, import_lib)
             tidl_annotation.register_allowed_ops()
 
         with open(os.path.join(self.temp_folder, "relay_graph.orig.txt"), "w") as relay_txt:
