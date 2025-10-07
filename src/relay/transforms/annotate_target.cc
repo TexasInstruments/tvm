@@ -100,12 +100,32 @@ class AnnotateTargetRewriter : public ExprRewriter {
         if (call && call->args.size() == 0) {
           compiler_ends.push_back(arg);
         } else {
-          compiler_ends.push_back(InsertAnnotation(arg, arg_target, make_end_op));
+          // Begin TI - CODEGEN-14572
+          const TupleNode* tuple = arg.as<TupleNode>();
+          if (tuple) {
+            std::string tuple_target = "";
+            // If current CallNode target is default, the input tuple should also be assigned default target.
+            if (target == "default")
+            {
+              tuple_target = target;
+            }
+            // Recursive call to tuples' args
+            auto tuple_target_n_args = AnnotateArgs(tuple->fields, tuple_target); // Ensure tuple target is passed in case it is updated above, else pass "" default
+            auto annotated_tuple = WithFields(Downcast<Tuple>(arg), std::get<1>(tuple_target_n_args));
+            // Update tuple target returned by AnnotateArgs (based on tuples' args targets)
+            tuple_target = std::get<0>(tuple_target_n_args);
+            op_expr_to_target_[annotated_tuple] = tuple_target;
+            compiler_ends.push_back(InsertAnnotation(annotated_tuple, tuple_target, make_end_op)); // Add end annotation for tuple
+          } 
+          // End TI
+          else {
+            compiler_ends.push_back(InsertAnnotation(arg, arg_target, make_end_op));
+          }
         }
       } else {
         // Input vars.
-        // Begin TI
-        // CODEGEN-14572
+        
+        // Begin TI - CODEGEN-14572
         /** Input vars are assigned default_target ("default"). 
          * 2 possible cases arise in this function :
          * 1. "target" != "" in function arguments - 
@@ -118,8 +138,33 @@ class AnnotateTargetRewriter : public ExprRewriter {
          * Solution to case 2: 
          *    Remove input vars from target determination process altogether by setting their target as "", exclude "" from relevant targets for 
          *    op_target determination
+         * 
+         * Example annotation before update (not the "default" compiler):
+         *  %204 = annotation.compiler_begin(%203, compiler="tidl");
+            %205 = transpose(%204, axes=[0, 2, 1]);
+            %206 = annotation.compiler_end(%205, compiler="tidl");
+            %207 = annotation.compiler_begin(meta[relay.Constant][98] , compiler="default");
+            %208 = annotation.compiler_begin(%206, compiler="default");
+            %209 = (%207, %208);
+            %210 = annotation.compiler_end(%209, compiler="default");
+            %211 = annotation.compiler_begin(%210, compiler="tidl");
+            %212 = concatenate(%211, axis=1);
+            %213 = annotation.compiler_end(%212, compiler="tidl");
+         * 
+           Example annotation after update:
+         *  %204 = annotation.compiler_begin(%203, compiler="tidl");
+            %205 = transpose(%204, axes=[0, 2, 1]) ;
+            %206 = annotation.compiler_end(%205, compiler="tidl") ;
+            %207 = annotation.compiler_begin(meta[relay.Constant][98] , compiler="tidl");
+            %208 = annotation.compiler_begin(%206, compiler="tidl");
+            %209 = (%207, %208) ;
+            %210 = annotation.compiler_end(%209, compiler="tidl") ;
+            %211 = annotation.compiler_begin(%210, compiler="tidl") ;
+            %212 = concatenate(%211, axis=1);
+            %213 = annotation.compiler_end(%212, compiler="tidl");
         */
         arg_target = "";
+        
         // End TI
         compiler_ends.push_back(arg);
       }
@@ -135,9 +180,9 @@ class AnnotateTargetRewriter : public ExprRewriter {
     // Determine compiler begin target.
     std::string op_target = (target == "") ? ref_target : target;
 
-    // Begin TI
     #if 0
     if (ref_target != "") {
+    // Begin TI
     #else
     if (args_present) {
     #endif
@@ -178,9 +223,25 @@ class AnnotateTargetRewriter : public ExprRewriter {
       if (expr->IsInstance<RefWriteNode>() || expr->IsInstance<RefCreateNode>() ||
           expr->IsInstance<RefReadNode>() || expr->IsInstance<TupleGetItemNode>() ||
           (call && !call->args.empty()) || (tup && !tup->fields.empty())) {
-        std::string target = op_expr_to_target_[new_expr];
-        new_expr = InsertAnnotation(new_expr, target, make_end_op);
-        op_expr_to_target_[new_expr] = target;
+        
+        // Begin TI - Handle final tuples that have no consumer CallNode
+        if (tup && !tup->fields.empty()) {
+          // Process tuple fields using AnnotateArgs to ensure they get proper annotations
+          // This handles the case where tuple is the final expression with no consumer CallNode
+          std::string tuple_target = op_expr_to_target_[expr];
+          auto target_n_args = AnnotateArgs(tup->fields, tuple_target);
+          auto annotated_tuple = WithFields(Downcast<Tuple>(expr), std::get<1>(target_n_args));
+          op_expr_to_target_[annotated_tuple] = tuple_target;
+          new_expr = InsertAnnotation(annotated_tuple, tuple_target, make_end_op);
+          op_expr_to_target_[new_expr] = tuple_target;
+        } else {
+          // End TI
+          std::string target = op_expr_to_target_[new_expr];
+          new_expr = InsertAnnotation(new_expr, target, make_end_op);
+          op_expr_to_target_[new_expr] = target;
+          // Begin TI
+        }
+        // End TI
       }
     } else if (call && call->op == CompilerEndOp()) {
       if (default_target == call->attrs.as<CompilerAttrs>()->compiler) {
@@ -298,11 +359,46 @@ class AnnotateTargetRewriter : public ExprRewriter {
 
   Expr Rewrite_(const TupleNode* tuple_node, const Expr& post) override {
     auto tuple = Downcast<Tuple>(post);
-
+    #if 0
     auto target_n_args = AnnotateArgs(tuple->fields);
     auto new_expr = WithFields(tuple, std::get<1>(target_n_args));
     op_expr_to_target_[new_expr] = std::get<0>(target_n_args);
     return std::move(new_expr);
+    
+    #else // Begin TI - CODEGEN-14572
+    /** Tuple node target determination process:
+     * 1. Look at inputs. If all have same target, assign it, in case of target mismatch tuple gets "default" target
+     *    Constants are excluded from this determination process.
+     * 2. Just inputs are not sufficient. e.g. case when output is default target, having tuple as TIDL target does not make sense.
+     *    It also impacts constant inputs to tuples. Consider following problematic case
+     *    (Tuple output - Default, Tuple - TIDL, Tuple input call - TIDL, Constant tuple input - TIDL) 
+     *    Due to FlattenTupleOutputs pass in partitioner, tuple's compiler end annotation gets passed to each of its inputs
+     *    In this case, the Constant input is encased by TIDL compiler_begin/compiler_end annotations resulting it to be pulled in a function
+     *    In such a case, it is logical to force both tuple and the constant inputs to default target
+     * 
+     * Solution : Instead of processing a tuple node and inputs here, process tuple node and its inputs as part of
+     * tuple node's consumer CallNode, where the consumer's target would be known and can be used to force "default" target
+     * to tuple and its constant input if required. Here, just save tuple's target based on field consensus and return tuple to 
+     * keep the graph parsing undisturbed. The actual annotation will be applied when this tuple is used as argument in CallNode.
+     * This target is a safety net - it is recalculated by InsertCompilerEndAndPropogateTarget if tuple is final expression
+     */
+    std::string ref_target = "";
+    for (auto field : tuple->fields) {
+      if (op_expr_to_target_.find(field) != op_expr_to_target_.end()) {
+        std::string field_target = op_expr_to_target_[field];
+        if (ref_target == "") {
+          ref_target = field_target;
+        } else if (ref_target != field_target && field_target != "") {
+          ref_target = default_target;
+        }
+      }
+    }
+    std::string tuple_target = (ref_target == "") ? default_target : ref_target;
+    op_expr_to_target_[tuple] = tuple_target;
+    
+    return tuple;
+    #endif
+    // End TI
   }
 
   Expr Rewrite_(const TupleGetItemNode* op, const Expr& post) override {
