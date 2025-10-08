@@ -2933,11 +2933,24 @@ class Gather(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         axis = attr.get("axis", 0)
         data = inputs[0]
         indices = inputs[1]
         indices = normalize_gather_indices(data, indices, axis)
-        return _op.take(data, indices, axis)
+        # Begin TI
+        out = _op.take(data, indices, axis)
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.gather")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class GatherElements(OnnxOpConverter):

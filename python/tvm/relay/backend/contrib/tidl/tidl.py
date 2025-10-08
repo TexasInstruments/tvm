@@ -414,9 +414,15 @@ def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
         min_values_i = []
         max_values_i = []
         for input_tensors in input_tensors_list:
-            # only use 1 batch per input for calibration
-            min_values_i.append(np.amin(input_tensors[i][0, :]))
-            max_values_i.append(np.amax(input_tensors[i][0, :]))
+            # Handle tensors of different dimensions
+            if len(input_tensors[i].shape) == 1:
+                # For 1D tensors, use the entire tensor
+                min_values_i.append(np.amin(input_tensors[i]))
+                max_values_i.append(np.amax(input_tensors[i]))
+            else:
+                # For multi-dimensional tensors, use only the first batch
+                min_values_i.append(np.amin(input_tensors[i][0, :]))
+                max_values_i.append(np.amax(input_tensors[i][0, :]))
 
         min_values.append(min(min_values_i))
         max_values.append(max(max_values_i))
@@ -2584,4 +2590,3 @@ def remove_tidl_params(params):
     tidl_params = [ key for key in params if key.find("tidl_") == 0 ]
     for tidl_param in tidl_params:
         del params[tidl_param]
-
