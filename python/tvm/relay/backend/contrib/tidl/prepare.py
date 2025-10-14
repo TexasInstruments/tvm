@@ -196,7 +196,12 @@ class ConvertArgMaxToKeepDims(ExprMutator):
            call.attrs.axis != None and len(call.attrs.axis) == 1:
             argmax = tvm.relay.argmax(super().visit(call.args[0]), axis=call.attrs.axis,
                                       keepdims=True, exclude=False)
-            return tvm.relay.squeeze(argmax, axis=call.attrs.axis)
+            # Reconstruct the argmax call with span
+            argmax = relay.expr.Call(argmax.op, argmax.args, argmax.attrs, argmax.type_args, span=call.span)
+            squeeze = tvm.relay.squeeze(argmax, axis=call.attrs.axis)
+            # Reconstruct the squeeze call with span
+            squeeze = relay.expr.Call(squeeze.op, squeeze.args, squeeze.attrs, squeeze.type_args, span=call.span)
+            return squeeze
         return super().visit_call(call)
 
 class RemoveIdentityClip(ExprMutator):

@@ -3454,11 +3454,24 @@ class ArgMax(OnnxOpConverter):
 
     @classmethod
     def _impl_v13(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         axis = attr.get("axis", 0)
         keepdims = attr.get("keepdims", True)
         select_last_index = attr.get("select_last_index", False)
         attr = {"axis": axis, "keepdims": keepdims, "select_last_index": select_last_index}
-        return _op.cast(AttrCvt("argmax")(inputs, attr), "int64")
+        out= _op.cast(AttrCvt("argmax")(inputs, attr), "int64")
+         # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.argmax")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class ArgMin(OnnxOpConverter):

@@ -1265,6 +1265,8 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_et
                 input_quant_vec[i].astype('int8').tofile(fid)
             elif (input_etypes[i] == 6):
                 input_quant_vec[i].astype('float32').tofile(fid)
+            elif(input_etypes[i]==5):
+                 input_quant_vec[i].astype('int32').tofile(fid)
             elif (input_etypes[i] == 8):
                 input_quant_vec[i].astype('int64').tofile(fid)
             else:
