@@ -32,6 +32,24 @@ namespace tidl {
 TVM_REGISTER_NODE_TYPE(TIDLCompilerConfigNode);
 TVM_REGISTER_PASS_CONFIG_OPTION("relay.ext.tidl.options", TIDLCompilerConfig);
 
+// Begin TI
+// Register the TIDL target kind with all supported attributes
+TVM_REGISTER_TARGET_KIND("tidl", kDLCPU)
+    .add_attr_option<String>("platform")
+    .add_attr_option<String>("calibration_images")
+    .add_attr_option<Integer>("calibration_frames")
+    .add_attr_option<Array<FloatImm>>("input_mean")
+    .add_attr_option<Array<FloatImm>>("input_scale")
+    .add_attr_option<String>("artifacts_folder")
+    .add_attr_option<Integer>("tensor_bits")
+    .add_attr_option<Bool>("enable_offload")
+    .add_attr_option<Bool>("enable_c7x_codegen")
+    .add_attr_option<Bool>("compile_for_device")
+    .add_attr_option<String>("deny_list")
+    .add_attr_option<Integer>("od_meta_arch_type")
+    .add_attr_option<String>("od_meta_layers_names_list");
+// End TI
+
 Target CreateTarget(const tvm::transform::PassContext& ctx) {
   auto cfg = ctx->GetConfig<TIDLCompilerConfig>("relay.ext.tidl.options");
   if (!cfg.defined()) {
