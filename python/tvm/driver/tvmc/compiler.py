@@ -83,11 +83,27 @@ def _configure_tidl_target(args, tvmc_model: TVMCModel) -> None:
         raise TVMCException("--target-tidl-input-scale is required when using tidl target. "
                            "Provide 3 values for RGB channels, e.g., --target-tidl-input-scale 0.017125 0.017507 0.017429")
 
-    # Convert from list arguments if provided
-    if input_mean and isinstance(input_mean, list) and len(input_mean) == 3:
-        input_mean = [float(x) for x in input_mean]
-    if input_scale and isinstance(input_scale, list) and len(input_scale) == 3:
-        input_scale = [float(x) for x in input_scale]
+    # Convert from list or string arguments
+    # Argparse with type=str gives us a string, need to parse it into a TVM Array
+    if input_mean:
+        if isinstance(input_mean, str):
+            # Parse comma-separated string to list of floats, then convert to TVM Array
+            mean_list = [float(x.strip()) for x in input_mean.split(',')]
+            # Convert to TVM Array of FloatImm
+            input_mean = tvm.runtime.convert([tvm.tir.FloatImm("float32", x) for x in mean_list])
+        elif isinstance(input_mean, list) and len(input_mean) == 3:
+            # Convert list to TVM Array of FloatImm
+            input_mean = tvm.runtime.convert([tvm.tir.FloatImm("float32", float(x)) for x in input_mean])
+
+    if input_scale:
+        if isinstance(input_scale, str):
+            # Parse comma-separated string to list of floats, then convert to TVM Array
+            scale_list = [float(x.strip()) for x in input_scale.split(',')]
+            # Convert to TVM Array of FloatImm
+            input_scale = tvm.runtime.convert([tvm.tir.FloatImm("float32", x) for x in scale_list])
+        elif isinstance(input_scale, list) and len(input_scale) == 3:
+            # Convert list to TVM Array of FloatImm
+            input_scale = tvm.runtime.convert([tvm.tir.FloatImm("float32", float(x)) for x in input_scale])
 
     # Build TIDL configuration for pass context and store it globally for partition function
     # Get TIDL tools path from environment variable

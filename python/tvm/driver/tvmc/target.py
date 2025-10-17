@@ -144,6 +144,13 @@ def _reconstruct_codegen_args(args, codegen_name):
                     )
                     option_value = getattr(args, var_name)
                     if option_value is not None:
+                        # Special handling for Array types - convert comma-separated string to TVM Array
+                        if tvm_type == "Array" and isinstance(option_value, str):
+                            # Check if this is an array of floats (for input_mean, input_scale)
+                            if "FloatImm" in field.type_info or target_option in ["input_mean", "input_scale"]:
+                                # Parse comma-separated string and convert to TVM Array of FloatImm
+                                float_list = [float(x.strip()) for x in option_value.split(',')]
+                                option_value = tvm.runtime.convert([tvm.tir.FloatImm("float32", x) for x in float_list])
                         codegen_options[target_option] = option_value
     return codegen_options
 
