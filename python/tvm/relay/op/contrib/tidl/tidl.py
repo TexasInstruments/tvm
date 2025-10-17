@@ -59,9 +59,6 @@ def partition_for_c7x(mod, params=None, mod_name="default", **opts):
     # Extract graph_input_list from config
     graph_input_list = config.pop("graph_input_list", [])
 
-    # Remove calibration_data as it's not a valid TIOffloadCompiler parameter
-    config.pop("calibration_data", None)
-
     if not graph_input_list:
         logger.warning("No calibration data provided. TIDL quantization may be suboptimal.")
 

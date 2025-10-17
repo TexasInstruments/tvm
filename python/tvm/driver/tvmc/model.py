@@ -452,8 +452,14 @@ class TVMCPackage(object):
             graph, params = None, None
             self.executor_type = "vm"
             if self.type == "classic":
+                # Begin TI
+                #
+                # The default name is mod.json/mod.params, this was
+                # changed to deploy_*.*
                 graph = temp.relpath("deploy_graph.json")
                 params = temp.relpath("deploy_param.params")
+                # End TI
+
                 self.executor_type = "graph"
 
         if params is not None:

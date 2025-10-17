@@ -2291,34 +2291,10 @@ class TIOffloadCompiler:
             graph_input_list = [ graph_input_list ]
         # Ensure calibration image parameter names are same names as parameters in model
         mod_params_names = [ var.name_hint for var in mod_orig['main'].params ]
-
-        # Validate calibration data input names match model parameter names
-        mapped_graph_input_list = []
         for name_val_dict in graph_input_list:
-            calib_names = list(name_val_dict.keys())
-
-            # Check if calibration names match model parameter names
-            if all(name in mod_params_names for name in calib_names):
-                mapped_graph_input_list.append(name_val_dict)
-                continue
-
-            # For single-input models, auto-map any calibration input to the model input
-            if len(mod_params_names) == 1:
-                model_input_name = mod_params_names[0]
-                mapped_dict = {}
-                for calib_name, tensor_data in name_val_dict.items():
-                    mapped_dict[model_input_name] = tensor_data
-                    if calib_name != model_input_name:
-                        print(f"Auto-mapped calibration input '{calib_name}' to model input '{model_input_name}'")
-                mapped_graph_input_list.append(mapped_dict)
-            else:
-                # Multiple model inputs require exact name matching
-                raise Exception(f"Input name mismatch: calibration data contains {calib_names} "
-                                f"but model expects {mod_params_names}. "
-                                f"For multiple-input models, calibration data names must match model input names exactly.")
-
-        # Use the validated calibration data
-        graph_input_list = mapped_graph_input_list
+            for name in name_val_dict.keys():
+                if name not in mod_params_names:
+                    raise Exception(f"Specified input name, {name}, is not found in the model.")
 
         #============= Find data layout of the original graph =============
         data_layout = find_data_layout(mod_orig)

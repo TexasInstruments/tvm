@@ -36,8 +36,6 @@ TVM_REGISTER_PASS_CONFIG_OPTION("relay.ext.tidl.options", TIDLCompilerConfig);
 // Register the TIDL target kind with all supported attributes
 TVM_REGISTER_TARGET_KIND("tidl", kDLCPU)
     .add_attr_option<String>("platform")
-    .add_attr_option<String>("calibration_images")
-    .add_attr_option<Integer>("calibration_frames")
     .add_attr_option<Array<FloatImm>>("input_mean")
     .add_attr_option<Array<FloatImm>>("input_scale")
     .add_attr_option<String>("artifacts_folder")
@@ -47,7 +45,8 @@ TVM_REGISTER_TARGET_KIND("tidl", kDLCPU)
     .add_attr_option<Bool>("compile_for_device")
     .add_attr_option<String>("deny_list")
     .add_attr_option<Integer>("od_meta_arch_type")
-    .add_attr_option<String>("od_meta_layers_names_list");
+    .add_attr_option<String>("od_meta_layers_names_list")
+    .add_attr_option<String>("calibration_data");
 // End TI
 
 Target CreateTarget(const tvm::transform::PassContext& ctx) {
@@ -57,8 +56,6 @@ Target CreateTarget(const tvm::transform::PassContext& ctx) {
   }
 
   String platform = cfg.value()->platform;
-  String calibration_images = cfg.value()->calibration_images;
-  Integer calibration_frames = cfg.value()->calibration_frames;
   Array<FloatImm> input_mean = cfg.value()->input_mean;
   Array<FloatImm> input_scale = cfg.value()->input_scale;
   String artifacts_folder = cfg.value()->artifacts_folder;
@@ -69,12 +66,11 @@ Target CreateTarget(const tvm::transform::PassContext& ctx) {
   String deny_list = cfg.value()->deny_list;
   Integer od_meta_arch_type = cfg.value()->od_meta_arch_type;
   String od_meta_layers_names_list = cfg.value()->od_meta_layers_names_list;
+  String calibration_data = cfg.value()->calibration_data;
 
   Target tidl_target(TargetJSON{
       {"kind", String("tidl")},
       {"platform", platform},
-      {"calibration_images", calibration_images},
-      {"calibration_frames", calibration_frames},
       {"input_mean", input_mean},
       {"input_scale", input_scale},
       {"artifacts_folder", artifacts_folder},
@@ -85,6 +81,7 @@ Target CreateTarget(const tvm::transform::PassContext& ctx) {
       {"deny_list", deny_list},
       {"od_meta_arch_type", od_meta_arch_type},
       {"od_meta_layers_names_list", od_meta_layers_names_list},
+      {"calibration_data", calibration_data},
   });
 
   return tidl_target;

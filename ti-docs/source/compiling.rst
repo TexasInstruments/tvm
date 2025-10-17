@@ -41,12 +41,51 @@ After partitioning layers into :term:`subgraphs` that can be offloaded to TIDL, 
 to be imported to TIDL.  Because TIDL runs inference with quantized fixed-point values,
 the TIDL import process requires calibration data so that each layer's dynamic range can be
 estimated and the scaling factor for converting between floating point and fixed point
-can be computed.  
+can be computed.
 
 You only need to provide calibration data for the whole model. The TVM+TIDL compilation
 flow automatically obtains the corresponding tensor values at the TIDL subgraph boundaries
 and feeds those values into the TIDL import process for calibration.  The calibration
 data you provide should represent typical input for the model.
+
+Providing Calibration Data
+---------------------------
+
+Calibration data can be provided in two ways:
+
+1. **Using Python API**: Pass calibration data directly when calling compilation functions
+2. **Using TVMC with pickle file**: Create a pickle file containing calibration data and pass it via ``--target-tidl-calibration-data``
+
+When using TVMC, prepare a pickle file with the following format:
+
+.. code-block:: python
+
+  import pickle
+  import numpy as np
+
+  # Create a list of calibration samples
+  # Each sample is a dictionary mapping input names to numpy arrays
+  graph_input_list = []
+  for sample in calibration_samples:
+      graph_input_list.append({
+          'input': sample  # Replace 'input' with your model's input name
+      })
+
+  # Save to pickle file
+  with open('calibration_data.pkl', 'wb') as f:
+      pickle.dump(graph_input_list, f)
+
+Then use it with TVMC:
+
+.. code-block:: bash
+
+  tvmc compile model.onnx \
+      --target tidl \
+      --target-tidl-platform am68a \
+      --target-tidl-input-mean 123.675 116.28 103.53 \
+      --target-tidl-input-scale 0.017125 0.017507 0.017429 \
+      --target-tidl-enable-offload \
+      --target-tidl-calibration-data ./calibration_data.pkl
 
 
 .. _ti-tvm-compiling-artifacts:

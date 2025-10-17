@@ -62,17 +62,12 @@ The simplest way to compile models for TIDL is using TVM's command-line interfac
 
 .. code-block:: bash
 
-    # Basic TIDL compilation
+    # Basic TIDL compilation with required preprocessing parameters
     tvmc compile model.onnx \
         --target tidl \
-        --target-tidl-platform am69a \
-        --target-tidl-enable-offload
-
-    # With calibration images for quantization
-    tvmc compile model.onnx \
-        --target tidl \
-        --target-tidl-platform am69a \
-        --target-tidl-calibration-images ./calibration_images \
+        --target-tidl-platform am68a \
+        --target-tidl-input-mean 123.675 116.28 103.53 \
+        --target-tidl-input-scale 0.017125 0.017507 0.017429 \
         --target-tidl-enable-offload \
         --target-tidl-tensor-bits 8
 
@@ -83,6 +78,8 @@ Required Options
 ~~~~~~~~~~~~~~~~
 
 * ``--target-tidl-platform`` - Target TI platform (am68pa, am68a, am69a, am67a, am62a)
+* ``--target-tidl-input-mean`` - Input mean values for RGB channels [R, G, B] (required)
+* ``--target-tidl-input-scale`` - Input scale values for RGB channels [R, G, B] (required)
 
 Acceleration Options
 ~~~~~~~~~~~~~~~~~~~
@@ -93,11 +90,8 @@ Acceleration Options
 Quantization Options
 ~~~~~~~~~~~~~~~~~~~
 
-* ``--target-tidl-calibration-images`` - Directory containing calibration images for quantization
-* ``--target-tidl-calibration-frames`` - Number of calibration frames to generate from images (default: 10)
-* ``--target-tidl-input-mean`` - Input mean values for RGB channels [R, G, B] (auto-detected if not specified)
-* ``--target-tidl-input-scale`` - Input scale values for RGB channels [R, G, B] (auto-detected if not specified)
 * ``--target-tidl-tensor-bits`` - Quantization precision: 8, 16, or 32 bits (default: 8)
+* ``--target-tidl-calibration-data`` - Path to pickle file containing calibration data (graph_input_list)
 
 Output and Build Options
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -116,45 +110,51 @@ Object Detection Options
 * ``--target-tidl-od-meta-arch-type`` - Object detection meta architecture type (e.g., 3 for SSD, required for OD models)
 * ``--target-tidl-od-meta-layers-names-list`` - Path to prototxt file containing object detection layer metadata (required for OD models)
 
-Preparing Calibration Data
----------------------------
+Preprocessing Parameters
+------------------------
 
-TVM assumes certain calibration data, but for more accurage
-performance, provide a set of calibration images in a directory.
+TIDL requires input preprocessing parameters (mean and scale values) for proper model compilation.
+These values depend on how your model was trained.
 
-Image Directory Setup
-~~~~~~~~~~~~~~~~~~~~~~
+Common Preprocessing Values
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The TVM TIDL integration automatically generates calibration data from image directories during compilation:
+**ImageNet models** (ResNet, MobileNet, etc.):
 
-.. code-block:: bash
+* Mean: ``123.675 116.28 103.53``
+* Scale: ``0.017125 0.017507 0.017429``
 
-    # Create a directory with representative images
-    mkdir calibration_images
-    # Copy images to be used for calibration (jpg)
-    cp dataset/image1.jpg calibration_images/
-    cp dataset/image2.png calibration_images/
-    # ... add more images
+**Detection models** (SSD, YOLO, etc.):
 
-    # TVMC will automatically process these images during compilation
-    tvmc compile model.onnx \
-        --target tidl \
-        --target-tidl-platform am69a \
-        --target-tidl-calibration-images ./calibration_images \
-        --target-tidl-calibration-frames 20
+* Mean: ``0 0 0``
+* Scale: ``0.003921568627 0.003921568627 0.003921568627``
+
+**TFLite MobileNet models**:
+
+* Mean: ``127.5 127.5 127.5``
+* Scale: ``0.007874 0.007874 0.007874`` (1/127.5)
+
+.. note::
+   Calibration data can be provided via ``--target-tidl-calibration-data`` option by
+   passing a path to a pickle file containing the calibration samples. The pickle file
+   should contain a list of dictionaries where each dictionary maps input names to
+   numpy arrays (graph_input_list format).
+
+   Alternatively, calibration data can be provided through the Python API.
 
 Complete Examples
 -----------------
 
-Here's a complete example compiling a ResNet-50 model for AM69A with 8-bit quantization:
+Here's a complete example compiling a ResNet-50 model for AM68A with 8-bit quantization:
 
 .. code-block:: bash
 
     # Compile ResNet-50 with TIDL
     tvmc compile path/to/resnet50.onnx \
         --target tidl \
-        --target-tidl-platform am69a \
-        --target-tidl-calibration-images ./calibration_images \
+        --target-tidl-platform am68a \
+        --target-tidl-input-mean 123.675 116.28 103.53 \
+        --target-tidl-input-scale 0.017125 0.017507 0.017429 \
         --target-tidl-artifacts-folder ./resnet50_artifacts \
         --target-tidl-tensor-bits 8 \
         --target-tidl-enable-offload \
@@ -173,8 +173,9 @@ For object detection models that require prototxt metadata, use the additional O
     # Compile SSD MobileNet object detection model
     tvmc compile path/to/ssd_mobilenet.onnx \
         --target tidl \
-        --target-tidl-platform am69a \
-        --target-tidl-calibration-images ./od_calibration_images \
+        --target-tidl-platform am68a \
+        --target-tidl-input-mean 0 0 0 \
+        --target-tidl-input-scale 0.003921568627 0.003921568627 0.003921568627 \
         --target-tidl-artifacts-folder ./ssd_artifacts \
         --target-tidl-tensor-bits 8 \
         --target-tidl-enable-offload \
@@ -189,11 +190,47 @@ For object detection models that require prototxt metadata, use the additional O
     # The prototxt file contains layer metadata specific to the OD model
     # Refer to TI documentation for the exact format and requirements
 
+Using Calibration Data with TVMC
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If you have pre-generated calibration data, you can pass it via the ``--target-tidl-calibration-data`` option:
+
+.. code-block:: bash
+
+    # Compile model with pre-generated calibration data
+    tvmc compile path/to/model.onnx \
+        --target tidl \
+        --target-tidl-platform am68a \
+        --target-tidl-input-mean 123.675 116.28 103.53 \
+        --target-tidl-input-scale 0.017125 0.017507 0.017429 \
+        --target-tidl-artifacts-folder ./artifacts \
+        --target-tidl-tensor-bits 8 \
+        --target-tidl-enable-offload \
+        --target-tidl-calibration-data ./calibration_data.pkl
+
+The calibration data pickle file should be prepared using Python:
+
+.. code-block:: python
+
+    import pickle
+    import numpy as np
+
+    # Prepare calibration samples (e.g., 10-50 representative images)
+    graph_input_list = []
+    for sample in calibration_samples:
+        # Each sample is a dictionary mapping input names to numpy arrays
+        graph_input_list.append({
+            'input': sample  # Replace 'input' with your model's input name
+        })
+
+    # Save to pickle file
+    with open('calibration_data.pkl', 'wb') as f:
+        pickle.dump(graph_input_list, f)
+
 Programming Interface
 --------------------
 
-For programmatic access (see examples/osrt_python/tvm in the
-edgeai-tidl-tools for an example), use the Python API directly:
+For programmatic access, use the Python API directly:
 
 .. code-block:: python
 
@@ -224,7 +261,7 @@ edgeai-tidl-tools for an example), use the Python API directly:
 
     # Compile with TIDL
     success = tidl_compile.compile_model(
-        platform='am69a',
+        platform='am68a',
         compile_for_device=True,
         enable_tidl_offload=True,
         enable_c7x_codegen=True,

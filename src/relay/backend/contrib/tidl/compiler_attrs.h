@@ -36,8 +36,6 @@ namespace tidl {
 /*! \brief Attributes to store the compiler options for TIDL. */
 struct TIDLCompilerConfigNode : public tvm::AttrsNode<TIDLCompilerConfigNode> {
   String platform;
-  String calibration_images;
-  Integer calibration_frames;
   Array<FloatImm> input_mean;
   Array<FloatImm> input_scale;
   String artifacts_folder;
@@ -48,17 +46,12 @@ struct TIDLCompilerConfigNode : public tvm::AttrsNode<TIDLCompilerConfigNode> {
   String deny_list;
   Integer od_meta_arch_type;
   String od_meta_layers_names_list;
+  String calibration_data;
 
   TVM_DECLARE_ATTRS(TIDLCompilerConfigNode, "ext.attrs.TIDLCompilerConfigNode") {
     TVM_ATTR_FIELD(platform)
         .describe("TI platform for TIDL compilation (am68pa, am68a, am69a, am67a, am62a)")
         .set_default("");
-    TVM_ATTR_FIELD(calibration_images)
-        .describe("directory containing calibration images for quantization")
-        .set_default("");
-    TVM_ATTR_FIELD(calibration_frames)
-        .describe("number of calibration frames to generate from images (default: 10)")
-        .set_default(10);
     TVM_ATTR_FIELD(input_mean)
         .describe("input mean values for RGB channels [R, G, B]")
         .set_default(Array<FloatImm>());
@@ -88,6 +81,9 @@ struct TIDLCompilerConfigNode : public tvm::AttrsNode<TIDLCompilerConfigNode> {
         .set_default(-1);
     TVM_ATTR_FIELD(od_meta_layers_names_list)
         .describe("path to prototxt file containing object detection metadata")
+        .set_default("");
+    TVM_ATTR_FIELD(calibration_data)
+        .describe("path to pickle file containing calibration data (graph_input_list)")
         .set_default("");
   }
 };
