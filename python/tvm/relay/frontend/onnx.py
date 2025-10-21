@@ -1327,6 +1327,10 @@ class LayerNormalization(OnnxOpConverter):
 
     @classmethod
     def _impl_v17(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         x = inputs[0]
         gamma = inputs[1]
         beta = inputs[2]
@@ -1349,7 +1353,20 @@ class LayerNormalization(OnnxOpConverter):
         if beta is not None:
             ln = _op.add(ln, beta)
 
-        return _expr.TupleWrapper(_expr.Tuple([ln, mean, inv_stdev]), 3)
+        out = _expr.TupleWrapper(_expr.Tuple([ln, mean, inv_stdev]), 3)
+        # Begin TI
+        if status:
+            # Only return the normalized output (ln) for TIDL composite
+            # TIDL calibration code only handles single output for LayerNorm
+            # The original code returned a tuple with 3 outputs which caused SIGFPE during calibration
+            # because TIDL_rangeToScaleP2 doesn't handle multi-output for LayerNorm properly
+            func = relay.Function(new_inputs, ln, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.layer_normalization")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class EmbedLayerNormalization(OnnxOpConverter):
