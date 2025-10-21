@@ -2333,12 +2333,24 @@ class Prelu(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         assert len(inputs) == 2, f"Prelu need 2 inputs, {len(inputs)} given"
         input_shape = shape_of(inputs[0])
         alpha = _op.broadcast_to_like(inputs[1], inputs[0])
         alpha = _op.reshape(alpha, [-1])
         output = _op.nn.prelu(_op.reshape(inputs[0], [-1]), alpha, axis=0)
-        return _op.reshape(output, input_shape)
+        out = _op.reshape(output, input_shape)
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out).with_attr("Composite", "tidl.prelu")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class Reciprocal(OnnxOpConverter):
