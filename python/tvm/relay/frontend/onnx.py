@@ -1197,10 +1197,23 @@ class Elu(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig = copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         alpha = float(attr.get("alpha", 1.0))
-        return _expr.const(-alpha) * _op.nn.relu(
+        out = _expr.const(-alpha) * _op.nn.relu(
             _expr.const(1.0) - _op.exp(inputs[0])
         ) + _op.nn.relu(inputs[0])
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.elu")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class Gelu(OnnxOpConverter):
