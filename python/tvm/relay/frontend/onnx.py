@@ -3308,11 +3308,24 @@ class HardSigmoid(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig = copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         alpha = attr.get("alpha", 0.2)
         beta = attr.get("beta", 0.5)
         transformX = (inputs[0] * _expr.const(alpha)) + _expr.const(beta)
         attr = {"a_min": 0, "a_max": 1}
-        return AttrCvt("clip")([transformX], attr)
+        out = AttrCvt("clip")([transformX], attr)
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.hard_sigmoid")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class HardSwish(OnnxOpConverter):
@@ -3320,11 +3333,24 @@ class HardSwish(OnnxOpConverter):
 
     @classmethod
     def _impl_v14(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig = copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         alpha = attr.get("alpha", 1 / 6)
         beta = attr.get("beta", 0.5)
         transformX = inputs[0] * _expr.const(alpha) + _expr.const(beta)
         attr = {"a_min": 0, "a_max": 1}
-        return inputs[0] * AttrCvt("clip")([transformX], attr)
+        out = inputs[0] * AttrCvt("clip")([transformX], attr)
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.hard_swish")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class Reduce(OnnxOpConverter):
