@@ -73,6 +73,7 @@ class SkipLocalFunctionsVisitor(ExprMutator):
         super().__init__()
         self.tidl_target = target
         self.nodes = {}
+        self.span_name_counts = {}  # Track count of each span name
 
     def visit_function(self, fn):
         if(hasattr(fn, "attrs") and "Composite" in fn.attrs and self.tidl_target in fn.attrs["Composite"]):
@@ -82,9 +83,21 @@ class SkipLocalFunctionsVisitor(ExprMutator):
     def visit(self, expr):
         # Catch-all record
         if expr not in self.nodes:
-            self.nodes[expr] = len(self.nodes)
+            if isinstance(expr, relay.expr.Call) and hasattr(expr, 'span') and expr.span and hasattr(expr.span, 'source_name'):
+                base_name = expr.span.source_name.name
+                # Check if this span name already exists
+                if base_name in self.span_name_counts:
+                    # Increment counter and append to make unique
+                    self.span_name_counts[base_name] += 1
+                    unique_name = f"{base_name}_{self.span_name_counts[base_name]}"
+                else:
+                    # First occurrence, no suffix needed
+                    self.span_name_counts[base_name] = 0
+                    unique_name = base_name
+                self.nodes[expr] = unique_name
+            else:
+                self.nodes[expr] = len(self.nodes)
         super().visit(expr)
-
 
 def find_data_layout(mod):
     all_nodes = get_all_nodes(mod['main'])
@@ -273,7 +286,7 @@ def add_prefix(nodes, prefix):
     r""" e.g. 69 -> tidl_0_69,  tidl_0_i0 -> tidl_0_i0,  tidl_0_o0 -> tidl_0_o0"""
     return [ (node if node.startswith(prefix) else (prefix + '_' + node)) for node in nodes ]
 
-def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names, tidl_subgraph):
+def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names):
     r""" Find the input and output nodes of a given relay.expr.Call node.
 
     Parameters
@@ -286,8 +299,6 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names, tidl_sub
         Prefix of input tensor name, e.g. "tidl" when target is "tidl"
     output_names : list
         List of output names of current subgraph
-    tidl_subgraph: string
-        Name of the current subgraph, e.g. 'tidl_0', 'tidl_1', etc.
 
     Returns
     -------
@@ -298,11 +309,8 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names, tidl_sub
     """
 
     in_out_nodes = InOutNodes()    # instantiate structure
-
-    in_out_nodes.this_node = bytes(tidl_subgraph + '_' + str(all_nodes[this_node]), 'utf-8')
-
+    in_out_nodes.this_node = bytes(str(all_nodes[this_node]), 'utf-8')
     in_nodes = find_in_nodes(all_nodes, this_node, input_prefix) # node indices of input nodes
-    in_nodes = add_prefix(in_nodes, tidl_subgraph)
     if len(in_nodes) == 0:
         in_out_nodes.in_nodes = None
     else:
@@ -313,7 +321,6 @@ def find_in_out_nodes(all_nodes, this_node, input_prefix, output_names, tidl_sub
     in_out_nodes.num_in_nodes = len(in_nodes)
 
     out_nodes = find_out_nodes(all_nodes, this_node) # node indices of output nodes
-    out_nodes = add_prefix(out_nodes, tidl_subgraph)
     if len(out_nodes) == 0:
         # This is the last node, use the output tensor name as this node's name
         # When the last node is a call node, it can have only one output tensor.
@@ -506,7 +513,7 @@ class VarReplacer(ExprMutator):
             return self.var_map[var]
         return super().visit_var(var)
 
-def unpack_composites(mod, target):
+def unpack_composites(mod, target, global_vars_list):
     """Unpack all composite functions in the module by replacing composite call nodes with the
     ops inside the composite function."""
 
@@ -526,8 +533,8 @@ def unpack_composites(mod, target):
                     return VarReplacer(var_map).visit(call.op.body)
             return super().visit_call(call)
 
-    for func in mod.get_global_vars():
-        mod[func.name_hint] = Unpacker(target).visit(mod[func.name_hint])
+    for var in global_vars_list:
+        mod[var] = Unpacker(target).visit(mod[var])
     return mod
 
 def unpack_specific_composites(mod, op_name, span_name):
@@ -933,7 +940,7 @@ def generate_subgraph_tensors(tidl_target, mod, params, graph_input_list, temp_f
     # From partitioned module, create a "calibration model" which can be
     # executed on CPU and will give additional outputs for boundary tensors.
     mod_tvm = relay.transform.InferType()(mod)
-    mod_tvm = unpack_composites(mod_tvm, tidl_target)
+    mod_tvm = unpack_composites(mod_tvm, tidl_target, mod_tvm.get_global_vars())
     mod_tvm = relay.transform.Inline()(mod_tvm)
     mod_tvm = relay.transform.InferType()(mod_tvm)
     calib_mutator = CalibrationGraphMutator(tidl_target)
@@ -1242,12 +1249,7 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_thres
                                       compiler=compiler).visit(mod["main"])
     return new_mod
 
-def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_etypes,
-                         temp_folder,
-                         net_file, params_file, platform, tensor_bits=8,
-                         tidl_calib_flags=0, tidl_bias_calib_iters=50,
-                         output_feature_16bit_names_list='', params_16bit_names_list='',
-                         mixed_precision_factor=-1.0):
+def subgraph_calibration(subgraph_id, input_quant_vec_list, input_etypes, temp_folder, platform):
     """ Run TIDL calibation for the imported subgraph.
     """
     # Save quantized input vector to a file for calib tool to read
@@ -1275,25 +1277,7 @@ def subgraph_calibration(calib_tool, subgraph_id, input_quant_vec_list, input_et
 
     if supported_platform(platform):
         import_lib_postprocess = tvm.get_global_func("TIDL_relayPostProcessNet")
-        try:
-          # TIDL is adding model_group_id to the interface to indicate which
-          # networks can share the DDR buffers.  If the change ends up in the
-          # PSDK 8.5 release, we need to pass the additional argument.
-          # For now, try both ways for the max compatibility.  Will remove once
-          # we get a definitive answer.
-          model_group_id = 0
-          import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_flags,
-                                            tidl_bias_calib_iters,
-                                            output_feature_16bit_names_list,
-                                            params_16bit_names_list,
-                                            mixed_precision_factor,
-                                            model_group_id)
-        except:
-          import_ret = import_lib_postprocess(len(input_quant_vec_list), tidl_calib_flags,
-                                            tidl_bias_calib_iters,
-                                            output_feature_16bit_names_list,
-                                            params_16bit_names_list,
-                                            mixed_precision_factor)
+        import_ret = import_lib_postprocess(len(input_quant_vec_list))
         return (import_ret == 0), 123  ## TODO: do we need dataQ for J7?
 
 class InOutNodes(ctypes.Structure):
@@ -1328,8 +1312,6 @@ class TIDLImport:
     ----------
     import_lib : ctypes.CDLL
         TIDL import library
-    calib_tool : string
-        TIDL calibration tool file
     artifacts_folder : string
         Directory path to hold the artifacts
     tidl_target : string
@@ -1339,26 +1321,17 @@ class TIDLImport:
     tensor_bits : int
         Number of bits for tidl tensors (and consequently params on J7)
     """
-    def __init__(self, import_lib, calib_tool, tidl_tools_path, artifacts_folder,
+    def __init__(self, import_lib, tidl_tools_path, artifacts_folder,
                  tidl_target="tidl", tidl_platform="J7", data_layout="NCHW",
-                 tensor_bits=8, tidl_calib_flags=0, tidl_bias_calib_iters=50,
-                 output_feature_16bit_names_list='', params_16bit_names_list='',
-                 mixed_precision_factor=-1.0,
-                 tidl_od_meta_arch_type = -1, tidl_od_num_graph_outputs = 1,
+                 tensor_bits=8, tidl_od_meta_arch_type = -1, tidl_od_num_graph_outputs = 1,
                  tidl_od_meta_layers_names_list = "", tidl_od_postproc_inputs=[]):
         self.import_lib = import_lib
-        self.calib_tool = calib_tool
         self.tidl_tools_path = tidl_tools_path
         self.artifacts_folder = artifacts_folder
         self.tidl_target = tidl_target
         self.tidl_platform = tidl_platform
         self.data_layout = data_layout
         self.tensor_bits = tensor_bits
-        self.tidl_calib_flags = tidl_calib_flags
-        self.tidl_bias_calib_iters = tidl_bias_calib_iters
-        self.output_feature_16bit_names_list = output_feature_16bit_names_list
-        self.params_16bit_names_list = params_16bit_names_list
-        self.mixed_precision_factor = mixed_precision_factor
         self.tidl_od_meta_arch_type = tidl_od_meta_arch_type
         self.tidl_od_num_graph_outputs = tidl_od_num_graph_outputs
         self.tidl_od_meta_layers_names_list = tidl_od_meta_layers_names_list
@@ -1440,12 +1413,14 @@ class TIDLImport:
             descr[len(input_zps) + i].element_type = output_etypes[i]
         inout_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
         import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
-        import_lib_init(subgraph_id, len(input_zps), len(output_zps), inout_dscr_ptr, is_nchw,
-                        self.tensor_bits, self.tidl_tools_path, self.temp_folder)
+        if(import_lib_init(subgraph_id, len(input_zps), len(output_zps), inout_dscr_ptr, is_nchw,
+                        self.tidl_tools_path, self.temp_folder) != 0):
+            print('\n\nTIDL import initialization failed!!!\n\n')
+            return False
 
         return True
 
-    def tidl_import_node(self, all_nodes, this_node, params, output_names, tidl_subgraph,
+    def tidl_import_node(self, all_nodes, this_node, output_names,
                          inout_quant_dict, has_qnn_ops=False):
         r""" Importing a given node (operator) to TIDL
             # https://docs.tvm.ai/langref/relay_op.html#relay-core-tensor-operators
@@ -1456,10 +1431,7 @@ class TIDLImport:
             Dictionary of all relay.expr.Call nodes of the graph
         this_node : relay.expr.Call
             A relay.expr.Call node which is to be imported
-        params : dict of str to tvm.NDArray
-            The parameter dict to be used by relay
         output_names: names of the subgraph outputs
-        tidl_subgraph: name of current tidl subgraph, e.g. 'tidl_0', 'tidl_1', etc.
         inout_quant_dict: input/output expr to quantization dictionary
 
         Returns
@@ -1479,15 +1451,14 @@ class TIDLImport:
             if import_lib_node(this_node, zp.size, zp.ctypes.data_as(ctypes.c_void_p),
                                scale.size, scale.ctypes.data_as(ctypes.c_void_p)) != 0:
                 return False
-            in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names,
-                                             tidl_subgraph)
+            in_out_nodes = find_in_out_nodes(all_nodes, this_node, self.tidl_target, output_names)
             import_lib_linknode = tvm.get_global_func("TIDL_relayImportLinkNode")
             if import_lib_linknode(ctypes.cast(ctypes.byref(in_out_nodes), ctypes.c_void_p)) == 0:
                 return True
             else:
                 return False
 
-    def tidl_import_out_tuple_node(self, all_nodes, node, out_tensor_names, tidl_subgraph):
+    def tidl_import_out_tuple_node(self, all_nodes, node, out_tensor_names):
         """ Importing a Relay tuple node, e.g. (%232, %279, %283, %274).
             If this node is the last node, import it to TIDL output data layer.
             If this node is not the last node, do nothing.
@@ -1499,7 +1470,6 @@ class TIDLImport:
         node : relay.expr.Tuple
             A relay.expr.Tuple node that represents the multiple outputs of the subgraph
         out_tensor_names: names of the subgraph outputs
-        tidl_subgraph: name of current tidl subgraph, e.g. 'tidl_0', 'tidl_1', etc.
 
         Returns
         True if import succeeds or False if import fails
@@ -1509,7 +1479,6 @@ class TIDLImport:
         max_num_outputs_per_data_layer = 16
         # this is the last node of the graph - import this to out data layer
         in_nodes = find_in_nodes(all_nodes, node, self.tidl_target)
-        in_nodes = add_prefix(in_nodes, tidl_subgraph)
         imported_nodes = 0
         new_node_ind = len(all_nodes) + 1
         status = True
@@ -1663,8 +1632,10 @@ class TIDLImport:
                 subgraph_body = relay.expr.Tuple(tidl_odpostproc_nodes[0].args)
                 output_names = self.tidl_od_postproc_inputs
                 import_lib_setup_odpostproc = tvm.get_global_func("TIDL_relaySetupODPostProc")
-                import_lib_setup_odpostproc(self.tidl_od_meta_arch_type,
-                        self.tidl_od_num_graph_outputs, self.tidl_od_meta_layers_names_list)
+                if(import_lib_setup_odpostproc(self.tidl_od_meta_arch_type,
+                        self.tidl_od_num_graph_outputs, self.tidl_od_meta_layers_names_list) != 0):
+                    print("\n\nTIDL OD PostProc setup failed!!!\n\n")
+                    return import_fail
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
             all_nodes_tidl = {}
@@ -1674,9 +1645,10 @@ class TIDLImport:
             all_nodes_tidl = visitor.nodes
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
-                    result = self.tidl_import_node(all_nodes_tidl, node, params, output_names,
-                                                   tidl_subgraph, inout_quant_dict, has_qnn_ops)
+                    result = self.tidl_import_node(all_nodes_tidl, node, output_names,
+                                                   inout_quant_dict, has_qnn_ops)
                     if not result:
+                        print('\n\nError importing node!!!\n\n')
                         return import_fail
                     self._tally_op(str(node.op), subgraph_info_dict['nodes'])
 
@@ -1685,40 +1657,26 @@ class TIDLImport:
                 if isinstance(node, relay.expr.Tuple) and \
                    len(find_out_nodes(all_nodes_tidl, node)) == 0:
                     #node.fields: array of expr.call nodes
-                    result = self.tidl_import_out_tuple_node(all_nodes_tidl, node, output_names,
-                                                             tidl_subgraph)
+                    result = self.tidl_import_out_tuple_node(all_nodes_tidl, node, output_names)
                     if not result:
-                        print('Error importing output tuple node')
+                        print('\n\nError importing output tuple node!!!\n\n')
                         return import_fail
-
-            # Invoke TIDL optimization of the imported graph
-            net_file = os.path.join(self.artifacts_folder,
-                                    'tidl_subgraph'+str(subgraph_id)+'_net.bin')
-            par_file = os.path.join(self.artifacts_folder,
-                                    'tidl_subgraph'+str(subgraph_id)+'_params.bin')
 
             # TIDL optimization
             import_lib_optimize = tvm.get_global_func("TIDL_relayOptimizeNet")
-            if import_lib_optimize() != 0:
-                print('TIDL import optimization failed')
+            if import_lib_optimize(subgraph_id) != 0:
+                print('\n\nTIDL import optimization failed!!!\n\n')
                 return import_fail
 
             # Calibrate TIDL for the imported subgraph
-            status, out_data_q = subgraph_calibration(self.calib_tool, subgraph_id,
-                                     input_quant_vec_list, input_etype_list, self.temp_folder,
-                                     net_file, par_file, self.tidl_platform,
-                                     self.tensor_bits, self.tidl_calib_flags,
-                                     self.tidl_bias_calib_iters,
-                                     self.output_feature_16bit_names_list,
-                                     self.params_16bit_names_list,
-                                     self.mixed_precision_factor)
-
+            status, out_data_q = subgraph_calibration(subgraph_id, input_quant_vec_list, input_etype_list, self.temp_folder,
+                                     self.tidl_platform)
             self.info_dict['subgraphs'].append(subgraph_info_dict)
             if status:
-                mod[tidl_subgraph] = self.mark_tidl_layers(subgraph, subgraph_id,
-                                                            all_nodes_tidl)
+                mod[tidl_subgraph] = self.mark_tidl_layers(subgraph, subgraph_id, all_nodes_tidl)
                 continue  # import next subgraph
             else:
+                print("\n\nSubgraph calibration failed!!!\n\n")
                 return import_fail
 
         with open(os.path.join(self.temp_folder, "relay.nfo"), "w") as of:
@@ -2044,56 +2002,6 @@ class TIOffloadCompiler:
         ti_internal_nc_flag: int
             Internal use only, default is 0x641
     """
-    ## Dict with all the calibration related options
-    default_advanced_options_for_calibration = {
-            'calibration_iterations'       : 50,
-            'quantization_scale_type'      : 0,
-            'high_resolution_optimization' : 0,
-            'pre_batchnorm_fold'           : 1,
-            'output_feature_16bit_names_list' : '',
-            'params_16bit_names_list'         : '',
-            'mixed_precision_factor'       : -1.0,
-            # Below options can only be overwritten at accuracy level 9
-            # Defaults for these options are in default_accuracy_level_options
-            'activation_clipping'          : None,
-            'weight_clipping'              : None,
-            'bias_calibration'             : None,
-            'channel_wise_quantization'    : None,
-            }
-
-    # Subset of calibration options corresponding to quantized tensor bits
-    default_calib_options_based_on_tensor_bits = {
-      8 : {
-        #'calibration_iterations' : 10,
-        'calibration_iterations' : 3,
-        # Following options take effect only at accuracy level 9, are ignored otherwise
-        'activation_clipping' : 1,
-        'weight_clipping' : 1,
-        'bias_calibration' : 1,
-        'channel_wise_quantization' : 0,
-      },
-      16 : {
-        'calibration_iterations' : 1,
-      },
-      32 : {
-        'calibration_iterations' : 1,
-      }
-    }
-    default_accuracy_level_options = {
-                                   # options for level 0 and 1 cannot be updated
-                                   # only options for level 9 (user-defined) can be overwritten
-                                   0 : { 'activation_clipping'       : 0,
-                                         'weight_clipping'           : 0,
-                                         'bias_calibration'          : 0,
-                                         'channel_wise_quantization' : 0,
-                                       },
-                                   1 : { 'activation_clipping'       : 1,
-                                         'weight_clipping'           : 1,
-                                         'bias_calibration'          : 1,
-                                         'channel_wise_quantization' : 0,
-                                       },
-                                   # 9 : same defaults as accuracy level 1
-                                 }
 
     default_od_options = [
         'object_detection:meta_layers_names_list',
@@ -2103,8 +2011,9 @@ class TIOffloadCompiler:
     def __init__(self, platform="J7", tidl_tools_path=None, enable_tidl_offload=True,
                  compile_for_device=1, reuse_tidl_artifacts=False, delegate_options={}):
         if supported_platform(platform):
+            self.delegate_options = delegate_options
             # TODO: Ideally this entire code should move to TIDL or reuse existing TIDL code
-            # TVM should only be pass through for options, TIDL should interpret and 
+            # TVM should only be pass through for options, TIDL should interpret and
             # parse the options, set default values, etc. as needed)
             self.tidl_platform = platform_map(platform)
             self.tidl_target = "tidl"
@@ -2114,70 +2023,24 @@ class TIOffloadCompiler:
             self.tensor_bits = 8
             self.max_num_tidl_subgraphs = (16 if enable_tidl_offload else 0)
             self.deny_list = []
-            self.accuracy_level = 1
             self.c7x_codegen = 0
             self.compile_for_device = compile_for_device
-            self.advanced_options = {}
             self.od_options = {}
-            self.ti_internal_nc_flag = (0x1 | 0x40 | 0x200 | 0x400)
-
-            # tvm need advanced options as a dict
-            # convert the entries starting with "advanced_options:" to a dict
-            advanced_options_prefix = 'advanced_options:'
             object_detection_prefix = 'object_detection:'
 
-            keys_to_remove = []
-            # Move options with prefix 'advanced_options:' or 'object_detection:' from delegate_options to advanced_options
             for k, v in delegate_options.items():
-                if(k.startswith(advanced_options_prefix) or k.startswith(object_detection_prefix)):
-                    keys_to_remove.append(k)
-                    self.advanced_options[k.replace(advanced_options_prefix,'')] = v
-            for key in keys_to_remove:
-                delegate_options.pop(key)
+                if(k.startswith(object_detection_prefix)):
+                    self.od_options[k] = v
 
             for key in delegate_options.keys():
                 setattr(self, key, delegate_options[key])
-            for key in self.advanced_options.keys():
-                setattr(self, key, self.advanced_options[key])
 
             if enable_tidl_offload:
-                self.tidl_calib_tool = os.path.join(self.tidl_tools_path, "PC_dsp_test_dl_algo.out")
                 self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
 
             if self.max_num_tidl_subgraphs != 0:
                 self.max_num_tidl_subgraphs = (delegate_options['max_num_subgraphs'] if 'max_num_subgraphs' in delegate_options else self.max_num_tidl_subgraphs)
 
-            # Tensor bits known here - update default calibration options with defaults based on tensor bits
-            self.default_advanced_options_for_calibration.update(self.default_calib_options_based_on_tensor_bits[self.tensor_bits])
-
-            calib_options = self.default_advanced_options_for_calibration
-            accu_level_options_index = 0 if self.accuracy_level == 0 else 1
-            accu_level_options = self.default_accuracy_level_options[accu_level_options_index]
-            if isinstance(self.advanced_options, dict):
-                for key in self.advanced_options:
-                    if key in accu_level_options:
-                        if self.accuracy_level == 9:
-                            # only overwritable at level 9
-                            accu_level_options[key] = self.advanced_options[key]
-                    elif key in calib_options:  # Calibration options not related to accuracy level
-                        calib_options[key] = self.advanced_options[key]
-                    elif key in self.default_od_options:  # OD options
-                        self.od_options[key] = self.advanced_options[key]
-            for key in accu_level_options:  # Re-populate updated calibration options
-                calib_options[key] = accu_level_options[key]
-
-            self.tidl_bias_calib_iters = calib_options['calibration_iterations']
-            self.quantization_scale_type = calib_options['quantization_scale_type']
-            self.high_resolution_optimization = calib_options['high_resolution_optimization']
-            self.pre_batchnorm_fold = calib_options['pre_batchnorm_fold']
-            self.output_feature_16bit_names_list = calib_options['output_feature_16bit_names_list']
-            self.params_16bit_names_list = calib_options['params_16bit_names_list']
-            self.mixed_precision_factor = calib_options['mixed_precision_factor']
-            self.tidl_calib_flags = ((1 if (calib_options['activation_clipping'] == 1) else 0) +
-                                     (2 if (calib_options['weight_clipping'] == 1) else 0) +
-                                     (4 if (calib_options['bias_calibration'] == 1) else 0) +
-                                     (8 if (calib_options['channel_wise_quantization'] == 1) else 0)
-                                    )
         else:
             sys.exit("Unsupported TIDL platform: " + platform)
         assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
@@ -2197,7 +2060,7 @@ class TIOffloadCompiler:
             os.environ["TIDL_RELAY_IMPORT_DEBUG"] = str(self.debug_level)
 
         # Deny list needs to be passed to TIDL as part of TIDL_relayAllowNode function.
-        # Vector data cannot be passed across packedFunc, so preserve the original string as well (denyListStr) to be 
+        # Vector data cannot be passed across packedFunc, so preserve the original string as well (denyListStr) to be
         # split inside TIDL. deny_list contains individual operator names to be used within TVM code
         self.denyListStr = ''
         if self.deny_list:
@@ -2266,9 +2129,10 @@ class TIOffloadCompiler:
             import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
             od_postproc_info = ODPostProcInfo()
             import_lib_get_od_info = tvm.get_global_func("TIDL_relayGetODMetaArchInfo")
-            import_lib_get_od_info(tidl_od_meta_arch_type,
-                                    tidl_od_num_graph_outputs, tidl_od_meta_layers_names_list,
-                                    ctypes.cast(ctypes.byref(od_postproc_info), ctypes.c_void_p))
+            if(import_lib_get_od_info(tidl_od_meta_arch_type, tidl_od_num_graph_outputs, tidl_od_meta_layers_names_list,
+                                    ctypes.cast(ctypes.byref(od_postproc_info), ctypes.c_void_p)) != 0):
+                print("\n\nError fetching OD MetaArch Info!!!\n\n")
+                return mod_orig, 0
             tidl_od_postproc_inputs = [name.value.decode() for name
                                         in od_postproc_info.in_node_names[:od_postproc_info.num_in_nodes]]
             tidl_od_output_shapes = [(node.n, node.channel, node.height, node.width) for node
@@ -2312,8 +2176,6 @@ class TIOffloadCompiler:
         data_layout = find_data_layout(mod_orig)
         has_qnn_ops = find_qnn_ops(mod_orig)
 
-        # Initialize the temp folder - required only if TIDL offload is enabled
-        os.makedirs(self.temp_folder, exist_ok=True)
 
         # Open TIDL import library. Skip if user doesn't want TIDL offload
         if self.max_num_tidl_subgraphs > 0:
@@ -2322,10 +2184,11 @@ class TIOffloadCompiler:
                     import_lib = ctypes.CDLL(self.tidl_import_lib, mode=ctypes.RTLD_GLOBAL)
                 tidl_relay_init = tvm.get_global_func("TIDL_relayInit")
                 is_nchw = data_layout == "NCHW"
-                quant_style = 3 if (self.quantization_scale_type == 1) else 2
-                hires = 1 if (self.high_resolution_optimization == 1) else 0
-                tidl_relay_init(is_nchw, self.tensor_bits, quant_style, hires,
-                                self.pre_batchnorm_fold, self.ti_internal_nc_flag, self.denyListStr)
+                # Convert all delegate_options values to strings for C++ compatibility
+                delegate_options_str = {k: str(v) for k, v in self.delegate_options.items()}
+                if(tidl_relay_init(is_nchw, delegate_options_str) != 0):
+                    print('\n\nTIDL initialization failed!!!\n\n')
+                    return mod_orig, 0
             else:
                 import_lib = None # Continue with graph annotation and partition for CI testing
 
@@ -2381,14 +2244,15 @@ class TIOffloadCompiler:
             mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
                                                                 compiler=self.tidl_target)
 
-            # part of partitioning - unwind partition but leave "tidl" marked Composites as is
-            mod = unpack_composites(mod, "no_tidl")
+            # part of partitioning - unwind partition but leave "tidl" marked Composites as is in the tidl subgraphs
+            mod = unpack_composites(mod, "tidl", ["main"])
             mod = relay.transform.InferType()(mod)
             # If more than 16 TIDL subgraphs, pull functions back into main function
             # and out of TIDL offload
             mod = prune_subgraphs(mod, compiler=self.tidl_target,
                                   num_subgraphs_to_keep=self.max_num_tidl_subgraphs,
                                   min_mac_threshold=None)
+            mod = unpack_composites(mod, "tidl", ["main"])
             mod = relay.transform.InferType()(mod)
             mod = flatten_tuple_params(mod, self.tidl_target)
             mod = relay.transform.InferType()(mod)
@@ -2434,21 +2298,17 @@ class TIOffloadCompiler:
             # If reusing TIDL artifacts, skip creation of TIDLImport object and corresponding calls (these mainly create TIDL subgraph artifacts)
             # Any TIDL subgraph related artifacts will be reused from tempDir
             # Only update to IR Module as part of this code is to mark relay expressions corresponding to TIDL layers with let
-            # This is a debug feature, and will not be available in case of artifacts re-use. 
+            # This is a debug feature, and will not be available in case of artifacts re-use.
             # For any debug related runs, compile artifacts from scratch without re-use
 
             #================ Import the graph to TIDL, if caller specified =====================
             if self.max_num_tidl_subgraphs > 0 and self.tidl_tools_path is not None:
                 print(f"Final number of subgraphs created are : {num_imported_sgs}, Offloaded Nodes - {num_offloaded_nodes}, Total Nodes - {total_nodes_original}")
-                if (os.path.exists(self.tidl_calib_tool) and import_lib is not None):
-                    tidl_import = TIDLImport(import_lib, self.tidl_calib_tool,
+                if (import_lib is not None):
+                    tidl_import = TIDLImport(import_lib,
                                             self.tidl_tools_path, self.artifacts_folder,
                                             self.tidl_target, self.tidl_platform,
                                             data_layout, self.tensor_bits,
-                                            self.tidl_calib_flags, self.tidl_bias_calib_iters,
-                                            self.output_feature_16bit_names_list,
-                                            self.params_16bit_names_list,
-                                            self.mixed_precision_factor,
                                             tidl_od_meta_arch_type,
                                             tidl_od_num_graph_outputs,
                                             tidl_od_meta_layers_names_list,
@@ -2465,7 +2325,7 @@ class TIOffloadCompiler:
                         print(f"TIDL import of {num_imported_sgs} Relay IR subgraphs succeeded.")
                         if num_imported_sgs > 0 and self.tidl_relay_import_debug == "4":
                             generate_tidl_layer_tensors(self.tidl_target, mod, params,
-                                                        graph_input_list, self.temp_folder, 
+                                                        graph_input_list, self.temp_folder,
                                                         data_layout, has_qnn_ops)
                         print("TIDL artifacts are stored at " + self.artifacts_folder)
                         mod_final, status = mod, 1        # TIDL Compilation success

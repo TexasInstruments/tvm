@@ -29,6 +29,10 @@ def get_call_op_name(call):
     return call.op.name
   return None
 
+# Function to preserve the span information
+def get_expr_with_span(call, span):
+    return relay.expr.Call(call.op, call.args, call.attrs, call.type_args, span=span)
+
 class RemoveMultiplyByOne(ExprMutator):
     """
     Removes multiply by 1.0f. This pass when followed by
@@ -62,13 +66,13 @@ class RemovePadByZero(ExprMutator):
 
 class RemoveCopy(ExprMutator):
     """
-    Removes copy operator 
+    Removes copy operator
     """
     def visit_call(self,call):
         if get_call_op_name(call) == "copy":
             return super().visit(call.args[0])
         return super().visit_call(call)
-    
+
 
 class RemoveIdentityReshape(ExprMutator):
     """
@@ -129,8 +133,8 @@ class ConvertMaxMinToClip(ExprMutator):
                 max_val = call.args[1].data.asnumpy()
                 min_val = arg0.args[1].data.asnumpy()
                 if min_val.shape == () and max_val.shape == ():
-                    return tvm.relay.clip(super().visit(arg0.args[0]), min_val.item(),
-                                                                       max_val.item())
+                    clip = tvm.relay.clip(super().visit(arg0.args[0]), min_val.item(), max_val.item())
+                    return get_expr_with_span(clip, call.span) if hasattr(call, 'span') else clip
         return super().visit_call(call)
 
 # (deprecated) add layers with addition to a constant were converted to biasadd to get later converted to broadcast layer by tidl
@@ -186,7 +190,7 @@ class ConvertArgMaxToKeepDims(ExprMutator):
     TFLite deeplabv3_mnv2_ade20k 8bit quantized example:
       %203 = @tidl_0(%MobilenetV2/MobilenetV2/input) /* ty=Tensor[(1, 512, 512, 32), uint8] */;
       argmax(%203, axis=[3]) /* ty=Tensor[(1, 512, 512), int32] */
-    Convert the above example to 
+    Convert the above example to
       %204 = argmax(%203, axis=[3], keepdims=True) /* ty=Tensor[(1, 512, 512, 1), int32] */
       squeeze(%204, axis=[3]) /* ty=Tensor[(1, 512, 512), int32] */
     """
@@ -197,11 +201,10 @@ class ConvertArgMaxToKeepDims(ExprMutator):
             argmax = tvm.relay.argmax(super().visit(call.args[0]), axis=call.attrs.axis,
                                       keepdims=True, exclude=False)
             # Reconstruct the argmax call with span
-            argmax = relay.expr.Call(argmax.op, argmax.args, argmax.attrs, argmax.type_args, span=call.span)
+            argmax = get_expr_with_span(argmax, call.span) if hasattr(call, 'span') else argmax
             squeeze = tvm.relay.squeeze(argmax, axis=call.attrs.axis)
             # Reconstruct the squeeze call with span
-            squeeze = relay.expr.Call(squeeze.op, squeeze.args, squeeze.attrs, squeeze.type_args, span=call.span)
-            return squeeze
+            return get_expr_with_span(squeeze, call.span) if hasattr(call, 'span') else squeeze
         return super().visit_call(call)
 
 class RemoveIdentityClip(ExprMutator):
@@ -230,7 +233,9 @@ class ConvertConvStride(ExprMutator):
                 attrs = {key: call.attrs[key] for key in call.attrs.keys() if key != 'strides'}
                 attrs["strides"] = [1,1]
                 conv2d = relay.nn.conv2d(super().visit(call.args[0]), super().visit(call.args[1]), **attrs)
-                return relay.nn.max_pool2d(conv2d, pool_size=[1,1], strides=[1,2])
+                conv2d = get_expr_with_span(conv2d, call.span) if hasattr(call, 'span') else conv2d
+                maxpool = relay.nn.max_pool2d(conv2d, pool_size=[1,1], strides=[1,2])
+                return get_expr_with_span(maxpool, call.span) if hasattr(call, 'span') else maxpool
         return super().visit_call(call)
 
 class Power2ToMultiply(ExprMutator):
@@ -243,7 +248,8 @@ class Power2ToMultiply(ExprMutator):
                 data = call.args[1].data.asnumpy()
                 if data.shape == () and data.item() == 2.0:
                     arg = super().visit(call.args[0])
-                    return relay.multiply(arg, arg)
+                    mul = relay.multiply(arg, arg)
+                    return get_expr_with_span(mul, call.span) if hasattr(call, 'span') else mul
         return super().visit_call(call)
 
 
@@ -262,7 +268,8 @@ class TransposeScatterND(ExprMutator):
             data = super().visit(call.args[0])
             indices = super().visit(call.args[1].args[0])
             updates = super().visit(call.args[2])
-            return relay.tidl_scatter_nd(data, indices, updates, call.attrs.mode)
+            tidl_scatter_nd = relay.tidl_scatter_nd(data, indices, updates, call.attrs.mode)
+            return get_expr_with_span(tidl_scatter_nd, call.span) if hasattr(call, 'span') else tidl_scatter_nd
 
         return super().visit_call(call)
 
@@ -276,11 +283,12 @@ class MergePadLayer(ExprMutator):
                 pad_width = call.args[0].attrs.pad_width
                 attrs = {key: call.attrs[key] for key in call.attrs.keys()}
                 attrs['padding'] = (pad_width[2][0], pad_width[3][0], pad_width[2][1], pad_width[3][1]) # tlbr
-                return relay.nn.conv2d(super().visit(call.args[0].args[0]), super().visit(call.args[1]), **attrs)
+                conv2d = relay.nn.conv2d(super().visit(call.args[0].args[0]), super().visit(call.args[1]), **attrs)
+                return get_expr_with_span(conv2d, call.span) if hasattr(call, 'span') else conv2d
         return super().visit_call(call)
 
-def prepare_graph_for_partitioning(mod_orig: tvm.IRModule, 
-                                  has_qnn_ops: bool, 
+def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
+                                  has_qnn_ops: bool,
                                   params : typing.Dict[str, tvm.nd.NDArray]) -> tvm.IRModule:
     """Prepare the graph for partitioning"""
 
