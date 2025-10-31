@@ -238,21 +238,6 @@ class ConvertConvStride(ExprMutator):
                 return get_expr_with_span(maxpool, call.span) if hasattr(call, 'span') else maxpool
         return super().visit_call(call)
 
-class Power2ToMultiply(ExprMutator):
-    """
-    Converts all instances of power(in, 2) to multiply(in, in)
-    """
-    def visit_call(self, call):
-        if get_call_op_name(call) == 'power':
-            if isinstance(call.args[1], tvm.relay.expr.Constant):
-                data = call.args[1].data.asnumpy()
-                if data.shape == () and data.item() == 2.0:
-                    arg = super().visit(call.args[0])
-                    mul = relay.multiply(arg, arg)
-                    return get_expr_with_span(mul, call.span) if hasattr(call, 'span') else mul
-        return super().visit_call(call)
-
-
 class TransposeScatterND(ExprMutator):
     """
     Converts all instances of  a = transpose(in, [n-1, 0, 1,...,n-2]), followed by
@@ -302,7 +287,6 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod['main'] = RemoveCopy().visit(mod['main']) # removing copy layer as(idenity layer is remppaed to copy and it just puts input to output)
     mod = relay.transform.InferType()(mod)
     mod['main'] = RemoveIdentityReshape().visit(mod['main'])
-    mod['main'] = Power2ToMultiply().visit(mod['main'])
     mod['main'] = RemoveTrainingOperators().visit(mod['main'])
     mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
     mod['main'] = ConvertArgMaxToKeepDims().visit(mod['main'])

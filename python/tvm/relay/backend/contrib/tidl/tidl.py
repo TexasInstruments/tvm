@@ -32,7 +32,7 @@ import tvm
 from tvm import relay
 import tvm.ir
 from tvm.topi.utils import get_const_tuple
-from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple_get_item
+from tvm.relay.dataflow_pattern import is_op, is_constant, wildcard, is_tuple, FunctionPattern
 from tvm.relay.expr_functor import ExprMutator
 from tvm.relay.expr import Tuple, GlobalVar
 from tvm.relay.function import Function
@@ -1837,16 +1837,24 @@ class TIDLAnnotation:
 
         tidl_annotations_registered = True
 
+    # Used in pattern 'checker' functions. The extract is a composite function, we need to traverse its body
+    # Returns ops of given types (ops_to_match) to be checked for specific attributes
+    def find_ops_in_composite(self, func_body, op_list, ops_to_match):
+        """Recursively find all operations in the composite function body"""
+        if isinstance(func_body, relay.expr.Call):
+            if hasattr(func_body.op, 'name') and func_body.op.name in ops_to_match:
+                op_list.append(func_body)
+            # Recursively check arguments
+            for arg in func_body.args:
+                self.find_ops_in_composite(arg, op_list, ops_to_match)
+        elif isinstance(func_body, relay.expr.Tuple):
+            for field in func_body.fields:
+                self.find_ops_in_composite(field, op_list, ops_to_match)
+        elif isinstance(func_body, relay.expr.TupleGetItem):
+            self.find_ops_in_composite(func_body.tuple_value, op_list, ops_to_match)
+    
     def merge_sequential_ops(self, mod):
         """Fuse sequential ops for op registration."""
-
-        # Squeeze has to be followed by reshape.
-        def _squeeze_reshape_pattern():
-            squeeze_out = is_op('squeeze')(wildcard())
-            reshape_out = is_op('reshape')(squeeze_out)
-            return reshape_out
-        def _squeeze_reshape_checker(extract):
-            return True
 
         #transpose has to be preceded and followed by reshape
         def _transpose_reshape_pattern():
@@ -1873,11 +1881,326 @@ class TIDLAnnotation:
                 return True
             else:
                 return False
+        
+        def _layernorm_pattern():
+            """Create a pattern to match layer normalization decomposition.
+            LayerNorm is typically decomposed into:
+            (x - mean(x, axis=-1)) / sqrt(var(x, axis=-1) + epsilon)
+            where var(x) = mean((x - mean(x))^2)
+            """
+            data = wildcard()
+            epsilon = wildcard()
 
-        # common patterns
+            # Pattern match
+            mean1 = is_op('mean')(data)
+            diff = is_op('subtract')(data, mean1)
+            const_two = is_constant() | wildcard()
+            squared = is_op('power')(diff, const_two) | is_op('multiply')(diff, diff)
+            variance = is_op('mean')(squared)
+            var_eps = (is_op('add')(variance, epsilon) | 
+                      is_op('add')(epsilon, variance))
+            sqrt_var = is_op('sqrt')(var_eps)
+            rsqrt_var = is_op('rsqrt')(var_eps)
+            normalized = is_op('divide')(diff, sqrt_var) | is_op('multiply')(diff, rsqrt_var)
+            
+            return normalized
+
+        def _layernorm_checker():
+            """Checker function for layer normalization pattern with specific validation"""
+            def checker(extract):
+                ops = []
+                ops_to_match = ['mean', 'power']
+                # Extract is a composite function, traverse its body
+                if hasattr(extract, 'body'):
+                    self.find_ops_in_composite(extract.body, ops, ops_to_match)
+                
+                # Check mean operations have axis=-1, if not then check is axis is along width (last dimension)
+                mean_ops = [op for op in ops if hasattr(op.op, 'name') and op.op.name == 'mean']
+                for mean_op in mean_ops:
+                    if hasattr(mean_op, 'attrs') and hasattr(mean_op.attrs, 'axis'):
+                        axis = mean_op.attrs.axis
+                        
+                        # First check if axis is -1
+                        if isinstance(axis, (list, tuple)):
+                            if -1 in axis:
+                                continue  # Valid, axis contains -1
+                        elif axis == -1:
+                            continue  # Valid, axis is -1
+                        
+                        # If axis is not -1, then check is axis is along width
+                        if len(mean_op.args) > 0 and hasattr(mean_op.args[0], 'checked_type'):
+                            input_shape = mean_op.args[0].checked_type.shape
+                            last_axis = len(input_shape) - 1
+                            
+                            if isinstance(axis, (list, tuple)):
+                                if last_axis not in axis:
+                                    return False
+                            elif axis != last_axis:
+                                return False
+                        else:
+                            return False
+                    else:
+                        return False
+                
+                # Check power operation has constant value 2
+                power_ops = [op for op in ops if hasattr(op.op, 'name') and op.op.name == 'power']
+                for power_op in power_ops:
+                    if len(power_op.args) >= 2:
+                        second_arg = power_op.args[1]
+                        if hasattr(second_arg, 'data'):
+                            # Check if the constant value is 2
+                            import numpy as np
+                            const_val = second_arg.data.asnumpy()
+                            if not np.allclose(const_val, 2.0):
+                                return False
+                        else:
+                            return False
+                
+                return True
+            return checker
+
+        def _gelu_pattern():
+            """Create a pattern to match GELU activation function decomposition.
+            GELU is typically decomposed into:
+            0.5 * x * (1.0 + erf(x / sqrt(2.0)))
+            """
+            data = wildcard() # input
+            sqrt2_inv = wildcard()
+            div_sqrt2 = is_op('multiply')(data, sqrt2_inv) | is_op('divide')(data, sqrt2_inv)
+            erf_result = is_op('erf')(div_sqrt2)
+            one_const = wildcard()
+            erf_plus_one = is_op('add')(erf_result, one_const) | is_op('add')(one_const, erf_result)
+            gelu_erf = is_op('multiply')(data, erf_plus_one) | is_op('multiply')(erf_plus_one, data)
+            half_const = wildcard()
+            gelu_final = is_op('multiply')(gelu_erf, half_const) | is_op('multiply')(half_const, gelu_erf)
+            
+            return gelu_final
+
+        def _gelu_checker():
+            """Checker function for GELU pattern with precise constant validation at specific positions"""
+            def checker(extract):
+                import numpy as np
+                # Since we know the exact pattern structure, validate constants at their specific positions
+                # Pattern: 0.5 * x * (1.0 + erf(x / sqrt(2.0)))
+                # extract is the final multiply operation: multiply(gelu_erf, 0.5)
+                
+                # Check 3: Final multiply should have constant 0.5
+                if not (hasattr(extract, 'args') and len(extract.args) >= 2):
+                    return False
+                
+                half_found = False
+                gelu_erf_expr = None
+                for arg in extract.args:
+                    if hasattr(arg, 'data'):
+                        const_val = arg.data.asnumpy()
+                        if np.allclose(const_val, 0.5, rtol=1e-5):
+                            half_found = True
+                    else:
+                        gelu_erf_expr = arg  # This should be the gelu_erf expression
+                
+                if not half_found or gelu_erf_expr is None:
+                    return False
+                
+                # gelu_erf should be: multiply(data, erf_plus_one)
+                if not (isinstance(gelu_erf_expr, relay.expr.Call) and 
+                        hasattr(gelu_erf_expr.op, 'name') and 
+                        gelu_erf_expr.op.name == 'multiply' and
+                        len(gelu_erf_expr.args) >= 2):
+                    return False
+                
+                # Find the add operation (erf_plus_one): add(erf_result, 1.0)
+                erf_plus_one_expr = None
+                for arg in gelu_erf_expr.args:
+                    if (isinstance(arg, relay.expr.Call) and 
+                        hasattr(arg.op, 'name') and 
+                        arg.op.name == 'add'):
+                        erf_plus_one_expr = arg
+                        break
+                
+                if erf_plus_one_expr is None:
+                    return False
+                
+                # Check 2: Add operation should have constant 1.0
+                one_found = False
+                erf_result_expr = None
+                for arg in erf_plus_one_expr.args:
+                    if hasattr(arg, 'data'):
+                        const_val = arg.data.asnumpy()
+                        if np.allclose(const_val, 1.0, rtol=1e-5):
+                            one_found = True
+                    elif (isinstance(arg, relay.expr.Call) and 
+                          hasattr(arg.op, 'name') and 
+                          arg.op.name == 'erf'):
+                        erf_result_expr = arg
+                
+                if not one_found or erf_result_expr is None:
+                    return False
+                
+                # erf_result should be: erf(div_sqrt2)
+                if not (len(erf_result_expr.args) >= 1):
+                    return False
+                
+                div_sqrt2_expr = erf_result_expr.args[0]
+                
+                # Check 1: div_sqrt2 should be multiply(data, 1/sqrt(2)) or divide(data, sqrt(2))
+                if not (isinstance(div_sqrt2_expr, relay.expr.Call) and 
+                        hasattr(div_sqrt2_expr.op, 'name') and 
+                        div_sqrt2_expr.op.name in ['multiply', 'divide'] and
+                        len(div_sqrt2_expr.args) >= 2):
+                    return False
+                
+                sqrt2_found = False
+                for arg in div_sqrt2_expr.args:
+                    if hasattr(arg, 'data'):
+                        const_val = arg.data.asnumpy()
+                        if div_sqrt2_expr.op.name == 'divide':
+                            # Check for sqrt(2) ≈ 1.414
+                            if np.allclose(const_val, np.sqrt(2.0), rtol=1e-5):
+                                sqrt2_found = True
+                                break
+                        elif div_sqrt2_expr.op.name == 'multiply':
+                            # Check for 1/sqrt(2) ≈ 0.707
+                            if np.allclose(const_val, 1.0/np.sqrt(2.0), rtol=1e-5):
+                                sqrt2_found = True
+                                break
+                
+                return sqrt2_found
+            return checker
+
+        def _patch_merging_pattern():
+            """Create a pattern to match patch merging in Vision Transformers.
+            This creates a 2x2 patch merging pattern typical in Swin Transformer.
+            """
+            
+            # Note : Below function seems to be the ideal way to create FunctionPattern object for Slice (in case of multiple Slices in pattern)
+            # However, using it results in issue due to the pattern matching implementation using memoization to store 
+            # relay expressions corresponding to matched patterns.
+            # e.g. _memo_map[pattern1] = relay_expr_1
+            # When same pattern object is called with different expression e.g. relay_expr_2, 
+            # the pattern checker checks if relay_expr_2 == relay_expr_1 instead of relay_expr_2 == pattern1  
+            # resulting in subsequent slice functions not matching with the pattern
+            # So ensure to create new object of the FunctionPattern class to match each slice
+            
+            # def composite_call(name):
+            #     func_pattern = FunctionPattern(None, wildcard()).has_attr({"Composite": name})
+            #     return lambda *args: CallPattern(func_pattern, list(args) if args else None)
+            
+            data = wildcard()
+
+            reshaped = is_op('reshape')(data)
+
+            slice11 = FunctionPattern(None, wildcard()).has_attr({"Composite": "tidl.slice"})(reshaped, wildcard(), wildcard(), wildcard(), wildcard())
+            slice12 = FunctionPattern(None, wildcard()).has_attr({"Composite": "tidl.slice"})(reshaped, wildcard(), wildcard(), wildcard(), wildcard())
+            slice13 = FunctionPattern(None, wildcard()).has_attr({"Composite": "tidl.slice"})(reshaped, wildcard(), wildcard(), wildcard(), wildcard())
+            slice14 = FunctionPattern(None, wildcard()).has_attr({"Composite": "tidl.slice"})(reshaped, wildcard(), wildcard(), wildcard(), wildcard())
+
+            slice21 = FunctionPattern(None, wildcard()).has_attr({"Composite": "tidl.slice"})(slice11, wildcard(), wildcard(), wildcard(), wildcard())
+            slice22 = FunctionPattern(None, wildcard()).has_attr({"Composite": "tidl.slice"})(slice12, wildcard(), wildcard(), wildcard(), wildcard())
+            slice23 = FunctionPattern(None, wildcard()).has_attr({"Composite": "tidl.slice"})(slice13, wildcard(), wildcard(), wildcard(), wildcard())
+            slice24 = FunctionPattern(None, wildcard()).has_attr({"Composite": "tidl.slice"})(slice14, wildcard(), wildcard(), wildcard(), wildcard())
+
+            slices_tuple = is_tuple([slice21, slice22, slice23, slice24]) 
+            concat_result = is_op('concatenate')(slices_tuple)
+            
+            return concat_result
+
+        def _patch_merging_checker():
+            """Checker function for patch merging pattern with validation.
+            Pattern already validates structure, so checker focuses on semantic constraints.
+            1. Strides of all slice layers must be 2
+            2. Level 1 and level 2 slices should interchangeably have axis as height/channel
+            3. Start attribute across the 2 slice levels should cover all 4 combinations - ((0,0), (0,1), (1,0), (1,1))
+            """
+            def checker(extract):
+                # Pattern already validates: tuple structure, 4 slices, tidl.slice composites, 5 args each
+                # Checker focuses on semantic constraints: strides, axes, start positions
+                
+                slice_ops = extract.args[0].fields  # Pattern guarantees this is valid
+                slice_level_1_info = []
+                slice_level_2_info = []
+                
+                # Extract slice parameters (pattern guarantees structure is valid)
+                for i, slice_op in enumerate(slice_ops):
+                    begin_level_2 = slice_op.args[1].data.asnumpy().tolist()
+                    axes_level_2 = slice_op.args[3].data.asnumpy().tolist()
+                    strides_level_2 = slice_op.args[4].data.asnumpy().tolist()
+
+                    begin_level_1 = slice_op.args[0].args[1].data.asnumpy().tolist()
+                    axes_level_1 = slice_op.args[0].args[3].data.asnumpy().tolist()
+                    strides_level_1 = slice_op.args[0].args[4].data.asnumpy().tolist()
+                    
+                    slice_level_2_info.append({
+                        'begin': begin_level_2,
+                        'axes': axes_level_2,
+                        'strides': strides_level_2
+                    })
+
+                    slice_level_1_info.append({
+                        'begin': begin_level_1,
+                        'axes': axes_level_1,
+                        'strides': strides_level_1
+                    })
+                
+                # Semantic constraint 1: All strides must be 2
+                for info in slice_level_2_info:
+                    if not all(s == 2 for s in info['strides']):
+                        return False
+                    
+                for info in slice_level_1_info:
+                    if not all(s == 2 for s in info['strides']):
+                        return False
+                
+                # Semantic constraint 2: Axis combinations (height vs channel)
+                level1_axes = set()
+                level2_axes = set()
+                
+                for info in slice_level_1_info:
+                    level1_axes.update(info['axes'])
+                
+                for info in slice_level_2_info:
+                    level2_axes.update(info['axes'])
+                
+                height_axes = {2}  # Height axis in NCHW
+                channel_axes = {1}  # Channel axis in NCHW
+                
+                level1_has_height = bool(level1_axes & height_axes)
+                level1_has_channel = bool(level1_axes & channel_axes)
+                level2_has_height = bool(level2_axes & height_axes)
+                level2_has_channel = bool(level2_axes & channel_axes)
+                
+                valid_axis_combination = (
+                    (level1_has_height and level2_has_channel) or
+                    (level1_has_channel and level2_has_height)
+                )
+                
+                if not valid_axis_combination:
+                    return False
+                
+                # Semantic constraint 3: Start positions create 2x2 grid
+                level1_starts = [info['begin'][0] for info in slice_level_1_info]
+                level2_starts = [info['begin'][0] for info in slice_level_2_info]
+                
+                # Create 1-1 mapping pairs and check they cover all 4 combinations
+                start_pairs = list(zip(level1_starts, level2_starts))
+                expected_combinations = {(0, 0), (0, 1), (1, 0), (1, 1)}
+                actual_combinations = set(start_pairs)
+                
+                if actual_combinations != expected_combinations:
+                    return False
+
+                return True
+            return checker
+
+        # Common patterns - Create them with 'tidl.composite' prefix which is used to differentiate 
+        # patterns created using MergeComposite pass with pattern checker vs. the 'tidl' composite functions
+        # created in frontend
+        # Note that these patterns are created only for annotating all the pattern nodes as supported.
+        # Before actually passing to TIDL, these are unpacked, as TIDL is expected to internally map these to relevant TIDL backend layers
         pattern_table = [
-            ('tidl.squeeze_reshape', _squeeze_reshape_pattern(), _squeeze_reshape_checker),
-            ('tidl.transpose_reshape', _transpose_reshape_pattern(), _transpose_reshape_checker),
+            ('tidl.composite.layernorm', _layernorm_pattern(), _layernorm_checker()),
+            ('tidl.composite.gelu', _gelu_pattern(), _gelu_checker()),
+            ('tidl.composite.patch_merging', _patch_merging_pattern(), _patch_merging_checker()),
+            # ('tidl.transpose_reshape', _transpose_reshape_pattern(), _transpose_reshape_checker)
         ]
 
         return relay.transform.MergeComposite(pattern_table)(mod)
@@ -2203,7 +2526,7 @@ class TIOffloadCompiler:
             for node in all_nodes:
                 if isinstance(node, relay.expr.Call) and isinstance(node.op, relay.Function):
                     func = node.op
-                    if hasattr(func, "attrs") and "Composite" in func.attrs and self.tidl_target in func.attrs["Composite"]:
+                    if hasattr(func, "attrs") and "Composite" in func.attrs and self.tidl_target in func.attrs["Composite"] and "composite" not in func.attrs["Composite"]:
                         result = allow_fn(node)
                         if(result == False):
                             # Unpack the composite function
@@ -2223,8 +2546,8 @@ class TIOffloadCompiler:
             mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
                                                                 compiler=self.tidl_target)
 
-            # part of partitioning - unwind partition but leave "tidl" marked Composites as is in the tidl subgraphs
-            mod = unpack_composites(mod, "tidl", ["main"])
+            # part of partitioning - unwind partition but leave "tidl" marked Composites as is
+            mod = unpack_composites(mod, "tidl.composite", ["main"])
             mod = relay.transform.InferType()(mod)
             # If more than 16 TIDL subgraphs, pull functions back into main function
             # and out of TIDL offload
