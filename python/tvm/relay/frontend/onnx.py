@@ -862,13 +862,13 @@ class Conv(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        # Use shape of input to determine convolution type.
+        data = inputs[0]
+        kernel = inputs[1]
         # Begin TI
         inputsOrig = copy.copy(inputs)
         status, inputs, new_inputs = get_func_inputs(inputs)
         # End TI
-        # Use shape of input to determine convolution type.
-        data = inputs[0]
-        kernel = inputs[1]
         input_shape = infer_shape(data)
         ndim = len(input_shape)
 
@@ -1300,11 +1300,11 @@ class Mish(OnnxOpConverter):
 
     @classmethod
     def _impl_v18(cls, inputs, attr, params):
+        x = inputs[0]
         # Begin TI
         inputsOrig=copy.copy(inputs)
         status, inputs, new_inputs = get_func_inputs(inputs)
         # End TI
-        x = inputs[0]
         # Declare const
         const_dtype = infer_type(x).checked_type.dtype
         one = _expr.const(1.0, dtype=const_dtype)
@@ -1327,13 +1327,13 @@ class LayerNormalization(OnnxOpConverter):
 
     @classmethod
     def _impl_v17(cls, inputs, attr, params):
+        x = inputs[0]
+        gamma = inputs[1]
+        beta = inputs[2]
         # Begin TI
         inputsOrig=copy.copy(inputs)
         status, inputs, new_inputs = get_func_inputs(inputs)
         # End TI
-        x = inputs[0]
-        gamma = inputs[1]
-        beta = inputs[2]
         axis = attr.get("axis", -1)
         eps = attr.get("epsilon", 1e-5)
         # according to the onnx doc, given the int axis (default -1)
@@ -2333,12 +2333,12 @@ class Prelu(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        assert len(inputs) == 2, f"Prelu need 2 inputs, {len(inputs)} given"
+        input_shape = shape_of(inputs[0])
         # Begin TI
         inputsOrig=copy.copy(inputs)
         status, inputs, new_inputs = get_func_inputs(inputs)
         # End TI
-        assert len(inputs) == 2, f"Prelu need 2 inputs, {len(inputs)} given"
-        input_shape = shape_of(inputs[0])
         alpha = _op.broadcast_to_like(inputs[1], inputs[0])
         alpha = _op.reshape(alpha, [-1])
         output = _op.nn.prelu(_op.reshape(inputs[0], [-1]), alpha, axis=0)
@@ -2888,13 +2888,12 @@ class Slice(OnnxOpConverter):
         ends = inputs[2]
         axes = inputs[3]
         steps = inputs[4]
+        ishape = infer_shape(inputs[0])
+        data_rank = len(ishape)
         # Begin TI
         inputsOrig=copy.copy(inputs)
         status, inputs, new_inputs = get_func_inputs(inputs)
         # End TI
-        ishape = infer_shape(inputs[0])
-        data_rank = len(ishape)
-
         if axes is not None:
             # Normalize for negative axes
             axes_dtype = infer_type(axes).checked_type.dtype
@@ -2989,13 +2988,13 @@ class Gather(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        axis = attr.get("axis", 0)
+        data = inputs[0]
+        indices = inputs[1]
         # Begin TI
         inputsOrig=copy.copy(inputs)
         status, inputs, new_inputs = get_func_inputs(inputs)
         # End TI
-        axis = attr.get("axis", 0)
-        data = inputs[0]
-        indices = inputs[1]
         indices = normalize_gather_indices(data, indices, axis)
         # Begin TI
         out = _op.take(data, indices, axis)
