@@ -33,12 +33,20 @@ BUILD_DIR   ?= $(SILICON_VERSION)/$(BUILD_DIR_NAME)
 TI_MEM_MANAGER_C = $(USE_TIDL_RT_PATH)/test/src/ti_mem_manager.c
 TIDL_RT_OVX_DEBUG_UTILS_C = $(USE_TIDL_RT_PATH)/src/tidl_rt_ovx_debug_utils.c
 
+# Find TIOVX path - look for it relative to IVISION_PATH or PDK_PATH
+TIOVX_PATH ?= $(shell dirname $(IVISION_PATH))/tiovx
+
 CFLAGS += -I $(TVM_ROOT)/include -I $(DLPACK_ROOT)/include
 CFLAGS += -I $(CRT_ROOT)/include -I $(CRT_CONFIG)
-CFLAGS += -I $(USE_TIDL_RT_PATH)/inc -I $(USE_TIDL_RT_PATH)/test/src
+CFLAGS += -I $(USE_TIDL_RT_PATH)/inc -I $(USE_TIDL_RT_PATH)/test/src -I $(USE_TIDL_RT_PATH)/src
 CFLAGS += -I $(IVISION_PATH)
 CFLAGS += -I $(PDK_PATH)
 CFLAGS += -I $(DMAUTILS_PATH)
+# Add TIOVX include paths for TI/tivx.h and related headers
+CFLAGS += -I $(TIOVX_PATH)/include
+CFLAGS += -I $(TIOVX_PATH)/kernels/include
+# Add TIDL TIOVX kernels include path for TI/j7_tidl.h
+CFLAGS += -I $(USE_TIDL_RT_PATH)/../tiovx_kernels/include
 
 SOURCES = bundle_static.c \
           tidl_api.c \

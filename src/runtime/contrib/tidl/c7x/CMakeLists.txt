@@ -63,11 +63,15 @@ else()
   string(APPEND dmautils_path "${pdk_path_base}/source/drivers/dmautils/include/")
 endif()
 
+# TIOVX path for TI/tivx.h and related headers (Makefile will auto-calculate if not provided)
+file(GLOB tiovx_path ${USE_TIDL_PSDKR_PATH}/tiovx)
+
 list(APPEND build_env_paths "USE_TIDL_RT_PATH=${USE_TIDL_RT_PATH}")
 list(APPEND build_env_paths "CGT7X_ROOT=${cgt7x_root}")
 list(APPEND build_env_paths "IVISION_PATH=${ivision_path}")
 list(APPEND build_env_paths "PDK_PATH=${pdk_path}")
 list(APPEND build_env_paths "DMAUTILS_PATH=${dmautils_path}")
+list(APPEND build_env_paths "TIOVX_PATH=${tiovx_path}")
 
 message("-- Build with contrib.tidl.c7x libs, path= ${build_env_paths}")
 
