@@ -1848,6 +1848,7 @@ class TIDLAnnotation:
         self._register_constrained_op("max")
         self._register_constrained_op("min")
         self._register_constrained_op("sum")
+        self._register_constrained_op("scatter_elements")
 
 
         tidl_annotations_registered = True
