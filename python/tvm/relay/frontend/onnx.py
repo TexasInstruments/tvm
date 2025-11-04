@@ -2716,25 +2716,59 @@ class Unsqueeze(OnnxOpConverter):
     """Operator converter for Unsqueeze."""
 
     @classmethod
-    def run_calculation(cls, tensor, axes):
+    # Begin TI
+    def run_calculation(cls, tensor, axes,tensor_orig):
+    # End TI
         axes = sorted(axes)
         for axis in axes:
-            if axis < 0 and isinstance(tensor, _expr.Var):
+            # Begin TI
+            if axis < 0 and isinstance(tensor_orig, _expr.Var):
+            # End TI
                 axis = len(tensor.type_annotation.concrete_shape) + len(axes) + axis
             tensor = _op.expand_dims(tensor, axis=axis, num_newaxis=1)
         return tensor
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
-        return cls.run_calculation(inputs[0], attr["axes"])
+        # Begin TI
+        inputsOrig = copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
+        out = cls.run_calculation(inputs[0], attr["axes"],inputsOrig[0])
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.unsqueeze")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
     @classmethod
     def _impl_v13(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig = copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         if isinstance(inputs[1], _expr.Constant):
             constant_axes = list(inputs[1].data.numpy())
             constant_axes = list(map(int, constant_axes))
-            return cls.run_calculation(inputs[0], constant_axes)
+            out = cls.run_calculation(inputs[0], constant_axes,inputsOrig[0])
 
+        # Begin TI
+            if status:
+                func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+                func = func.with_attr("Composite", "tidl.unsqueeze")
+                call = relay.Call(func, inputsOrig)
+                print("call ",call)
+                return call
+            else:
+                return out
+            
+        else:
+            raise NotImplementedError(f"Variable axis is not supported")
+        # End TI
         rank_input = len(infer_type(inputs[0]).checked_type.shape)
         num_new_axis = int(infer_type(inputs[1]).checked_type.shape[0])
         axes = relay.sort(inputs[1])
@@ -2752,7 +2786,17 @@ class Unsqueeze(OnnxOpConverter):
                 axis >= relay.const(0, "int64"), axis, axis + relay.const(rank_output, "int64")
             )
             result = _op.expand_dims(result, axis)
-        return result
+        # return result
+        out = result
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.unsqueeze")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class Squeeze(OnnxOpConverter):
