@@ -2276,12 +2276,43 @@ class Pad(OnnxOpConverter):
 
     @classmethod
     def _impl_v11(cls, inputs, attr, params):
+        # Begin TI
+        # ONNX Pad V11 requires pads for all dimensions, while V18+ supports selective
+        # padding via the optional 'axes' input. When axes are specified, we expand
+        # the pads tensor to include zero padding for unspecified dimensions.
+        data = inputs[0]
         pads = inputs[1]
-        if len(inputs) == 3 and inputs[2] is not None:
+        if len(inputs) >= 3 and inputs[2] is not None:
             value = fold_constant(_op.take(inputs[2], _op.const(0)))
         else:
             value = 0.0
+        axes = inputs[3] if len(inputs) >= 4 else None
+        data_rank = len(infer_shape(data))
+        if axes is not None:
+            # Extract axes values
+            if isinstance(axes, _expr.Constant):
+                axes_values = axes.data.numpy().astype("int64")
+                axes_values = np.array([ax if ax >= 0 else data_rank + ax  for ax in axes_values])
 
+                #Extract pad values
+                if isinstance(pads, _expr.Constant):
+                    pads_values = pads.data.numpy().astype("int64")
+
+                num_axes = len(axes_values)
+                expanded_pads = [0] * (2 * data_rank)
+                for dim in range(data_rank):
+                    if dim in axes_values:
+                        # Find the index of this dimension in the axes array
+                        axis_idx = np.where(axes_values == dim)[0][0]
+                        # Add the corresponding pad values
+                        expanded_pads[dim]=(pads_values[axis_idx])
+                        expanded_pads[dim+data_rank]=(pads_values[axis_idx+num_axes])
+                pads = _expr.const(expanded_pads, dtype="int64")
+            else:
+            # For non-constant axes, we need to handle dynamically
+            # This is a simplified version - full dynamic support would be more complex
+                raise NotImplementedError("Dynamic axes not supported for Pad operator")
+    # End TI
         pad_width_expr = fold_constant(_op.transpose(_op.reshape(pads, (2, -1))))
         pad_mode = attr.get("mode", b"constant").decode("utf-8")
         if not pad_mode in ["constant", "edge", "reflect"]:
