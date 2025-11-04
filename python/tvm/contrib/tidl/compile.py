@@ -148,6 +148,9 @@ def compile_model(platform: str,
     if not os.path.isdir(artifacts_folder):
       print(f'\n\nWARNING: Cannot reuse TIDL artifacts since artifacts folder "{artifacts_folder}" is not present\n')
       reuse_tidl_artifacts = False
+  else:
+    if os.listdir(artifacts_folder):
+      raise Exception("'artifacts_folder' is not empty - please clear the folder and re-run !")
 
   # If compiling for the device, generate aarch64 code for unsupported layers
   target = "llvm"

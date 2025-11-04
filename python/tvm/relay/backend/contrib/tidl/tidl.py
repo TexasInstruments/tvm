@@ -1205,6 +1205,10 @@ def prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=16, compiler
     new_mod = tvm.IRModule()
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod,
                                       compiler=compiler).visit(mod["main"])
+    
+    # unwind "tidl" marked Composites which got pruned from TIDL subgraphs into the main graph
+    new_mod = unpack_composites(new_mod, "tidl", ["main"])
+    new_mod = relay.transform.InferType()(new_mod)
     return new_mod
 
 def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_threshold=None):
@@ -1247,6 +1251,10 @@ def prune_subgraphs(mod, compiler="tidl", num_subgraphs_to_keep=4, min_mac_thres
     new_mod = tvm.IRModule()
     new_mod["main"] = SubgraphRemover(subgraph_names_to_remove, mod, new_mod,
                                       compiler=compiler).visit(mod["main"])
+    
+    # unwind "tidl" marked Composites which got pruned from TIDL subgraphs into the main graph
+    new_mod = unpack_composites(new_mod, "tidl", ["main"])
+    new_mod = relay.transform.InferType()(new_mod)
     return new_mod
 
 def subgraph_calibration(subgraph_id, input_quant_vec_list, input_etypes, temp_folder, platform):
@@ -1648,7 +1656,11 @@ class TIDLImport:
                     result = self.tidl_import_node(all_nodes_tidl, node, output_names,
                                                    inout_quant_dict, has_qnn_ops)
                     if not result:
-                        print('\n\nError importing node!!!\n\n')
+                        if (node.span and node.span.source_name and hasattr(node.span.source_name, 'name') and 
+                        node.span.source_name.name):
+                            print(f'\n\nError importing node - {node.span.source_name.name}!!!\n\n')
+                        else:
+                            print('\n\nError importing node!!!\n\n')
                         return import_fail
                     self._tally_op(str(node.op), subgraph_info_dict['nodes'])
 
@@ -2328,11 +2340,11 @@ class TIOffloadCompiler:
             self.tidl_platform = platform_map(platform)
             self.tidl_target = "tidl"
             self.tidl_tools_path = tidl_tools_path
-            self.artifacts_folder = None
-            self.debug_level = None
-            self.tensor_bits = 8
-            self.max_num_tidl_subgraphs = (16 if enable_tidl_offload else 0)
-            self.c7x_codegen = 0
+            self.artifacts_folder = delegate_options.get("artifacts_folder", None)
+            self.debug_level = delegate_options.get("debug_level", 0)
+            self.tensor_bits = delegate_options.get("tensor_bits", 8)
+            self.max_num_tidl_subgraphs = delegate_options.get("max_num_tidl_subgraphs", (16 if enable_tidl_offload else 0))
+            self.c7x_codegen = delegate_options.get("advanced_options:c7x_codegen", 1)
             self.compile_for_device = compile_for_device
             self.od_options = {}
             object_detection_prefix = 'object_detection:'
@@ -2341,18 +2353,9 @@ class TIOffloadCompiler:
                 if(k.startswith(object_detection_prefix)):
                     self.od_options[k] = v
 
-            for key in delegate_options.keys():
-                key_updated = key
-                if ':' in key:
-                    key_updated = key.replace(':','_')
-                setattr(self, key_updated, delegate_options[key])
-
             if enable_tidl_offload:
                 self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
-
-            if self.max_num_tidl_subgraphs != 0:
-                self.max_num_tidl_subgraphs = (delegate_options['max_num_subgraphs'] if 'max_num_subgraphs' in delegate_options else self.max_num_tidl_subgraphs)
-
+        
         else:
             sys.exit("Unsupported TIDL platform: " + platform)
         assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
@@ -2546,20 +2549,17 @@ class TIOffloadCompiler:
             mod = prune_subgraphs_with_overlimit_inputs_outputs(mod, in_out_limit=32,
                                                                 compiler=self.tidl_target)
 
-            # part of partitioning - unwind partition but leave "tidl" marked Composites as is
-            mod = unpack_composites(mod, "tidl.composite", ["main"])
-            mod = relay.transform.InferType()(mod)
             # If more than 16 TIDL subgraphs, pull functions back into main function
             # and out of TIDL offload
             mod = prune_subgraphs(mod, compiler=self.tidl_target,
                                   num_subgraphs_to_keep=self.max_num_tidl_subgraphs,
                                   min_mac_threshold=None)
-            mod = unpack_composites(mod, "tidl", ["main"])
-            mod = relay.transform.InferType()(mod)
+            # After partitioning, unwind tidl.composite fused pattern combinations
+            mod = unpack_composites(mod, "tidl.composite", mod.get_global_vars())
             mod = flatten_tuple_params(mod, self.tidl_target)
             mod = relay.transform.InferType()(mod)
         else:  # no TIDL offload, need to unpack tidl composites
-            mod = unpack_composites(mod, self.tidl_target)
+            mod = unpack_composites(mod, self.tidl_target, mod.get_global_vars())
             mod = relay.transform.InferType()(mod)
 
         #============= Post-partition transformations  ==============
