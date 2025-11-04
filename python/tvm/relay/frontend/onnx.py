@@ -2083,7 +2083,7 @@ class MatMul(OnnxOpConverter):
         status, inputs, new_inputs = get_func_inputs(inputs)
         # End TI
         # Need to check input shape as batch matmul must be supported.
-        #Begin TI
+        # Begin TI
         out = matmul_out_dtype(inputs, out_dtype=infer_type(inputs[0]).checked_type.dtype)
         if status:
             func = relay.Function(new_inputs, out).with_attr("Composite", "tidl.matmul")
@@ -4664,6 +4664,14 @@ class TopK(OnnxOpConverter):
     def _impl_v1(cls, inputs, attr, params):
         if len(inputs) != 2:
             raise ValueError("Expect 2 input only")
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        attr_sorted = attr.get("sorted", 1)
+        if attr_sorted != 1:
+            raise ValueError("TopK operator with 'sorted=0' (unsorted output) is not supported by TVM.")
+
+        # End TI
         axis = attr.get("axis", -1)
         largest = attr.get("largest", 1)
 
@@ -4677,15 +4685,16 @@ class TopK(OnnxOpConverter):
             argsort = _op.argsort(inputs[0], axis=axis, dtype="int64")
             begin = [0] * ndim
             stride = [1] * ndim
+            # Use int32 max instead of int64 max to avoid overflow during DynamicToStatic
             end = _op.concatenate(
                 [
-                    _op.const([np.iinfo(np.int64).max] * axis, dtype="int64"),
+                    _op.const([np.iinfo(np.int32).max] * axis, dtype="int64"),
                     inputs[1],
-                    _op.const([np.iinfo(np.int64).max] * (ndim - axis - 1), dtype="int64"),
+                    _op.const([np.iinfo(np.int32).max] * (ndim - axis - 1), dtype="int64"),
                 ],
                 axis=0,
             )
-            return _expr.TupleWrapper(
+            out = _expr.TupleWrapper(
                 _expr.Tuple(
                     [
                         _op.strided_slice(sort, begin, end, stride),
@@ -4694,8 +4703,28 @@ class TopK(OnnxOpConverter):
                 ),
                 2,
             )
+        else:
+            out = _op.topk(inputs[0], inputs[1], axis=axis, dtype="int64")
+        # Begin TI
+        if status:
+            # TopK returns a TupleWrapper, extract the underlying tuple for relay.Function
+            # Get the tuple size before extracting
+            tuple_size = len(out) if isinstance(out, _expr.TupleWrapper) else None
+            out_for_func = out.astuple() if isinstance(out, _expr.TupleWrapper) else out
 
-        return _op.topk(inputs[0], inputs[1], axis=axis, dtype="int64")
+            # Create function first
+            func = relay.Function(new_inputs, out_for_func, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.topk")
+
+            call = relay.Call(func, inputsOrig)
+
+            # Wrap the result back in TupleWrapper to maintain the same interface
+            if tuple_size is not None:
+                return _expr.TupleWrapper(call, tuple_size)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class Range(OnnxOpConverter):

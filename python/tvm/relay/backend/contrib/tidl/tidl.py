@@ -1756,6 +1756,7 @@ class TIDLImport:
                 visited_getitem = super().visit_tuple_getitem(getitem)
                 if getitem.tuple_value in self.all_nodes_tidl and \
                    isinstance(getitem.tuple_value, relay.expr.Call) and \
+                   isinstance(getitem.tuple_value.op, tvm.ir.Op) and \
                    getitem.tuple_value.op.name == 'nn.batch_norm' and \
                    getitem.index == 0:
                     var_name = self.get_tidl_layer_varname(getitem.tuple_value)
