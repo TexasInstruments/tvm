@@ -1817,7 +1817,6 @@ class TIDLAnnotation:
         self._register_constrained_op("split")
         self._register_constrained_op("strided_slice")
         self._register_constrained_op("image.resize2d")
-        self._register_constrained_op("image.grid_sample")
         self._register_constrained_op("log")
         # "clip" is supported with constraints in J7
         self._register_constrained_op("clip")

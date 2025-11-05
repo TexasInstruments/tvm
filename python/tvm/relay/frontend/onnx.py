@@ -830,7 +830,7 @@ class BatchNorm(OnnxOpConverter):
     def _impl_v1(cls, inputs, attr, params):
         # TODO(zhreshold): 'spatial' is not properly handled here.
         # TODO(vvchernov): 'training_mode' (onnx tag) is not correctly handled, ignore for now
-        # Begin TI: 
+        # Begin TI:
         if "epsilon" not in attr:
             attr["epsilon"] = 1e-5
         # End TI
@@ -4276,7 +4276,7 @@ class Resize(OnnxOpConverter):
             size = _op.cast(shape_of(inputs[0]), scale_dtype) * scale
 
         return cls.v11_13_common(inputs, size, attr, params)
-    
+
     # Begin TI
     # Unit test cases cover tests with Resize Opset v19
     # 'antialias' and 'axes' attribute have been added in Opset v18
@@ -4292,7 +4292,7 @@ class Resize(OnnxOpConverter):
         if axes is not None:
             if scale is not None:
                 scale = cls.expand_scale(scale, len(infer_shape(inputs[0])), axes=axes)
-            
+
             if size is not None:
                 size = cls.expand_size(size, inputs[0], axes)
 
@@ -4318,7 +4318,7 @@ class Resize(OnnxOpConverter):
             scale_dtype = scale_type.checked_type.dtype
             assert len(scale_shape) != 0, "One of scale or size should be passed."
             size = _op.cast(shape_of(inputs[0]), scale_dtype) * scale
-        
+
         nc_scale = fold_constant(
             _op.strided_slice(
                 _op.divide(
@@ -4344,7 +4344,7 @@ class Resize(OnnxOpConverter):
                 attr
             )
         )
-    
+
     def expand_size(attr, X, axes):
         return fold_constant(
             relay.scatter_nd(
@@ -6257,6 +6257,10 @@ class GridSample(OnnxOpConverter):
 
     @classmethod
     def _impl_v16(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         grid = inputs[1]
         # onnx grid is of shape (N, H, W, 2) which should be transposed to (N, 2, H, W) for relay
         grid = _op.transform.transpose(grid, axes=(0, 3, 1, 2))
@@ -6264,9 +6268,18 @@ class GridSample(OnnxOpConverter):
         padding_mode: str = attr.get("padding_mode", b"zeros").decode("utf-8")
         # onnx default is 0 which should be changed to False in relay
         align_corners = attr.get("align_corners", 0) != 0
-        return _op.image.grid_sample(
+        out = _op.image.grid_sample(
             inputs[0], grid, method, padding_mode=padding_mode, align_corners=align_corners
         )
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.grid_sample")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class Bernoulli(OnnxOpConverter):
