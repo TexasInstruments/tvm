@@ -2761,13 +2761,13 @@ class Unsqueeze(OnnxOpConverter):
                 func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
                 func = func.with_attr("Composite", "tidl.unsqueeze")
                 call = relay.Call(func, inputsOrig)
-                print("call ",call)
                 return call
             else:
                 return out
             
         else:
-            raise NotImplementedError(f"Variable axis is not supported")
+            raise NotImplementedError(f"Unsqueeze: Variable axis is not supported")
+        #TVM backend doesnot handle variable axis (dynamic unsqueeze)
         # End TI
         rank_input = len(infer_type(inputs[0]).checked_type.shape)
         num_new_axis = int(infer_type(inputs[1]).checked_type.shape[0])
@@ -2786,17 +2786,7 @@ class Unsqueeze(OnnxOpConverter):
                 axis >= relay.const(0, "int64"), axis, axis + relay.const(rank_output, "int64")
             )
             result = _op.expand_dims(result, axis)
-        # return result
-        out = result
-        # Begin TI
-        if status:
-            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
-            func = func.with_attr("Composite", "tidl.unsqueeze")
-            call = relay.Call(func, inputsOrig)
-            return call
-        else:
-            return out
-        # End TI
+        return result
 
 
 class Squeeze(OnnxOpConverter):
@@ -3445,13 +3435,24 @@ class Reduce(OnnxOpConverter):
 
         if noop_with_empty_axes and num_axis == 0:
             return inputs[0]
-
+        # Begin TI
+        data = inputs[0]
+        data_rank = len(infer_shape(data))
+        # End TI
         if len(inputs) == 2:
             if isinstance(inputs[1], _expr.Constant):
-                # Get axis and unpack scalar
-                constant_axis = int(inputs[1].data.numpy()[0])
-                return cls.run_calculation([inputs[0]], constant_axis, attr.get("keepdims", True))
-
+        # Begin TI
+                axes = inputs[1]
+                if(axes is not None):
+                    # Get axis and unpack scalar 
+                    constant_axis = axes.data.numpy().astype("int64") #extract axis input
+                    # TVM backend was unable to handle -ve axis causing the output size mismatch and compilation failures
+                    constant_axis = np.array([ax if ax >= 0 else data_rank + ax  for ax in constant_axis]) 
+                    constant_axis = constant_axis.tolist()
+                    # constant_axis = int(inputs[1].data.numpy()[0])
+                    if(len(constant_axis)!=0):
+                        return cls.run_calculation([inputs[0]], constant_axis, attr.get("keepdims", True))
+        # End TI
             if num_axis > 0:
                 raise ValueError("Dynamic Reduce is not supported yet!")
 

@@ -1845,6 +1845,10 @@ class TIDLAnnotation:
         self._register_constrained_op("sinh")
         self._register_constrained_op("sqrt")
         self._register_constrained_op("tan")
+        self._register_constrained_op("max")
+        self._register_constrained_op("min")
+        self._register_constrained_op("sum")
+
 
         tidl_annotations_registered = True
 
