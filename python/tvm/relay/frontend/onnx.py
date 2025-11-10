@@ -2764,7 +2764,7 @@ class Unsqueeze(OnnxOpConverter):
                 return call
             else:
                 return out
-            
+
         else:
             raise NotImplementedError(f"Unsqueeze: Variable axis is not supported")
         #TVM backend doesnot handle variable axis (dynamic unsqueeze)
@@ -3345,6 +3345,7 @@ class HardSigmoid(OnnxOpConverter):
         # Begin TI
         inputsOrig = copy.copy(inputs)
         status, inputs, new_inputs = get_func_inputs(inputs)
+        custom_attrs = {k: attr[k] for k in attr.keys()}
         # End TI
         alpha = attr.get("alpha", 0.2)
         beta = attr.get("beta", 0.5)
@@ -3353,7 +3354,8 @@ class HardSigmoid(OnnxOpConverter):
         out = AttrCvt("clip")([transformX], attr)
         # Begin TI
         if status:
-            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **custom_attrs))
             func = func.with_attr("Composite", "tidl.hard_sigmoid")
             call = relay.Call(func, inputsOrig)
             return call
@@ -3370,6 +3372,7 @@ class HardSwish(OnnxOpConverter):
         # Begin TI
         inputsOrig = copy.copy(inputs)
         status, inputs, new_inputs = get_func_inputs(inputs)
+        custom_attrs = {k: attr[k] for k in attr.keys()}
         # End TI
         alpha = attr.get("alpha", 1 / 6)
         beta = attr.get("beta", 0.5)
@@ -3378,7 +3381,7 @@ class HardSwish(OnnxOpConverter):
         out = inputs[0] * AttrCvt("clip")([transformX], attr)
         # Begin TI
         if status:
-            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **custom_attrs))
             func = func.with_attr("Composite", "tidl.hard_swish")
             call = relay.Call(func, inputsOrig)
             return call
@@ -3444,10 +3447,10 @@ class Reduce(OnnxOpConverter):
         # Begin TI
                 axes = inputs[1]
                 if(axes is not None):
-                    # Get axis and unpack scalar 
+                    # Get axis and unpack scalar
                     constant_axis = axes.data.numpy().astype("int64") #extract axis input
                     # TVM backend was unable to handle -ve axis causing the output size mismatch and compilation failures
-                    constant_axis = np.array([ax if ax >= 0 else data_rank + ax  for ax in constant_axis]) 
+                    constant_axis = np.array([ax if ax >= 0 else data_rank + ax  for ax in constant_axis])
                     constant_axis = constant_axis.tolist()
                     # constant_axis = int(inputs[1].data.numpy()[0])
                     if(len(constant_axis)!=0):
