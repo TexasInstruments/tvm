@@ -180,6 +180,13 @@ class AnnotateTargetRewriter : public ExprRewriter {
     // Determine compiler begin target.
     std::string op_target = (target == "") ? ref_target : target;
 
+    // Begin TI
+    if (op_target == "") // Neither of the input args has target populated (can happen in concat unit test kind of scenario )
+    {
+      op_target = default_target; // We don't want op_target to be "" in annotation
+    }
+    // End TI
+
     #if 0
     if (ref_target != "") {
     // Begin TI
