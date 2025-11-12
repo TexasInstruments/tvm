@@ -880,6 +880,9 @@ class Conv(OnnxOpConverter):
 
         if "auto_pad" in attr:
             attr["auto_pad"] = attr["auto_pad"].decode("utf-8")
+            # Begin TI
+            auto_pad_value = attr["auto_pad"]
+            # End TI
             if attr["auto_pad"] in ("SAME_UPPER", "SAME_LOWER"):
                 # Warning: Convolution does not yet support dynamic shapes,
                 # one will need to run dynamic_to_static on this model after import
@@ -915,7 +918,10 @@ class Conv(OnnxOpConverter):
         )([data, kernel], attr, params)
 
         custom_attrs = {k: out.attrs[k] for k in out.attrs.keys()}
-
+        # Begin TI
+        if('auto_pad_value' in locals()):
+            custom_attrs["auto_pad"] = auto_pad_value
+        # End TI
         use_bias = len(inputs) == 3
         if use_bias:
             out = _op.nn.bias_add(out, inputs[2])
