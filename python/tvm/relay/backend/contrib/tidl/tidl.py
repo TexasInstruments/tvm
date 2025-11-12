@@ -2359,11 +2359,12 @@ class TIOffloadCompiler:
 
             if enable_tidl_offload:
                 self.tidl_import_lib = os.path.join(self.tidl_tools_path, "tidl_model_import_relay.so")
-        
+
         else:
             sys.exit("Unsupported TIDL platform: " + platform)
         assert self.artifacts_folder, "artifacts_folder must be specified for TIDL compilation"
         self.temp_folder = os.path.join(self.artifacts_folder, 'tempDir/')
+
         # Set environment variable for C++ codegen to find temp folder
         os.environ["TIDL_ARTIFACTS_TEMP_FOLDER"] = self.temp_folder
 
@@ -2377,7 +2378,7 @@ class TIOffloadCompiler:
 
         if self.debug_level:
             os.environ["TIDL_RELAY_IMPORT_DEBUG"] = str(self.debug_level)
-        
+
         self.tidl_relay_import_debug = os.environ.get("TIDL_RELAY_IMPORT_DEBUG")
         self.reuse_tidl_artifacts = reuse_tidl_artifacts
 
@@ -2427,9 +2428,7 @@ class TIOffloadCompiler:
         print(f"Total Nodes - {total_nodes_original}")
 
         # TIDL-specific handling of object detection specifics. Skip if user doesn't want TIDL offload
-        if (self.max_num_tidl_subgraphs > 0 and self.od_options and
-            'object_detection:meta_layers_names_list' in self.od_options and
-            'object_detection:meta_arch_type' in self.od_options):
+        if (self.max_num_tidl_subgraphs > 0 and self.od_options):
             tidl_od_meta_layers_names_list = self.od_options['object_detection:meta_layers_names_list']
             tidl_od_meta_arch_type = self.od_options['object_detection:meta_arch_type']
             tidl_od_num_graph_outputs = len(mod_orig['main'].body.fields) \

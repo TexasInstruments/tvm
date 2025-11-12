@@ -174,7 +174,6 @@ target device without relying on RPC. See the following resources on how to do s
    hls
    arm_compute_lib
    tensorrt
-   tidl
    vitis_ai
    bnns
    mrvl

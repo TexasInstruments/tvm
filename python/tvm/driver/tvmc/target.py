@@ -43,9 +43,7 @@ INTERNAL_TO_HELP = {"runtime.String": " string", "IntImm": "", "Array": " option
 
 def _valid_target_kinds():
     codegen_names = tvmc.composite_target.get_codegen_names()
-    # Hide c7x target from CLI - it's used internally by TIDL but not exposed to users
-    excluded_targets = {"c7x"}
-    return filter(lambda target: target not in codegen_names and target not in excluded_targets, Target.list_kinds())
+    return filter(lambda target: target not in codegen_names, Target.list_kinds())
 
 
 def _generate_target_kind_args(parser, kind_name):
@@ -75,26 +73,21 @@ def _generate_codegen_args(parser, codegen_name):
 
                     # Retrieve the default value string from attrs(field) of config node
                     # Eg: "default=target_cpu_name"
-                    target_option_default_str = ""
-                    if "default=" in field.type_info:
-                        target_option_default_str = field.type_info.split("default=")[1]
+                    target_option_default_str = field.type_info.split("default=")[1]
 
                     # Extract the defalut value based on the tvm type
                     if target_option_default_str and tvm_type == "runtime.String":
                         default_value = target_option_default_str
                     elif target_option_default_str and tvm_type == "IntImm":
                         # Extract the numeric value from the python Int string, Eg: T.int64(8)
-                        if "(" in target_option_default_str and ")" in target_option_default_str:
-                            str_slice = target_option_default_str.split("(")[1]
-                            default_value = str_slice.split(")")[0]
+                        str_slice = target_option_default_str.split("(")[1]
+                        default_value = str_slice.split(")")[0]
 
                     if codegen["pass_default"] is False:
                         default_value = None
 
-                    # Convert underscores to hyphens for user-friendly CLI argument names
-                    cli_option_name = target_option.replace('_', '-')
                     target_group.add_argument(
-                        f"--target-{codegen_name}-{cli_option_name}",
+                        f"--target-{codegen_name}-{target_option}",
                         type=python_type,
                         help=field.description,
                         default=default_value,
@@ -137,20 +130,11 @@ def _reconstruct_codegen_args(args, codegen_name):
             for tvm_type in INTERNAL_TO_NATIVE_TYPE:
                 if field.type_info.startswith(tvm_type):
                     target_option = field.name
-                    # Convert underscores to hyphens for CLI argument lookup
-                    cli_option_name = target_option.replace('_', '-')
                     var_name = (
-                        f"target_{codegen_name.replace('-', '_')}_{cli_option_name.replace('-', '_')}"
+                        f"target_{codegen_name.replace('-', '_')}_{target_option.replace('-', '_')}"
                     )
                     option_value = getattr(args, var_name)
                     if option_value is not None:
-                        # Special handling for Array types - convert comma-separated string to TVM Array
-                        if tvm_type == "Array" and isinstance(option_value, str):
-                            # Check if this is an array of floats (for input_mean, input_scale)
-                            if "FloatImm" in field.type_info or target_option in ["input_mean", "input_scale"]:
-                                # Parse comma-separated string and convert to TVM Array of FloatImm
-                                float_list = [float(x.strip()) for x in option_value.split(',')]
-                                option_value = tvm.runtime.convert([tvm.tir.FloatImm("float32", x) for x in float_list])
                         codegen_options[target_option] = option_value
     return codegen_options
 

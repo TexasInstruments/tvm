@@ -52,130 +52,6 @@ from .workspace_pools import generate_workspace_pools_args, workspace_pools_reco
 logger = logging.getLogger("TVMC")
 
 
-# Begin TI
-def _configure_tidl_target(args, tvmc_model: TVMCModel) -> None:
-    """Configure TIDL target settings through TVM composite target system.
-
-    Parameters
-    ----------
-    args : argparse.Namespace
-        Command line arguments containing TIDL-specific options
-    tvmc_model : TVMCModel
-        The model to compile
-
-    Returns
-    -------
-    None
-        Returns None to signal continuation with normal compilation
-    """
-    # Validate required TIDL arguments
-    if not hasattr(args, 'target_tidl_platform') or args.target_tidl_platform is None:
-        raise TVMCException("--target-tidl-platform is required when using tidl target.")
-
-    # Validate required input_mean and input_scale parameters
-    input_mean = getattr(args, 'target_tidl_input_mean', None)
-    input_scale = getattr(args, 'target_tidl_input_scale', None)
-
-    if input_mean is None:
-        raise TVMCException("--target-tidl-input-mean is required when using tidl target. "
-                           "Provide 3 values for RGB channels, e.g., --target-tidl-input-mean 123.675 116.28 103.53")
-    if input_scale is None:
-        raise TVMCException("--target-tidl-input-scale is required when using tidl target. "
-                           "Provide 3 values for RGB channels, e.g., --target-tidl-input-scale 0.017125 0.017507 0.017429")
-
-    # Convert from list or string arguments
-    # Argparse with type=str gives us a string, need to parse it into a TVM Array
-    if input_mean:
-        if isinstance(input_mean, str):
-            # Parse comma-separated string to list of floats, then convert to TVM Array
-            mean_list = [float(x.strip()) for x in input_mean.split(',')]
-            # Convert to TVM Array of FloatImm
-            input_mean = tvm.runtime.convert([tvm.tir.FloatImm("float32", x) for x in mean_list])
-        elif isinstance(input_mean, list) and len(input_mean) == 3:
-            # Convert list to TVM Array of FloatImm
-            input_mean = tvm.runtime.convert([tvm.tir.FloatImm("float32", float(x)) for x in input_mean])
-
-    if input_scale:
-        if isinstance(input_scale, str):
-            # Parse comma-separated string to list of floats, then convert to TVM Array
-            scale_list = [float(x.strip()) for x in input_scale.split(',')]
-            # Convert to TVM Array of FloatImm
-            input_scale = tvm.runtime.convert([tvm.tir.FloatImm("float32", x) for x in scale_list])
-        elif isinstance(input_scale, list) and len(input_scale) == 3:
-            # Convert list to TVM Array of FloatImm
-            input_scale = tvm.runtime.convert([tvm.tir.FloatImm("float32", float(x)) for x in input_scale])
-
-    # Build TIDL configuration for pass context and store it globally for partition function
-    # Get TIDL tools path from environment variable
-    import os
-    tidl_tools_path = os.getenv("TIDL_TOOLS_PATH")
-    if tidl_tools_path is None:
-        raise TVMCException("Environment variable TIDL_TOOLS_PATH is not set!")
-
-    tidl_config = {
-        "platform": args.target_tidl_platform,
-        "input_mean": input_mean,
-        "input_scale": input_scale,
-        "artifacts_folder": getattr(args, 'target_tidl_artifacts_folder', './tidl_artifacts'),
-        "tensor_bits": getattr(args, 'target_tidl_tensor_bits', 8),
-        "enable_offload": getattr(args, 'target_tidl_enable_offload', False),
-        "enable_c7x_codegen": getattr(args, 'target_tidl_enable_c7x_codegen', False),
-        "compile_for_device": getattr(args, 'target_tidl_compile_for_device', False),
-        "deny_list": getattr(args, 'target_tidl_deny_list', ''),
-        "tidl_tools_path": tidl_tools_path,
-        "od_meta_arch_type": getattr(args, 'target_tidl_od_meta_arch_type', -1),
-        "od_meta_layers_names_list": getattr(args, 'target_tidl_od_meta_layers_names_list', ''),
-    }
-
-    # Load calibration data from pickle file if provided
-    calib_data_file = getattr(args, 'target_tidl_calibration_data', None)
-    if calib_data_file and os.path.exists(calib_data_file):
-        import pickle
-        logger.info(f"Loading calibration data from {calib_data_file}")
-        try:
-            with open(calib_data_file, 'rb') as f:
-                graph_input_list = pickle.load(f)
-            tidl_config["graph_input_list"] = graph_input_list
-            logger.info(f"Loaded {len(graph_input_list)} calibration samples")
-        except Exception as e:
-            logger.warning(f"Failed to load calibration data: {e}")
-            tidl_config["graph_input_list"] = []
-    else:
-        tidl_config["graph_input_list"] = []
-        if calib_data_file:
-            logger.warning(f"Calibration data file not found: {calib_data_file}")
-
-    # Store tidl_config globally so partition_for_c7x can access it
-    import tvm.relay.op.contrib.tidl.tidl as tidl_module
-    tidl_module._global_tidl_config = tidl_config
-
-    # Set up the target - include tidl composite target
-    base_targets = []
-
-    # Always include tidl composite target for partitioning
-    base_targets.append("tidl")
-
-    # Use C codegen target for cl7x compiler when c7x codegen is enabled
-    if getattr(args, 'target_tidl_enable_c7x_codegen', False):
-        if getattr(args, 'target_tidl_compile_for_device', False):
-            base_targets.append("c -march=aarch64")
-        else:
-            base_targets.append("c")
-    else:
-        # Use llvm when not using c7x codegen
-        if getattr(args, 'target_tidl_compile_for_device', False):
-            base_targets.append("llvm -mtriple=aarch64-linux-gnu")
-        else:
-            base_targets.append("llvm")
-
-    # Override the target args to use our computed target
-    args.target = ", ".join(base_targets)
-
-    # Continue with standard TVM compilation pipeline which will use our tidl composite target
-    return None  # Signal to continue with normal compilation
-# End TI
-
-
 @register_parser
 def add_compile_parser(subparsers, _, json_params):
     """Include parser for 'compile' subcommand"""
@@ -298,8 +174,6 @@ def add_compile_parser(subparsers, _, json_params):
         "e.g. '--print-ir-after [tir.SplitHostDevice,tir.ConvertSSA]' ",
         default="",
     )
-
-
     for one_entry in json_params:
         parser.set_defaults(**one_entry)
 
@@ -327,15 +201,6 @@ def drive_compile(args):
         )
 
     tvmc_model = frontends.load_model(args.FILE, args.model_format, args.input_shapes)
-
-    # Begin TI
-    # Check if target is TIDL and handle TIDL-specific configuration
-    if "tidl" in args.target.lower():
-        result = _configure_tidl_target(args, tvmc_model)
-        if result is not None:
-            return result
-        # If result is None, continue with normal compilation using the updated args
-    # End TI
 
     dump_code = [x.strip() for x in args.dump_code.split(",")] if args.dump_code else None
 
@@ -608,48 +473,6 @@ def compile_model(
                 dumps[source_type] = lib.get_source(source_type)
                 for smod in lib.imported_modules:
                     dumps[smod.type_key] = smod.get_source()
-
-        # TIDL parameter optimization: remove redundant parameters for TIDL targets
-        tvmc_model._optimized_params = None
-
-        # Check if this is a TIDL compilation
-        is_tidl_compilation = False
-
-        # Check for TIDL-related imported modules
-        if hasattr(graph_module, 'get_lib'):
-            lib = graph_module.get_lib()
-            imported_modules = lib.imported_modules if hasattr(lib, 'imported_modules') else []
-            for mod in imported_modules:
-                if hasattr(mod, 'type_key') and 'tidl' in mod.type_key.lower():
-                    is_tidl_compilation = True
-                    break
-
-        # Check original target string
-        if "tidl" in target.lower():
-            is_tidl_compilation = True
-
-        # Apply TIDL parameter optimization
-        if is_tidl_compilation:
-            logger.info("Applying TIDL parameter optimization...")
-            if hasattr(graph_module, 'get_params'):
-                params = graph_module.get_params().copy()
-                param_count_before = len(params)
-                total_size_before = sum(p.numpy().nbytes for p in params.values()) / (1024*1024)
-
-                # Remove TIDL parameters (already embedded in TIDL artifacts)
-                import tvm.relay.backend.contrib.tidl.tidl as tidl_module
-                tidl_module.remove_tidl_params(params)
-
-                param_count_after = len(params)
-                total_size_after = sum(p.numpy().nbytes for p in params.values()) / (1024*1024)
-                size_saved = total_size_before - total_size_after
-
-                # Store optimized params for use during export
-                tvmc_model._optimized_params = params
-
-                if size_saved > 0:
-                    logger.info(f"TIDL optimization: removed {param_count_before - param_count_after} parameters, "
-                               f"saved {size_saved:.1f}MB")
 
         # Create a new tvmc model package object from the graph definition.
         package_path = tvmc_model.export_package(

@@ -249,9 +249,9 @@ class TVMCModel(object):
         package_path : str
             The path that the package was saved to.
         """
-        lib_name = "deploy_lib." + lib_format
-        graph_name = "deploy_graph.json"
-        param_name = "deploy_param.params"
+        lib_name = "mod." + lib_format
+        graph_name = "mod.json"
+        param_name = "mod.params"
 
         temp = self._tmp_dir
         if package_path is None:
@@ -276,11 +276,7 @@ class TVMCModel(object):
             graph_file.write(executor_factory.get_graph_json())
 
         with open(temp.relpath(param_name), "wb") as params_file:
-            # Use optimized parameters if available (for TIDL optimization)
-            if hasattr(self, '_optimized_params') and self._optimized_params is not None:
-                params_file.write(relay.save_param_dict(self._optimized_params))
-            else:
-                params_file.write(relay.save_param_dict(executor_factory.get_params()))
+            params_file.write(relay.save_param_dict(executor_factory.get_params()))
 
         # Package up all the temp files into a tar file.
         with tarfile.open(package_path, "w") as tar:
@@ -425,7 +421,7 @@ class TVMCPackage(object):
 
         else:
             # Classic format
-            classic_lib_name_so = "deploy_lib.so"
+            classic_lib_name_so = "mod.so"
             classic_lib_name_tar = "mod.tar"
 
             # VM format
@@ -452,14 +448,8 @@ class TVMCPackage(object):
             graph, params = None, None
             self.executor_type = "vm"
             if self.type == "classic":
-                # Begin TI
-                #
-                # The default name is mod.json/mod.params, this was
-                # changed to deploy_*.*
-                graph = temp.relpath("deploy_graph.json")
-                params = temp.relpath("deploy_param.params")
-                # End TI
-
+                graph = temp.relpath("mod.json")
+                params = temp.relpath("mod.params")
                 self.executor_type = "graph"
 
         if params is not None:

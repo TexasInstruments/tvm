@@ -28,8 +28,6 @@
 #include <tvm/runtime/module.h>
 #include <tvm/runtime/object.h>
 #include <tvm/ir/module.h>
-
-#include "compiler_attrs.h"
 #include <tvm/runtime/registry.h>
 #include <dmlc/thread_local.h>
 
@@ -547,9 +545,7 @@ class TIDLJ7C7xModuleCodeGen : public CSourceModuleCodegenBase {
     {
       // Drop off "_c7x" suffix that was added as a workaround (see tidl_build_c7x_mod.py)
       std::string input_name = var->name_hint();  // "data_c7x"
-      if (input_name.size() >= 4 && input_name.substr(input_name.size() - 4) == "_c7x") {
-        input_name.resize(input_name.size() - 4);   // "data"
-      }
+      input_name.resize(input_name.size() - 4);   // "data"
       c7xgraph_info.input_names.push_back(input_name);
       c7xgraph_info.tensor_sizes.push_back(
                                  ComputeTensorTypeSize(var->checked_type().as<TensorTypeNode>()));
