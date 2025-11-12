@@ -68,6 +68,41 @@ def add_compile_parser(subparsers, _, json_params):
         default="",
         help="the cross compiler options to generate target libraries, e.g. '-mfpu=neon-vfpv4'.",
     )
+    # Begin TI
+    parser.add_argument(
+        "--enable-tidl-offload",
+        type=int,
+        choices=[0, 1],
+        default=1,
+        help="enable TIDL offload (default: 1, used when --target=tidl).",
+    )
+    parser.add_argument(
+        "--compile-for-device",
+        type=int,
+        choices=[0, 1],
+        default=1,
+        help="compile for device (aarch64) instead of host (x86) (default: 1, used when --target=tidl).",
+    )
+    parser.add_argument(
+        "--c7x-codegen",
+        type=int,
+        choices=[0, 1],
+        default=0,
+        help="enable C7x code generation (default: 0, used when --target=tidl).",
+    )
+    parser.add_argument(
+        "--tidl-calibration-input",
+        type=str,
+        default=None,
+        help="path to calibration input .npz file (required when --enable-tidl-offload=1, used when --target=tidl).",
+    )
+    parser.add_argument(
+        "--tidl-config",
+        type=str,
+        default=None,
+        help="path to YAML config file containing compile_options (used when --target=tidl).",
+    )
+    # End TI
     generate_transform_args(parser)
     parser.add_argument(
         "--dump-code",
@@ -200,6 +235,12 @@ def drive_compile(args):
             f"Input file '{args.FILE}' doesn't exist, is a broken symbolic link, or a directory."
         )
 
+    # Begin TI
+    # Early exit for tidl target - use lightweight direct compilation path
+    if args.target == "tidl":
+        return drive_compile_tidl(args)
+    # End TI
+
     tvmc_model = frontends.load_model(args.FILE, args.model_format, args.input_shapes)
 
     dump_code = [x.strip() for x in args.dump_code.split(",")] if args.dump_code else None
@@ -238,6 +279,320 @@ def drive_compile(args):
     )
 
     return 0
+
+
+# Begin TI
+def _get_model_input_details(model_path: str) -> List[Dict[str, Any]]:
+    """Get input tensor details from ONNX model.
+
+    Parameters
+    ----------
+    model_path : str
+        Path to the ONNX model file.
+
+    Returns
+    -------
+    List[Dict[str, Any]]
+        List of dictionaries containing 'name', 'shape', and 'dtype' for each input.
+    """
+    import numpy as np
+    import onnx
+
+    if not model_path.endswith('.onnx'):
+        raise TVMCException(f"Only ONNX models are supported, got: {model_path}")
+
+    model = onnx.load(model_path)
+    input_details = []
+    for inp in model.graph.input:
+        name = inp.name
+        shape = [dim.dim_value if dim.dim_value > 0 else 1 for dim in inp.type.tensor_type.shape.dim]
+        dtype_map = {
+            1: np.float32,   # FLOAT
+            2: np.uint8,     # UINT8
+            3: np.int8,      # INT8
+            6: np.int32,     # INT32
+            7: np.int64,     # INT64
+            10: np.float16,  # FLOAT16
+        }
+        dtype = dtype_map.get(inp.type.tensor_type.elem_type, np.float32)
+        input_details.append({"name": name, "shape": shape, "dtype": dtype})
+    return input_details
+
+
+def _load_calibration_data(
+    npz_path: str,
+    input_details: List[Dict[str, Any]],
+    num_frames: int
+) -> List[Dict[str, Any]]:
+    """Load calibration data from .npz file.
+
+    Parameters
+    ----------
+    npz_path : str
+        Path to the .npz file containing calibration data.
+    input_details : List[Dict[str, Any]]
+        List of input tensor details from the model.
+    num_frames : int
+        Number of calibration frames to load.
+
+    Returns
+    -------
+    List[Dict[str, Any]]
+        List of dictionaries, each mapping input names to numpy arrays.
+    """
+    import numpy as np
+
+    calib_data = np.load(npz_path)
+    calibration_list = []
+
+    # Build list of calibration inputs
+    for frame_idx in range(num_frames):
+        input_dict = {}
+        for inp in input_details:
+            name = inp['name']
+            dtype = inp['dtype']
+            expected_shape = inp['shape']
+
+            # Try to find matching data in npz file
+            # The npz might have data as single array or per-frame arrays
+            if name in calib_data:
+                data = calib_data[name]
+                # If single frame repeated, use it directly
+                if len(data.shape) == len(expected_shape):
+                    if data.shape != tuple(expected_shape):
+                        logger.warning(
+                            f"Shape mismatch for input '{name}': expected {expected_shape}, "
+                            f"got {data.shape}. Will attempt to use anyway."
+                        )
+                    input_dict[name] = data.astype(dtype)
+                # If multiple frames stacked, extract the specific frame
+                elif data.shape[0] > frame_idx:
+                    frame_data = data[frame_idx]
+                    if frame_data.shape != tuple(expected_shape):
+                        logger.warning(
+                            f"Shape mismatch for input '{name}' frame {frame_idx}: "
+                            f"expected {expected_shape}, got {frame_data.shape}. Will attempt to use anyway."
+                        )
+                    input_dict[name] = frame_data.astype(dtype)
+                else:
+                    # Reuse first frame if not enough frames
+                    input_dict[name] = data[0].astype(dtype)
+            else:
+                # If name not found, try to use first array in npz
+                logger.warning(
+                    f"Input name '{name}' not found in npz file. "
+                    f"Available names: {list(calib_data.keys())}. Attempting to use first array."
+                )
+                arrays = list(calib_data.values())
+                if arrays:
+                    data = arrays[0]
+                    if len(data.shape) == len(expected_shape):
+                        input_dict[name] = data.astype(dtype)
+                    elif data.shape[0] > frame_idx:
+                        input_dict[name] = data[frame_idx].astype(dtype)
+                    else:
+                        input_dict[name] = data[0].astype(dtype)
+                else:
+                    raise TVMCException(
+                        f"No calibration data found in {npz_path}. "
+                        f"The npz file appears to be empty or has no valid arrays."
+                    )
+
+        calibration_list.append(input_dict)
+
+    return calibration_list
+
+
+def drive_compile_tidl(args):
+    """Invoke tidl.compile_model directly for TIDL compilation
+
+    Parameters
+    ----------
+    args: argparse.Namespace
+        Arguments from command line parser.
+
+    Returns
+    -------
+    int
+        Zero if successfully completed
+
+    """
+    import yaml
+    import numpy as np
+    from tvm.contrib import tidl
+
+    # args.FILE now points to the model file
+    model_path = args.FILE
+
+    if not os.path.isfile(model_path):
+        raise TVMCException(
+            f"Model file '{model_path}' doesn't exist or is not a file."
+        )
+
+    logger.info(f"Model path: {model_path}")
+
+    # Load YAML config if provided
+    delegate_options = {}
+    if args.tidl_config:
+        config_file = args.tidl_config
+        if not os.path.isfile(config_file):
+            raise TVMCException(
+                f"Config file '{config_file}' doesn't exist or is not a file."
+            )
+
+        with open(config_file, "r") as f:
+            config = yaml.safe_load(f)
+
+        logger.info(f"Loaded config from {config_file}")
+
+        if "compile_options" not in config:
+            raise TVMCException(
+                "Config file must contain 'compile_options' section."
+            )
+
+        delegate_options = config["compile_options"]
+
+    # Get command-line flags
+    enable_tidl_offload = bool(args.enable_tidl_offload)
+    compile_for_device = bool(args.compile_for_device)
+    c7x_codegen = args.c7x_codegen
+
+    # Merge c7x_codegen into delegate_options (command-line takes precedence)
+    delegate_options["advanced_options:c7x_codegen"] = c7x_codegen
+
+    # Validate calibration input is provided when tidl offload is enabled
+    if enable_tidl_offload and not args.tidl_calibration_input:
+        raise TVMCException(
+            "TIDL offload requires calibration input. "
+            "Please provide --tidl-calibration-input <path_to_npz_file>."
+        )
+
+    # Read TIDL_TOOLS_PATH from environment variable
+    tidl_tools_path = os.environ.get("TIDL_TOOLS_PATH")
+    if tidl_tools_path is not None:
+        delegate_options["tidl_tools_path"] = tidl_tools_path
+    elif enable_tidl_offload:
+        # Only raise error if TIDL offload is enabled
+        raise TVMCException(
+            "TIDL offload requires TIDL_TOOLS_PATH environment variable to be set."
+        )
+
+    # Set artifacts folder
+    if args.output:
+        artifacts_folder = args.output
+    else:
+        artifacts_folder = "./model-artifacts"
+
+    os.makedirs(artifacts_folder, exist_ok=True)
+    delegate_options["artifacts_folder"] = artifacts_folder
+    logger.info(f"Artifacts will be stored in: {artifacts_folder}")
+
+    # SOC environment variable must be present in the env, otherwise throw error
+    if "SOC" not in os.environ:
+        raise TVMCException(
+            "Environment variable SOC must be set (e.g., am68pa, am68a, am69a, am67a, am62a)."
+        )
+
+    platform = os.environ["SOC"]
+
+    # Get input shapes
+    if args.input_shapes:
+        input_shape_dict = args.input_shapes
+    else:
+        # Infer shapes from the model
+        logger.info("No input shapes provided, inferring from model...")
+        input_details = _get_model_input_details(model_path)
+        # Convert to format expected by compile_model: dict mapping names to tuples
+        input_shape_dict = {inp["name"]: tuple(inp["shape"]) for inp in input_details}
+
+    # Handle calibration inputs
+    calibration_input_list = []
+    if args.tidl_calibration_input:
+        inputs_path = args.tidl_calibration_input
+
+        if not os.path.isfile(inputs_path):
+            raise TVMCException(f"Calibration input file '{inputs_path}' doesn't exist.")
+
+        if not inputs_path.endswith('.npz'):
+            raise TVMCException(
+                f"Only .npz format is supported for calibration inputs, got: {inputs_path}."
+            )
+
+        logger.info(f"Loading calibration inputs from: {inputs_path}")
+
+        # Get input details from model
+        input_details = _get_model_input_details(model_path)
+
+        # Determine number of calibration frames
+        if "advanced_options:calibration_frames" in delegate_options:
+            calib_frames = delegate_options["advanced_options:calibration_frames"]
+        else:
+            calib_frames = 2  # Default
+
+        # Load the npz file to check how many frames are available
+        try:
+            calib_data = np.load(inputs_path)
+        except Exception as e:
+            raise TVMCException(f"Failed to load calibration data from '{inputs_path}': {str(e)}")
+
+        # Assume first array represents the frames
+        first_array = list(calib_data.values())[0]
+        available_frames = first_array.shape[0] if len(first_array.shape) > len(input_details[0]['shape']) else 1
+
+        # Handle calibration frames logic
+        if available_frames == 1:
+            # Single input - replicate for all frames
+            num_frames = calib_frames
+        elif available_frames > calib_frames:
+            # More inputs than needed - use only first N
+            num_frames = calib_frames
+            logger.warning(
+                f"Number of available frames ({available_frames}) exceeds calibration_frames ({calib_frames}). "
+                f"Using only first {num_frames} frames."
+            )
+        elif available_frames < calib_frames:
+            # Fewer inputs than needed - error
+            raise TVMCException(
+                f"Number of available frames ({available_frames}) is less than "
+                f"calibration_frames ({calib_frames})."
+            )
+        else:
+            # Exact match
+            num_frames = calib_frames
+
+        # Update calibration_frames in delegate_options to match actual frames used
+        delegate_options["advanced_options:calibration_frames"] = num_frames
+
+        # Load calibration data
+        calibration_input_list = _load_calibration_data(inputs_path, input_details, num_frames)
+        logger.info(f"Loaded {len(calibration_input_list)} calibration frames from {inputs_path}")
+
+    logger.info(
+        f"Compiling model for TIDL (platform={platform}, "
+        f"device={compile_for_device}, offload={enable_tidl_offload}, "
+        f"c7x_codegen={c7x_codegen})"
+    )
+
+    # Call tidl.compile_model directly
+    try:
+        status = tidl.compile_model(
+            platform=platform,
+            compile_for_device=compile_for_device,
+            enable_tidl_offload=enable_tidl_offload,
+            delegate_options=delegate_options,
+            calibration_input_list=calibration_input_list,
+            model_path=model_path,
+            input_shape_dict=input_shape_dict,
+        )
+
+        if not status:
+            raise TVMCException("TIDL compilation failed.")
+
+        logger.info("TIDL compilation completed successfully.")
+        return 0
+    except Exception as e:
+        raise TVMCException(f"Exception during TIDL compilation: {str(e)}")
+# End TI
 
 
 def compile_model(
