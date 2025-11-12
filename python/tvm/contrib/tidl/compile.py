@@ -186,7 +186,7 @@ def compile_model(platform: str,
       if find_dynamic_shape(mod):
         print("\n\nDynamic shape/network not supported by TVM+TIDL yet!!!\n\n")
         return False
-    mod = unpack_composites(mod,"tidl")
+    mod = unpack_composites(mod,"tidl", ["main"])
     fmod = relay.build(mod, target=target, params=params)
     params = fmod.get_params()
 
