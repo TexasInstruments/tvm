@@ -1142,7 +1142,6 @@ class ConvTranspose(OnnxOpConverter):
         if('auto_pad_value' in locals()):
             custom_attrs["auto_pad"] = auto_pad_value
         # End TI
-        print(custom_attrs)
         use_bias = len(inputs) == 3
         if use_bias:
             out = _op.nn.bias_add(out, inputs[2])
@@ -3292,25 +3291,59 @@ class ScatterND(OnnxOpConverter):
 
     @classmethod
     def _impl_v16(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         cls._inputs_check(inputs)
         reduction = cls._reduction_check(attr, ["update", "add", "mul"])
 
         indices_dim = len(infer_shape(inputs[1]))
         axes = list(range(indices_dim))
-        return _op.scatter_nd(
+        out = _op.scatter_nd(
             inputs[0], _op.transpose(inputs[1], axes[-1:] + axes[:-1]), inputs[2], reduction
         )
+                # Begin TI
+        if status:
+            # Decode byte strings in attr to regular strings to avoid type casting errors
+            if "reduction" in attr:
+                attr["reduction"]=attr["reduction"].decode("utf-8")
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.scatter_nd")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
+
 
     @classmethod
     def _impl_v18(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig=copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         cls._inputs_check(inputs)
         reduction = cls._reduction_check(attr, ["update", "add", "mul", "min", "max"])
 
         indices_dim = len(infer_shape(inputs[1]))
         axes = list(range(indices_dim))
-        return _op.scatter_nd(
+        out = _op.scatter_nd(
             inputs[0], _op.transpose(inputs[1], axes[-1:] + axes[:-1]), inputs[2], reduction
         )
+        # Begin TI
+        if status:
+            # Decode byte strings in attr to regular strings to avoid type casting errors
+            if "reduction" in attr:
+                attr["reduction"]=attr["reduction"].decode("utf-8")
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.scatter_nd")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
+
 
 
 class EyeLike(OnnxOpConverter):

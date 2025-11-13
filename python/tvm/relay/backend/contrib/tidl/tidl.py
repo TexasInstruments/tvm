@@ -422,7 +422,11 @@ def tensor_quant_flatten(input_tensors_list, data_layout, tensor_bits):
         max_values_i = []
         for input_tensors in input_tensors_list:
             # Handle tensors of different dimensions
-            if len(input_tensors[i].shape) == 1:
+            if len(input_tensors[i].shape) == 0:
+                # For 0D tensors (scalars), use the scalar value directly
+                min_values_i.append(float(input_tensors[i]))
+                max_values_i.append(float(input_tensors[i]))
+            elif len(input_tensors[i].shape) == 1:
                 # For 1D tensors, use the entire tensor
                 min_values_i.append(np.amin(input_tensors[i]))
                 max_values_i.append(np.amax(input_tensors[i]))
@@ -1778,12 +1782,11 @@ class TIDLAnnotation:
 
         # Register common operators which are supported with different constraints
         self._register_constrained_op("nn.relu")
-        self._register_constrained_op("argmax")
         self._register_constrained_op("nn.batch_flatten")
         self._register_constrained_op("nn.batch_norm")
-        self._register_constrained_op("nn.conv2d")
+        # self._register_constrained_op("nn.conv2d")
         #self._register_supported_op("nn.conv2d")    # use this for debugging
-        self._register_constrained_op("nn.conv2d_transpose")
+        # self._register_constrained_op("nn.conv2d_transpose")
         self._register_constrained_op("nn.global_avg_pool2d")
         self._register_constrained_op("nn.adaptive_avg_pool1d") # 1d global average pool
         self._register_constrained_op("nn.adaptive_avg_pool3d") # 3d global average pool
@@ -1802,7 +1805,6 @@ class TIDLAnnotation:
         self._register_constrained_op("atan")
         self._register_constrained_op("cos")
         self._register_constrained_op("cosh")
-        self._register_constrained_op("nn.bias_add")
         self._register_constrained_op("reshape")
         self._register_constrained_op("subtract")
         self._register_constrained_op("maximum")
@@ -1812,20 +1814,18 @@ class TIDLAnnotation:
         self._register_constrained_op("divide")
         self._register_constrained_op("sin")
         self._register_constrained_op("split")
-        self._register_constrained_op("strided_slice")
         self._register_constrained_op("image.resize2d")
         self._register_constrained_op("log")
         # "clip" is supported with constraints in J7
         self._register_constrained_op("clip")
         self._register_constrained_op("nn.leaky_relu")
-        self._register_constrained_op("nn.prelu")
         self._register_constrained_op("sigmoid")
         # "tanh" is not supported on AM62A
         self._register_constrained_op("tanh")
         self._register_constrained_op("nn.upsampling")
         self._register_constrained_op("nn.upsampling3d")
-        self._register_constrained_op("qnn.conv2d")
-        self._register_constrained_op("qnn.requantize")
+        # self._register_constrained_op("qnn.conv2d")
+        # self._register_constrained_op("qnn.requantize")
         self._register_constrained_op("qnn.add")
         self._register_constrained_op("cast")
         self._register_constrained_op("qnn.concatenate")

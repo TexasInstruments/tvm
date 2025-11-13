@@ -214,25 +214,6 @@ class ConvertConvStride(ExprMutator):
                 return get_expr_with_span(maxpool, call.span) if hasattr(call, 'span') else maxpool
         return super().visit_call(call)
 
-class TransposeScatterND(ExprMutator):
-    """
-    Converts all instances of  a = transpose(in, [n-1, 0, 1,...,n-2]), followed by
-    scatter_nd(..., a, ...) to tidl_scatter_nd(..., in, ...)
-    """
-    def visit_call(self, call):
-        if get_call_op_name(call) == 'scatter_nd' and get_call_op_name(call.args[1]) == 'transpose':
-            for i, axis in enumerate(call.args[1].attrs.axes[1:]):
-                if axis != i:
-                    return super().visit_call(call)
-            if call.args[1].attrs.axes[0] != len(call.args[1].attrs.axes) - 1:
-                return super().visit_call(call)
-            data = super().visit(call.args[0])
-            indices = super().visit(call.args[1].args[0])
-            updates = super().visit(call.args[2])
-            tidl_scatter_nd = relay.tidl_scatter_nd(data, indices, updates, call.attrs.mode)
-            return get_expr_with_span(tidl_scatter_nd, call.span) if hasattr(call, 'span') else tidl_scatter_nd
-
-        return super().visit_call(call)
 
 class MergePadLayer(ExprMutator):
     """
@@ -270,7 +251,6 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod = relay.transform.InferType()(mod)
     # mod['main'] = ConvertBroadcastAddtoBiasAdd().visit(mod['main'])
     mod['main'] = ConvertConvStride().visit(mod['main'])
-    mod['main'] = TransposeScatterND().visit(mod['main'])
     mod['main'] = MergePadLayer().visit(mod['main'])
 
 
