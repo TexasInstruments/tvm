@@ -3877,6 +3877,10 @@ class Expand(OnnxOpConverter):
 
     @classmethod
     def _impl_v8(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig = copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         dtype = infer_type(inputs[1]).checked_type.dtype
         in_shape = shape_of(inputs[0], dtype=dtype)
         shape = inputs[1]
@@ -3909,7 +3913,15 @@ class Expand(OnnxOpConverter):
             return new_shape
 
         shape = fold_constant(expand_shape(in_shape, shape))
-        return _op.broadcast_to(inputs[0], shape=shape)
+        out = _op.broadcast_to(inputs[0], shape=shape)
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out).with_attr("Composite", "tidl.expand")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
 
 class RNN(OnnxOpConverter):
