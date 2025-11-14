@@ -183,30 +183,6 @@ class ConvertBroadcastAddtoBiasAdd(ExprMutator):
 
         return super().visit_call(call)
 
-class ConvertArgMaxToKeepDims(ExprMutator):
-    """
-    Convert argmax() that reduces dims to argmax that keeps dims plus squeeze()
-      so that TIDL can import the argmax layer
-    TFLite deeplabv3_mnv2_ade20k 8bit quantized example:
-      %203 = @tidl_0(%MobilenetV2/MobilenetV2/input) /* ty=Tensor[(1, 512, 512, 32), uint8] */;
-      argmax(%203, axis=[3]) /* ty=Tensor[(1, 512, 512), int32] */
-    Convert the above example to
-      %204 = argmax(%203, axis=[3], keepdims=True) /* ty=Tensor[(1, 512, 512, 1), int32] */
-      squeeze(%204, axis=[3]) /* ty=Tensor[(1, 512, 512), int32] */
-    """
-    def visit_call(self, call):
-        if get_call_op_name(call) == "argmax" and \
-           (not call.attrs.keepdims) and (not call.attrs.exclude) and \
-           call.attrs.axis != None and len(call.attrs.axis) == 1:
-            argmax = tvm.relay.argmax(super().visit(call.args[0]), axis=call.attrs.axis,
-                                      keepdims=True, exclude=False)
-            # Reconstruct the argmax call with span
-            argmax = get_expr_with_span(argmax, call.span) if hasattr(call, 'span') else argmax
-            squeeze = tvm.relay.squeeze(argmax, axis=call.attrs.axis)
-            # Reconstruct the squeeze call with span
-            return get_expr_with_span(squeeze, call.span) if hasattr(call, 'span') else squeeze
-        return super().visit_call(call)
-
 class RemoveIdentityClip(ExprMutator):
     """
     Removes clip operators that clip uint8 input to uint8 range (0, 255), which is identity op
@@ -289,7 +265,6 @@ def prepare_graph_for_partitioning(mod_orig: tvm.IRModule,
     mod['main'] = RemoveIdentityReshape().visit(mod['main'])
     mod['main'] = RemoveTrainingOperators().visit(mod['main'])
     mod['main'] = ConvertMaxMinToClip().visit(mod['main'])
-    mod['main'] = ConvertArgMaxToKeepDims().visit(mod['main'])
     mod = relay.transform.InferType()(mod)
     mod['main'] = RemoveIdentityResize().visit(mod['main'])
     mod = relay.transform.InferType()(mod)
