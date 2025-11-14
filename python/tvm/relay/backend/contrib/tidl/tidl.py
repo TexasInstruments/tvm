@@ -1779,7 +1779,6 @@ class TIDLAnnotation:
         # Register common operators which are supported with different constraints
         self._register_constrained_op("nn.relu")
         self._register_constrained_op("argmax")
-        self._register_constrained_op("nn.avg_pool2d")
         self._register_constrained_op("nn.batch_flatten")
         self._register_constrained_op("nn.batch_norm")
         self._register_constrained_op("nn.conv2d")
@@ -1788,7 +1787,6 @@ class TIDLAnnotation:
         self._register_constrained_op("nn.global_avg_pool2d")
         self._register_constrained_op("nn.adaptive_avg_pool1d") # 1d global average pool
         self._register_constrained_op("nn.adaptive_avg_pool3d") # 3d global average pool
-        self._register_constrained_op("nn.max_pool2d")
         self._register_constrained_op("nn.softmax")
         self._register_constrained_op("concatenate")
         self._register_constrained_op("mean")          # 'mean' mapped to avg_pooling layer

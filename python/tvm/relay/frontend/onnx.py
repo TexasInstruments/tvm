@@ -692,6 +692,11 @@ class Pool(OnnxOpConverter):
 
     @classmethod
     def _impl_v1(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig = copy.copy(inputs)
+        attrOrig = copy.copy(attr)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         data = inputs[0]
         input_shape = infer_shape(data)
         ndim = len(input_shape)
@@ -701,7 +706,16 @@ class Pool(OnnxOpConverter):
 
         if ndim - len(attr["kernel_shape"]) == 1:
             out = _op.squeeze(out, axis=[0])
-        return out
+
+        # Begin TI
+        if status:
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attrOrig))
+            func = func.with_attr("Composite", "tidl."+cls.name+"2d")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
+        # End TI
 
     @classmethod
     def _run_calculation(cls, inputs, attr, params):
