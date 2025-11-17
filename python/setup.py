@@ -235,15 +235,18 @@ if not CONDA_BUILD and not INPLACE_BUILD:
                 fo.write(f"recursive-include tvm/{libname} *\n")
         shutil.copytree(os.path.join(CURRENT_DIR, "../src/runtime/contrib/tidl/c7x"),
                         os.path.join(CURRENT_DIR, "tvm/src/runtime/contrib/tidl/c7x"))
-        shutil.copytree(os.path.join(CURRENT_DIR, "../include/tvm/runtime"),
-                        os.path.join(CURRENT_DIR, "tvm/include/tvm/runtime"))
+        shutil.copytree(os.path.join(CURRENT_DIR, "../include/tvm"),
+                        os.path.join(CURRENT_DIR, "tvm/include/tvm"))
         shutil.copytree(os.path.join(CURRENT_DIR, "../3rdparty/dlpack/include/dlpack"),
                         os.path.join(CURRENT_DIR, "tvm/3rdparty/dlpack/include/dlpack"))
+        shutil.copytree(os.path.join(CURRENT_DIR, "../3rdparty/dmlc-core/include/dmlc"),
+                        os.path.join(CURRENT_DIR, "tvm/3rdparty/dmlc-core/include/dmlc"))
         with open("tvm/src/runtime/contrib/tidl/c7x/py_dist_files.txt") as fi:
             for line in fi:
                 fo.write(f"include tvm/src/runtime/contrib/tidl/c7x/{line}")
-        fo.write("recursive-include tvm/include/tvm/runtime *\n")
+        fo.write("recursive-include tvm/include/tvm *\n")
         fo.write("recursive-include tvm/3rdparty/dlpack/include/dlpack *\n")
+        fo.write("recursive-include tvm/3rdparty/dmlc-core/include/dmlc *\n")
 
     setup_kwargs = {"include_package_data": True}
 
