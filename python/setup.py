@@ -213,16 +213,49 @@ def config_cython():
 
 
 class BinaryDistribution(Distribution):
+
+    def __init__(self, attrs=None):
+        super().__init__(attrs)
+        self.target_plat = 'linux_x86_64'
+        self.target_arch = 'x86_64'
+    
+    def parse_command_line(self):
+        """Override to capture wheel-specific arguments"""
+        # Call parent to handle standard arguments
+        result = super().parse_command_line()
+        
+        # Access bdist_wheel command if present
+        if 'bdist_wheel' in self.commands:
+            wheel_cmd = self.get_command_obj('bdist_wheel')
+            if hasattr(wheel_cmd, 'plat_name') and wheel_cmd.plat_name:
+                self.target_plat = wheel_cmd.plat_name
+                # Extract architecture from plat-name
+                if 'aarch64' in wheel_cmd.plat_name:
+                    self.target_arch = 'aarch64'
+                elif 'x86_64' in wheel_cmd.plat_name:
+                    self.target_arch = 'x86_64'
+                else:
+                    pass # Default is 'x86_64'
+        
+        return result
+    
     def has_ext_modules(self):
         return True
 
     def is_pure(self):
         return False
 
-
-setup_kwargs = {}
-if not CONDA_BUILD and not INPLACE_BUILD:
+def create_architecture_specific_manifest():
+    """Create MANIFEST.in with architecture-specific file inclusion"""
+    # Create a temporary distribution to get architecture info
+    temp_dist = BinaryDistribution()
+    temp_dist.parse_command_line()
+    target_arch = temp_dist.target_arch
+    
+    print(f"Creating manifest for architecture: {target_arch}")
+    
     with open("MANIFEST.in", "w") as fo:
+        # Include standard library files
         for path in LIB_LIST:
             if os.path.isfile(path):
                 shutil.copy(path, os.path.join(CURRENT_DIR, "tvm"))
@@ -233,21 +266,29 @@ if not CONDA_BUILD and not INPLACE_BUILD:
                 _, libname = os.path.split(path)
                 shutil.copytree(path, os.path.join(CURRENT_DIR, "tvm", libname))
                 fo.write(f"recursive-include tvm/{libname} *\n")
-        shutil.copytree(os.path.join(CURRENT_DIR, "../src/runtime/contrib/tidl/c7x"),
-                        os.path.join(CURRENT_DIR, "tvm/src/runtime/contrib/tidl/c7x"))
         shutil.copytree(os.path.join(CURRENT_DIR, "../include/tvm"),
                         os.path.join(CURRENT_DIR, "tvm/include/tvm"))
         shutil.copytree(os.path.join(CURRENT_DIR, "../3rdparty/dlpack/include/dlpack"),
                         os.path.join(CURRENT_DIR, "tvm/3rdparty/dlpack/include/dlpack"))
         shutil.copytree(os.path.join(CURRENT_DIR, "../3rdparty/dmlc-core/include/dmlc"),
                         os.path.join(CURRENT_DIR, "tvm/3rdparty/dmlc-core/include/dmlc"))
-        with open("tvm/src/runtime/contrib/tidl/c7x/py_dist_files.txt") as fi:
-            for line in fi:
-                fo.write(f"include tvm/src/runtime/contrib/tidl/c7x/{line}")
+        if target_arch == "x86_64":
+            shutil.copytree(os.path.join(CURRENT_DIR, "../src/runtime/contrib/tidl/c7x"),
+                        os.path.join(CURRENT_DIR, "tvm/src/runtime/contrib/tidl/c7x"))
+            with open("tvm/src/runtime/contrib/tidl/c7x/py_dist_files.txt") as fi:
+                for line in fi:
+                    fo.write(f"include tvm/src/runtime/contrib/tidl/c7x/{line}")
         fo.write("recursive-include tvm/include/tvm *\n")
         fo.write("recursive-include tvm/3rdparty/dlpack/include/dlpack *\n")
         fo.write("recursive-include tvm/3rdparty/dmlc-core/include/dmlc *\n")
+    
+    return target_arch  # Return the detected architecture
 
+
+setup_kwargs = {}
+detected_arch = None
+if not CONDA_BUILD and not INPLACE_BUILD:
+    detected_arch = create_architecture_specific_manifest()
     setup_kwargs = {"include_package_data": True}
 
 
@@ -314,6 +355,7 @@ if not CONDA_BUILD and not INPLACE_BUILD:
         _, libname = os.path.split(path)
         _remove_path(f"tvm/{libname}")
 
-    shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/src"))
+    if detected_arch == "x86_64":
+        shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/src"))
     shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/include"))
     shutil.rmtree(os.path.join(CURRENT_DIR, "tvm/3rdparty"))
