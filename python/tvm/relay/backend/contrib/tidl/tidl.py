@@ -1822,8 +1822,6 @@ class TIDLAnnotation:
         self._register_constrained_op("sigmoid")
         # "tanh" is not supported on AM62A
         self._register_constrained_op("tanh")
-        self._register_constrained_op("nn.upsampling")
-        self._register_constrained_op("nn.upsampling3d")
         # self._register_constrained_op("qnn.conv2d")
         # self._register_constrained_op("qnn.requantize")
         self._register_constrained_op("qnn.add")

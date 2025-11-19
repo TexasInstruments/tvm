@@ -2642,6 +2642,10 @@ class Upsample(OnnxOpConverter):
 
     @classmethod
     def _impl_v9(cls, inputs, attr, params):
+        # Begin TI
+        inputsOrig = copy.copy(inputs)
+        status, inputs, new_inputs = get_func_inputs(inputs)
+        # End TI
         scales = attr.get("scales")
 
         input_shape = infer_shape(inputs[0])
@@ -2706,7 +2710,17 @@ class Upsample(OnnxOpConverter):
             out = _op.nn.upsampling(
                 inputs[0], scale_h, scale_w, layout=layout, method=method, align_corners=False
             )
-        return out
+        # Begin TI
+        if status:
+            # Decode byte strings in attr to regular strings to avoid type casting errors
+            if "mode" in attr:
+                attr["mode"]=attr["mode"].decode("utf-8")
+            func = relay.Function(new_inputs, out, attrs= tvm.ir.make_node('DictAttrs', **attr))
+            func = func.with_attr("Composite", "tidl.upsample")
+            call = relay.Call(func, inputsOrig)
+            return call
+        else:
+            return out
 
 
 class Shape(OnnxOpConverter):
