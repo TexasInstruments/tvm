@@ -2236,11 +2236,6 @@ class TIDLAnnotation:
     def allow_func(self, op_name, expr):
         """ Allow function: constraint checking is delegated to the import library """
 
-        ### TIDL does not support scalar as the first argument
-        if isinstance(expr.args[0].checked_type, relay.TensorType) and \
-                  len(expr.args[0].checked_type.shape) == 0:
-            return False
-
         if self.import_lib is None:
             # For CI testing which doesn't have import library - still run TVM passes
             return True
