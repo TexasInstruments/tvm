@@ -67,37 +67,43 @@ def get_all_nodes(mod_func):
     relay.analysis.post_order_visit(mod_func, traverse_func)
     return all_nodes_main
 
+def get_all_nodes_and_skip_frontend_composites(subgraph_body, target):
+    """get all the nodes for the provided subgraph """
+    class SkipLocalFunctionsVisitor(ExprMutator):
+        def __init__(self, target):
+            super().__init__()
+            self.tidl_target = target
+            self.nodes = {}
+            self.span_name_counts = {}  # Track count of each span name
 
-class SkipLocalFunctionsVisitor(ExprMutator):
-    def __init__(self, target):
-        super().__init__()
-        self.tidl_target = target
-        self.nodes = {}
-        self.span_name_counts = {}  # Track count of each span name
+        # Skip traversing into function body if marked with Composite="tidl.<Op>"
+        def visit_function(self, fn):
+            if(hasattr(fn, "attrs") and "Composite" in fn.attrs and self.tidl_target in fn.attrs["Composite"]):
+                return
+            return super().visit_function(fn)
 
-    def visit_function(self, fn):
-        if(hasattr(fn, "attrs") and "Composite" in fn.attrs and self.tidl_target in fn.attrs["Composite"]):
-            return
-        return super().visit_function(fn)
-
-    def visit(self, expr):
-        # Catch-all record
-        if expr not in self.nodes:
-            if isinstance(expr, relay.expr.Call) and hasattr(expr, 'span') and expr.span and hasattr(expr.span, 'source_name'):
-                base_name = expr.span.source_name.name
-                # Check if this span name already exists
-                if base_name in self.span_name_counts:
-                    # Increment counter and append to make unique
-                    self.span_name_counts[base_name] += 1
-                    unique_name = f"{base_name}_{self.span_name_counts[base_name]}"
+        def visit(self, expr):
+            # Catch-all record
+            if expr not in self.nodes:
+                if isinstance(expr, relay.expr.Call) and hasattr(expr, 'span') and expr.span and hasattr(expr.span, 'source_name'):
+                    base_name = expr.span.source_name.name
+                    # Check if this span name already exists
+                    if base_name in self.span_name_counts:
+                        # Increment counter and append to make unique
+                        self.span_name_counts[base_name] += 1
+                        unique_name = f"{base_name}_{self.span_name_counts[base_name]}"
+                    else:
+                        # First occurrence, no suffix needed
+                        self.span_name_counts[base_name] = 0
+                        unique_name = base_name
+                    self.nodes[expr] = unique_name
                 else:
-                    # First occurrence, no suffix needed
-                    self.span_name_counts[base_name] = 0
-                    unique_name = base_name
-                self.nodes[expr] = unique_name
-            else:
-                self.nodes[expr] = len(self.nodes)
-        super().visit(expr)
+                    self.nodes[expr] = len(self.nodes)
+            super().visit(expr)
+
+    visitor = SkipLocalFunctionsVisitor(target)
+    visitor.visit(subgraph_body)
+    return visitor.nodes
 
 def find_data_layout(mod):
     all_nodes = get_all_nodes(mod['main'])
@@ -123,13 +129,10 @@ def find_qnn_ops(mod):
                for node in all_nodes)
 
 def get_tidl_subgraphs(mod, tidl_target):
-    # Traverse Relay IR graph and generate a dictionary of all TIDL subgraphs
-    all_nodes_main = get_all_nodes(mod['main'])
     tidl_subgraphs = []
-    for node in all_nodes_main:
-        if isinstance(node, relay.expr.GlobalVar):
-            if tidl_target in node.name_hint:
-                tidl_subgraphs.append(node.name_hint)
+    for subgraph in mod.get_global_vars():
+        if tidl_target in subgraph.name_hint:
+            tidl_subgraphs.append(subgraph.name_hint)
     return tidl_subgraphs
 
 # borrowed from python/tvm/relay/op/contrib/tensorrt.py, modified to check all dimensions
@@ -1650,11 +1653,7 @@ class TIDLImport:
                     return import_fail
 
             # Scan through all relay.expr.Call nodes and import each to TIDL
-            all_nodes_tidl = {}
-            # Skip traversing into function body if marked with Composite="tidl.<Op>"
-            visitor = SkipLocalFunctionsVisitor(self.tidl_target)
-            visitor.visit(subgraph_body)
-            all_nodes_tidl = visitor.nodes
+            all_nodes_tidl = get_all_nodes_and_skip_frontend_composites(subgraph_body, self.tidl_target)
             for node in all_nodes_tidl:
                 if isinstance(node, relay.expr.Call):
                     result = self.tidl_import_node(all_nodes_tidl, node, output_names,
@@ -2415,8 +2414,9 @@ class TIOffloadCompiler:
         tidl_od_postproc_inputs = []
         import_lib = None
 
-        all_nodes_dict_orig = get_all_nodes(mod_orig['main'])
+        all_nodes_dict_orig = get_all_nodes_and_skip_frontend_composites(mod_orig['main'].body, self.tidl_target)
         total_nodes_original = 0
+        num_offloaded_nodes = 0
         for node in all_nodes_dict_orig:
             if isinstance(node, relay.expr.Call):
                 total_nodes_original += 1
@@ -2457,6 +2457,13 @@ class TIOffloadCompiler:
             # This is to help get the graph output type (tensors and shapes) correct early on
             mod_orig = prune_graph_for_ODPostProc_inputs(mod_orig, tidl_od_postproc_inputs,
                     tidl_od_output_shapes, tidl_od_output_dtypes)
+            num_nodes_after_od_pruning = 0
+            nodes_dict = get_all_nodes_and_skip_frontend_composites(mod_orig['main'].body, self.tidl_target)
+            for node in nodes_dict:
+                if isinstance(node, relay.expr.Call):
+                    num_nodes_after_od_pruning += 1
+
+            num_offloaded_nodes =  total_nodes_original - num_nodes_after_od_pruning
 
         # Skip TIDL import and C7x code generation.  Proceed directly to
         # re-build the C7x deployable module and the Arm deployable module,
@@ -2583,18 +2590,17 @@ class TIOffloadCompiler:
 
         mod_final = mod
         status = 1
-        num_imported_sgs = len(get_tidl_subgraphs(mod, self.tidl_target))
+        tidl_subgraphs = get_tidl_subgraphs(mod, self.tidl_target)
+        num_imported_sgs = len(tidl_subgraphs)
         print(f"TVM Relay detected {num_imported_sgs} subgraphs")
 
-        # Check the number of Op nodes left in Module main function
-        # tidl_subgraph_x is a GlobalVar, and is not counted as an Op node
-        # Number of offloaded is (total op nodes - left op nodes)
-        all_nodes_dict = get_all_nodes(mod['main'])
-        num_nodes = 0
-        for node in all_nodes_dict:
-            if isinstance(node, relay.expr.Call):
-                num_nodes += 1
-        num_offloaded_nodes =  total_nodes_original - (num_nodes - num_imported_sgs)
+
+        # Check the number of offloaded nodes
+        for subgraph in tidl_subgraphs:
+            nodes_dict = get_all_nodes_and_skip_frontend_composites(mod[subgraph].body, self.tidl_target)
+            for node in nodes_dict:
+                if isinstance(node, relay.expr.Call):
+                    num_offloaded_nodes += 1
 
         if not self.reuse_tidl_artifacts:
             # If reusing TIDL artifacts, skip creation of TIDLImport object and corresponding calls (these mainly create TIDL subgraph artifacts)
