@@ -2438,14 +2438,15 @@ class TIOffloadCompiler:
                                         in od_postproc_info.in_node_names[:od_postproc_info.num_in_nodes]]
             tidl_od_output_shapes = [(node.n, node.channel, node.height, node.width) for node
                                         in od_postproc_info.out_nodes[:od_postproc_info.num_out_nodes]]
-            element_type_map = {
-                0: "uint8",
-                1: "int8",
-                6: "float32",
-                8: "int64"
-            }
-            tidl_od_output_dtypes = [element_type_map[node.element_type] for node
-                                     in od_postproc_info.out_nodes[:od_postproc_info.num_out_nodes]]
+            return_type = mod_orig["main"].ret_type
+            if isinstance(return_type, relay.TupleType):
+                tidl_od_output_dtypes = [field.dtype for field in return_type.fields]
+            elif isinstance(return_type, relay.TensorType):
+                tidl_od_output_dtypes = [return_type.dtype]
+
+            if(len(tidl_od_output_dtypes) != od_postproc_info.num_out_nodes):
+                print("\n\nError fetching output data types of OD!!!\n\n")
+                return mod_orig, 0
 
             # from meta data, get number of outputs and their shapes, use those to define operator,
             # tidl_odpostproc, that can be offloaded to TIDL, default impl just return zeros,

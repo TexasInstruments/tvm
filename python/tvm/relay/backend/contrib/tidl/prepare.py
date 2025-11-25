@@ -319,7 +319,12 @@ def prune_graph_for_ODPostProc_inputs(mod: tvm.IRModule,
                 ib = tvm.tir.ir_builder.create()
                 out_buf = ib.buffer_ptr(out)
                 with ib.for_range(0, buf_size, "fused") as fused:
-                    out_buf[fused] = 0.0 if dtype == "float32" else 0
+                    if dtype == "float32":
+                        out_buf[fused] = 0.0
+                    elif dtype == "int64":
+                        out_buf[fused] = tvm.tir.const(0, dtype="int64")
+                    else:
+                        out_buf[fused] = 0
                 return ib.get()
 
             outputs = []
