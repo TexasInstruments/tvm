@@ -1356,7 +1356,7 @@ class TIDLImport:
         self.temp_folder = os.path.join(artifacts_folder, 'tempDir/')
 
     def tidl_import_init(self, subgraph_id, input_zps, input_scale_invs, input_etypes,
-                         input_tensors, input_names, output_zps, output_scale_invs, output_etypes):
+                         input_tensors, input_names, output_zps, output_scale_invs, output_etypes, isSubgraphOD):
         r""" Initializing TIDL import
 
         Parameters
@@ -1379,6 +1379,8 @@ class TIDLImport:
             Inv scale of TVM output tensor
         output_etypes: list
             TIDL_ElementType of TVM output tensor
+        isSubgraphOD: bool
+            Flag to indicate if the subgraph contains an OD node
         Returns
         -------
         True if initialization succeeds or False if initialization fails
@@ -1429,7 +1431,7 @@ class TIDLImport:
         inout_dscr_ptr = ctypes.cast(descr, ctypes.c_void_p)
         import_lib_init = tvm.get_global_func("TIDL_relayImportInit")
         if(import_lib_init(subgraph_id, len(input_zps), len(output_zps), inout_dscr_ptr, is_nchw,
-                        self.tidl_tools_path, self.temp_folder) != 0):
+                        self.tidl_tools_path, self.temp_folder, isSubgraphOD) != 0):
             print('\n\nTIDL import initialization failed!!!\n\n')
             return False
 
@@ -1610,11 +1612,24 @@ class TIDLImport:
             input_quant_vec_list, input_scale, input_signed = \
                     tensor_quant_flatten(input_fp_list, self.data_layout, self.tensor_bits)
 
-            # Initialize TIDL import
             subgraph = mod[tidl_subgraph]
+
+            # Get the od node(s) from the subgraph
+            # This od nodes list is required for two purposes:
+            # 1. To detect if the subgraph imported is OD
+            # 2. Import the nodes till the OD node only
+            def find_tidl_odpostproc(node, node_list):
+                if isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.Op) and node.op.name == "tidl_odpostproc":
+                    node_list.append(node)
+            tidl_odpostproc_nodes = []
+            traverse_func = functools.partial(find_tidl_odpostproc, node_list=tidl_odpostproc_nodes)
+            relay.analysis.post_order_visit(subgraph, traverse_func)
+            isSubgraphOD = len(tidl_odpostproc_nodes) > 0
+
+             # Initialize TIDL import
             if not self.tidl_import_init(subgraph_id, input_zp_list, input_scale_inv_list,
                                          input_etype_list, input_fp_list[0], input_names,
-                                         output_zp_list, output_scale_inv_list, output_etype_list):
+                                         output_zp_list, output_scale_inv_list, output_etype_list, isSubgraphOD):
                 return import_fail
 
             # Initialize subgraph info for nfo file
@@ -1632,17 +1647,11 @@ class TIDLImport:
             # Initialize subgraph input/output exprs to quantization mapping
             inout_quant_dict = obtain_inout_quant_dict(subgraph, subgraph_id, relay_quantization)
 
-            # If subgraph contains "tidl_odpostproc" layer, only import up to the inputs
-            #   of this layer, TIDL will add the postprocessing layers using MetaArch info
-            def find_tidl_odpostproc(node, node_list):
-                if isinstance(node, relay.expr.Call) and isinstance(node.op, tvm.ir.Op) and node.op.name == "tidl_odpostproc":
-                    node_list.append(node)
-            tidl_odpostproc_nodes = []
-            traverse_func = functools.partial(find_tidl_odpostproc, node_list=tidl_odpostproc_nodes)
-            relay.analysis.post_order_visit(subgraph, traverse_func)
             if len(tidl_odpostproc_nodes) == 0:
                 subgraph_body = subgraph.body
             else:
+                # If subgraph contains "tidl_odpostproc" layer, only import up to the inputs
+                #   of this layer, TIDL will add the postprocessing layers using MetaArch info
                 assert len(tidl_odpostproc_nodes) == 1, "Only one tidl_postproc is allowed"
                 subgraph_body = relay.expr.Tuple(tidl_odpostproc_nodes[0].args)
                 output_names = self.tidl_od_postproc_inputs
@@ -2458,7 +2467,7 @@ class TIOffloadCompiler:
             for node in nodes_dict:
                 if isinstance(node, relay.expr.Call):
                     num_nodes_after_od_pruning += 1
-
+            # Calculate the number of pruned nodes for OD model, such nodes are considered offloaded for printing
             num_offloaded_nodes =  total_nodes_original - num_nodes_after_od_pruning
 
         # Skip TIDL import and C7x code generation.  Proceed directly to
