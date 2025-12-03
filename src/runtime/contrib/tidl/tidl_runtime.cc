@@ -646,10 +646,33 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
   PackedFunc GetFunction(const String& in_name,
                          const ObjectPtr<Object>& sptr_to_self) final {
     std::string name = in_name;
-    if (name.find("tidl_tvm_") == std::string::npos) {
+    if ((name.find("tidl_tvm_") == std::string::npos) &&
+        (name.find("tidl_get_custom_data_") == std::string::npos)) {
       return PackedFunc(nullptr);
     }
+    if (name.find("tidl_get_custom_data_") != std::string::npos) {
+      if(name.substr(21) == "ddrstats")
+        return PackedFunc(nullptr);
 
+      if(tidlrt_perfstats == 0)
+        return PackedFunc(nullptr);
+      int tmp_id = std::stoi(name.substr(21));
+      if(tmp_id == c7xgraph_id && c7xgraph_id != -1)
+      {
+        return PackedFunc([this](tvm::TVMArgs args, tvm::TVMRetValue *rv) {
+          std::vector<uint64_t> *v = new std::vector<uint64_t>();
+
+          v->push_back(uint64_t(stats.cpIn_time_start));
+          v->push_back(uint64_t(stats.cpIn_time_end));
+          v->push_back(uint64_t(stats.proc_time_start));
+          v->push_back(uint64_t(stats.proc_time_end));
+          v->push_back(uint64_t(stats.cpOut_time_start));
+          v->push_back(uint64_t(stats.cpOut_time_end));
+          *rv = static_cast<void *>(v);
+        });
+      }
+      return PackedFunc(nullptr);
+    }
     auto info_it = infos.find(name);
     if (info_it == infos.end()) {
       // try to find it in next TIDLJ7Module
@@ -672,6 +695,7 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
       // Call TVMRT_create() to initialize the C7x TVM graph
       sTVMRT_Params_t params;
       TVMRT_setParamsDefault_(&params);
+      params.stats = (tidlrt_perfstats == 0) ? nullptr : &stats;
       params.deploy_mod = (void*) info.c7x_deploy_mod.data();
       params.deploy_mod_size = info.c7x_deploy_mod.size();
       params.num_input_tensors = info.NumInputs();
@@ -878,6 +902,7 @@ class TIDLJ7C7xModule : public runtime::ModuleNode {
 
 private:
 
+  sTVMRT_PerfStats_t stats;
   // I used an unordered map with strings as the index because there is built in
   // support to serialize/deserialize this to/from JSON.
   std::unordered_map<std::string, C7xTVMGraphInfo> infos;
