@@ -12,7 +12,7 @@ There are two inference scenarios:
 - Running TIDL unsupported layers on C7x
 
 These
-correspond to compiling the model with ``c7x_codegen=0`` or ``c7x_codegen=1``.  The same
+correspond to compiling the model with ``advanced_options:c7x_codegen=0`` or ``advanced_options:c7x_codegen=1``.  The same
 inference script or application can be used for both scenarios.
 
 Running Unsupported Layers on Arm

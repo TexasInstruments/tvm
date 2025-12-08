@@ -11,26 +11,19 @@ This section explains TI TVM compilation in more detail. An introduction to this
 
 Environment Setup
 =================
-If they have not already been set up by Edgeai, the following three environment variables are required
-before running the compilation script.
 
-- ``TIDL_TOOLS_PATH``: Point to installed /processor_sdk_rtos/tidl_release/tidl_tools.
-- ``ARM64_GCC_PATH``: Point to installed /gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu.
-- ``CGT7X_ROOT``: Point to installed TI C7x C/C++ compiler 4.1.0.LTS in the Processor SDK package or from `ti.com <https://www.ti.com/tool/download/C7000-CGT/>`_.
+Please refer the setup script provided as part of `TI edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools>`_ 
+for environment setup.
 
 .. _ti-tvm-compiling-frontend:
 
 Frontends
 =========
 
-TVM can accept machine learning models in many formats, including Tensorflow/TFLite, Keras,
-Core ML, MXNet, ONNX, and PyTorch.  As the first step of compilation, these formats are all
-imported into TVM's internal common representation, :term:`Relay IR`, using different frontends in TVM.
-
-TI TVM provides additional examples beyond those provided by :term:`Apache TVM` in
-``tests/python/relay/ti_tests/models.py`` to show how to import machine learning models in different network
-formats into Relay IR.
-
+TI fork of TVM accepts machine learning models exported to the ONNX format. Other formats have not undergone validation from TI.
+As the first step of compilation, ONNX models are imported into TVM's internal representation, :term:`Relay IR`, before being mapped to
+TIDL format internally for TIDL supported layers. The `compile_model` API explained in ``getting-started/compilation.rst`` accepts either
+converted Relay module and parameters. It also has provision to directly accept an ONNX model and internally convert to Relay IR representation.
 
 .. _ti-tvm-compiling-calib:
 
@@ -64,7 +57,7 @@ the ``<artifacts_folder>``.
 - **.so:** The shared library containing code to run nodes in the compiled graph.  This is a fat binary. Imported TIDL subgraph artifacts and generated C7x code are embedded in this fat binary.
 - **.params:** Contains weights associated with the nodes in the compiled graph.
 
-At inference time, DLR/TVM runtime read these 3 files and create a runtime instance to run
+At inference time, TVM runtime reads these 3 files and creates a runtime instance to run
 inference.
 
 .. hint::
@@ -94,19 +87,19 @@ Imported TIDL artifacts
 -----------------------
 
 TIDL subgraphs are imported into TIDL artifacts in TIDL-specific formats.  These artifacts are embedded into
-the ``.so`` fat binary in the deployable module.  The DLR/TVM runtime retrieves TIDL artifacts
+the ``.so`` fat binary in the deployable module.  The TVM runtime retrieves TIDL artifacts
 and invokes the TIDL runtime at inference time.
 
 - **relay.gv.svg:** A graphical view of the whole network and where the TIDL subgraphs are located.
-- **subgraph<n>_net.bin.svg:** A graphical view of TIDL subgraphs.
+- **subgraph<n>_net.bin.html:** A graphical view of TIDL subgraphs.
 
 
 Generated C7x code
 ------------------
 
-When ``c7x_codegen`` is set to 1 in the compilation script, TI TVM generates C7x code for layers
+When ``advanced_options:c7x_codegen`` is set to 1 in the compilation script, TI TVM generates C7x code for layers
 not offloaded to TIDL.  This C7x code is compiled and embedded into the ``.so`` fat binary in
-the deployable module.  The DLR/TVM runtime retrieves the C7x code and dispatches it to the C7x
+the deployable module.  The TVM runtime retrieves the C7x code and dispatches it to the C7x
 for execution.
 
 - **model_<n>.c:** Contains generated code either to run a TIDL subgraph or non-TIDL layers.

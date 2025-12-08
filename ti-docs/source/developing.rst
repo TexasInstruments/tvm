@@ -13,7 +13,7 @@ Step 1: Model Selection
 
 You may have already developed and trained a model.  But if you are using a model
 downloaded from public domain, we recommend you look at
-`TI EdgeAI ModelZoo <https://github.com/TexasInstruments/edgeai-modelzoo>`_ first.
+`TI EdgeAI ModelZoo <https://github.com/TexasInstruments/edgeai-tensorlab/tree/main/edgeai-modelzoo>`_ first.
 TI EdgeAI ModelZoo contains models that have been tweaked and optimized for inference speed
 on TI SoCs.
 
@@ -22,9 +22,8 @@ Step 2: Compile with c7x_codegen=0
 ==================================
 
 Adapt the example compilation scripts in
-`TI edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools/tree/master/examples/osrt_python/tvm_dlr>`_
-for use with your model.  Additional examples are provided in the
-`TVM Git repository <https://github.com/TexasInstruments/tvm/tree/tidl-j7/tests/python/relay/ti_tests>`_.
+`TI edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools>`_
+for use with your model by updating the 'config.yaml' file.
 
 See the :ref:`ti-tvm-compiling` section for more about the compilation process and compiled artifacts. 
 
@@ -39,9 +38,8 @@ Step 3: Inference and Performance Profiling
 ===========================================
 
 Adapt the example inference scripts in 
-`TI edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools/tree/master/examples/osrt_python/tvm_dlr>`_
-for your model.  Additional examples are provided in the
-`TVM Git repository <https://github.com/TexasInstruments/tvm/tree/tidl-j7/tests/python/relay/ti_tests>`_.
+`TI edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools>`_
+for your model.
 
 First, get the compiled model artifacts (TVM deployable module) to run on the EVM. Then 
 check to make sure the inference results match the expected outputs for the given inputs.
@@ -68,13 +66,3 @@ inference results still match the expected outputs for the given inputs.
 After the model is running correctly on the EVM, use the performance profiling method described
 in the :ref:`ti-tvm-infering` section to see if performance matches expectations.
 
-Step 6: Performance Tuning
-==========================
-
-If the performance of TIDL unsupported layers does not match expectations, try the following:
-
-* Work around issues by rewriting Relay IR code.
-* Optimize the C7x code (either TVM-generated or user-written)
-
-See the :ref:`ti-tvm-extending` section for examples.  Feedback on TI E2E forum is welcome
-(see the :ref:`ti-tvm-support` section).

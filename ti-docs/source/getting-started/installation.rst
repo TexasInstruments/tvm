@@ -4,16 +4,6 @@
 Installation Instructions
 #########################
 
-Follow the instructions linked below to install the TVM compiler framework on a Linux PC. The instructions also cover how to install
-EVM-specific dependencies required for inference.
-
-.. list-table::
-    :widths: 50 50
-    :header-rows: 1
-
-    * - EVM
-      - Instructions
-    * - `J721E EVM <https://www.ti.com/tool/J721EXSOMXEVM>`_ 
-      - `J721E link <https://github.com/TexasInstruments/edgeai-tidl-tools/tree/master/dockers/J721E/PSDKRA>`_
-    * - `TDA4VM processor starter kit <https://www.ti.com/tool/SK-TDA4VM>`_ 
-      - `TDA4VM SK link <https://github.com/TexasInstruments/edgeai-tidl-tools>`_
+edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools> is TI's github repository with out of box examples for edge AI applications on
+TI SoCs with Cortex-A based MPUs, TI’s latest generation C7x DSP and TI's DNN accelerator (MMA).
+Please refer to notes and instructions in this repository for details on supported devices, setup and running TI supported runtimes on TI SoCs.

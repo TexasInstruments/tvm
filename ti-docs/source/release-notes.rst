@@ -4,6 +4,20 @@
 Release Notes
 #############
 
+TIDL_PSDK_11.2
+-------------
+* Following requirements are implemented as part of this release:
+
+  * Update TI TVM fork to upstream TVM version 0.18.0 from 0.12.0
+  * The TVM flow must use the TVM runtime for inference (removal of neo-ai-dlr from all interfaces and example applications, and replacement with TVM runtime)
+  * TVM compiler must support a simplified compiler invocation for C7x/MMA (Enablement of TVMC command line interface)
+  * TVM should map object detection subgraph to TIDL ODPostProc using TIDL Meta Architecture (offload newer meta architectures to TIDL)
+  * TVM should offload layer patterns in Transformer models to TIDL (layer patterns such as Layer Normalization, Gelu)
+
+* Bug fixes
+
+  * Revamp TIDL offload compilation mechanism to ensure robust TIDL offload
+
 TIDL_PSDK_8.6
 -------------
 * New devices
