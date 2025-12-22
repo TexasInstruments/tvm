@@ -12,25 +12,15 @@ by TIDL are executed during inference:
 
 The following figures show components added by TIDL and the TI TVM fork outlined in red.
 
-.. table:: Model compilation with unsupported layers
-
-        +----------------+-------------------------------------------+
-        | \              | \                                         |
-        +================+===========================================+
-        | \              | \                                         |
-        +----------------+-------------------------------------------+
-        | \              | \                                         |
-        +----------------+-------------------------------------------+
-        | \              | \                                         |
-        +----------------+-------------------------------------------+
-        | Figure 1:      | .. figure:: ../images/TVM_Compile_Arm.png |
-        | Mapped to Arm  |    :scale: 30 %                           |
-        |                |    :align: center                         |
-        +----------------+-------------------------------------------+
-        | Figure 2:      | .. figure:: ../images/TVM_Compile_C7x.png |
-        | Mapped to C7x  |    :scale: 30 %                           |
-        |                |    :align: center                         |
-        +----------------+-------------------------------------------+
++----------------+----------------------------------------------------------------------+
++ Model compilation with TIDL unsupported layers                                        +
++===========================================+===========================================+
++ Mapped to Arm                             + Mapped to C7x                             +
++-------------------------------------------+-------------------------------------------+
+| .. figure:: ../images/TVM_Compile_Arm.png | .. figure:: ../images/TVM_Compile_C7x.png |
+|    :scale: 30 %                           |    :scale: 30 %                           |
+|    :align: center                         |    :align: center                         |
++-------------------------------------------+-------------------------------------------+
 
 
 See :ref:`ti-tvm-compiling` for further details about TI TVM compilation.
@@ -51,7 +41,7 @@ The following Python functions are used in the examples provided by TI.
 .. _ti-tvm-gs-compile-model:
 
 Compile using python interface - compile_model
--------------
+-----------------------------------------------
 
 The ``compile_model`` function encapsulates the steps required to compile a model with TIDL offload. 
 
@@ -62,7 +52,7 @@ After a successful compile, the artifacts required to deploy the model are store
 .. _ti-tvm-gs-tvmc:
 
 Compile using command line interface - TVMC
--------------
+--------------------------------------------
 
 TVMC can be used to compile a model using command line as follows:
 
@@ -82,22 +72,25 @@ Note that this interface needs user to specify following files as input to the c
 * Configuration file (--tidl-config) - The configuration file is an optional YAML file which contains compile options for TIDL. YAML file should contain a single "compile_options" section with TIDL-specific options. Values specified in this file override the default values of respective options.
 
 Example YAML configuration file:
+
 .. code-block:: yaml
   
     compile_options:
-      "debug_level": 1
-      "tensor_bits": 8
-      "advanced_options:calibration_frames": 2
-      "advanced_options:calibration_iterations": 5
+      "debug_level": 1 \
+      "tensor_bits": 8 \
+      "advanced_options:calibration_frames": 2 \
+      "advanced_options:calibration_iterations": 5 \
       "advanced_options:c7x_codegen": 1
 
-* Calibration data (--tidl-calibration-input) - Refer :ref:`_ti-tvm-compiling-calib` for details on calibration. TVMC expects an `npz` file containing data frames for calibration, so user is expected to convert image files into an `npz` file to be specified as input to TVMC command.
+* Calibration data (--tidl-calibration-input) - Refer :ref:`ti-tvm-compiling-calib` for details on calibration. TVMC expects an `npz` file containing data frames for calibration, so user is expected to convert image files into an `npz` file to be specified as input to TVMC command.
 
 Example script to pack images into `npz` file for TVMC consumption.
+
 .. code-block:: python
-    # calib_dict - Dictionary of form - {'input_1': numpy array of N frames, 'input_2': numpy array of N frames} assuming N calibration frames
-    # npz_path - Path to 'npz' file to be created
-    import numpy as np
-    np.savez_compressed(npz_path, **calib_dict)
+  
+  # calib_dict - Dictionary of form - {'input_1': numpy array of N frames, 'input_2': numpy array of N frames} assuming N calibration frames \
+  # npz_path - Path to 'npz' file to be created \
+  import numpy as np \
+  np.savez_compressed(npz_path, **calib_dict)
 
 After a successful compile, the artifacts required to deploy the model are stored in the `artifacts_folder` specified via `--output` option.

@@ -27,7 +27,7 @@ Prerequisites
 -------------
 
 edgeai-tidl-tools
-+++++++++
+++++++++++++++++++
 
 * Setup edgeai-tidl-tools : Clone the `TI edgeai-tidl-tools <https://github.com/TexasInstruments/edgeai-tidl-tools>`_ repository and run the scripts/setup/setup.sh script.
 * Run the scripts/setup/setup_env.sh script to set required environment variables.

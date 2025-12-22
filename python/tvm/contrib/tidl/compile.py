@@ -39,8 +39,8 @@ def convert_model_to_relay_IR(model_path: str,
   
   ### Get type of model ####
   model_type = os.path.splitext(model_path)[1][1:]
-  if model_type not in ['tflite', 'onnx']:
-      print("ERROR : Only tflite/onnx models can be converted to Relay IR internally. Please convert your model to Relay IR and pass converted 'mod', 'params' arguments to compile_model()")
+  if model_type not in ['onnx']:
+      print("ERROR : Only ONNX models can be converted to Relay IR internally. Please convert your model to Relay IR and pass converted 'mod', 'params' arguments to compile_model()")
       return None, None, None
   
   if model_type == 'onnx':
@@ -79,7 +79,9 @@ def compile_model(platform: str,
                   mod: tvm.IRModule = None,
                   params: Dict[str, NDArray] = None
                   ) -> bool:
-  """ Compile model for TVM inference based on the parameters specified
+  """ Compile model for TVM inference based on the parameters specified.
+
+  Note either (model_path, input_shape_dict) or (mod, params) pair of parameters can be provided
 
   Parameters
   ----------
@@ -97,16 +99,14 @@ def compile_model(platform: str,
   calibration_input_list :
       A dictionary where the key is input name and the value is input tensor.
   model_path : (Optional)
-      Path to the model file. Supported formats: tflite, onnx
+      Path to the model file. Supported formats: ONNX
   input_shape_dict : (Optional)
-      A list of dictionaries where each dictionary contains the input shape.
+      A list of dictionaries where each dictionary contains the input shape - required if model_path is specified
       Example: [{'input_1' : (1, 3, 224, 224)}]
   mod : (Optional)
       Input Relay IR module.
   params : (Optional)
       The parameter dict used by Relay.
-  
-  User expected to provide either (model_path, input_details) or (mod, params) of the optional arguments
   
   Return
   ------

@@ -5,7 +5,7 @@ Release Notes
 #############
 
 TIDL_PSDK_11.2
--------------
+----------------
 * Following requirements are implemented as part of this release:
 
   * Update TI TVM fork to upstream TVM version 0.18.0 from 0.12.0

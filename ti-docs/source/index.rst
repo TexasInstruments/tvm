@@ -29,13 +29,3 @@ This user's guide documents the TI TVM Compiler and its usage.
     release-notes
     support
     Important Notice <notice>
-
-.. extending
-
-.. raw:: html
-
-    For offline use, a PDF version of the guide is available here: <a href="https://software-dl.ti.com/codegen/docs/tvm/tvm_tidl_users_guide/TI_TVM_Users_Guide.pdf">TI TVM User's Guide</a>.<br>
-
-
-.. |(R)| unicode:: U+00AE
-    :ltrim:
