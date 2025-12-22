@@ -120,36 +120,12 @@ optimized TIDL subgraphs, and calibration processes. For example:
 
 .. code:: bash
 
-  RelayImportDebug: In TIDL_relayAllowNode: 
-  RelayImportDebug:   name: nn.conv2d
-  RelayImportDebug: In TIDL_relayAllowNode: 
-  RelayImportDebug:   name: nn.batch_norm
+  RelayImportDebug: In TIDL_relayImportNode:
+  RelayImportDebug: node name: 185, op name: tidl.conv2d, num_args: 2
+  RelayImportDebug:   args[0] dims: [1, 512, 7, 7]
+  RelayImportDebug:   args[1] dims: [512, 512, 3, 3]
 
 TIDL_RELAY_IMPORT_DEBUG=2, 3
 ----------------------------
 
 When set to 2 or 3, verbose information about importing TIDL subgraphs is provided in addition to the information provided when the setting is 1.
-
-TIDL_RELAY_IMPORT_DEBUG=4
--------------------------
-
-When set to 4, the TIDL import generates output for each TIDL layer in the imported TIDL
-subgraph using calibration inputs.  This output is stored in the auto-generated ``tempDir/tidl_import_subgraph<subgraph_id>.txt<layer_id><dimensions>_float.bin`` files.
-
-The compilation also generates corresponding output from running the original model on
-x86_64 hosts using TVM code generation for x86_64.  This is stored in the
-``tempDir/tidl_<subgraph_id>_layer<layer_id>.npy`` files.
-
-A script, ``python/tvm/contrib/tidl/compare_tensors.py`` is provided to compare the two
-results with a graphical view. You can run the script as follows:
-
-.. code:: bash
-
-  # in tests/python/relay/ti_tests/
-  TIDL_RELAY_IMPORT_DEBUG=4 python3 ./compile_model.py mv1_tf --target --tidl --c7x
-  # compare_tensors.py <artifacts_folder> <subgraph_id> <layer_id>
-  python3 $TVM_HOME/python/tvm/contrib/tidl/compare_tensors.py artifacts/mv1_tf_J7_target_tidl_c7x 0 2
-
-.. figure:: images/compare_tensors_example.png
-  :align: center
-
