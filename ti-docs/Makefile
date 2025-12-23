@@ -82,6 +82,7 @@ clean:
 
 html:
 	$(SPHINXBUILD) -q -b html $(ALLSPHINXOPTS) $(BUILDDIR)
+	@cp ../TI_TVM_manifest.html $(BUILDDIR)
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)."
 

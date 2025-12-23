@@ -4,6 +4,11 @@
 Release Notes
 #############
 
+.. raw:: html
+
+   <a href="TI_TVM_manifest.html">Software Manifest</a><br><br>
+
+
 TIDL_PSDK_11.2
 ----------------
 * Following requirements are implemented as part of this release:
